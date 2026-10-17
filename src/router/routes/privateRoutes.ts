@@ -7,6 +7,7 @@ const privateRoutes: RouteRecordRaw[] = [
     path, component: () => import("@/views/ResourceView.vue"), meta: { authenticated: true },
   })),
   { path: "/parents", component: () => import("@/views/ParentsView.vue"), meta: { authenticated: true } },
+  { path: "/services/dhcp-relay", component: () => import("@/views/DHCPRelayView.vue"), meta: { authenticated: true } },
   { path: "/changes", component: () => import("@/views/ChangesView.vue"), meta: { authenticated: true } },
   { path: "/transactions", component: () => import("@/views/TransactionsView.vue"), meta: { authenticated: true } },
   { path: "/transactions/:id", component: () => import("@/views/TransactionsView.vue"), meta: { authenticated: true } },

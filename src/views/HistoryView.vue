@@ -107,6 +107,13 @@ async function restore(): Promise<void> {
         <h2 class="text-h5 mb-4">
           Historical versus current committed desired
         </h2>
+        <v-alert
+          type="warning"
+          variant="tonal"
+          class="mb-4"
+        >
+          Historical configurations with omitted/null allow_all_icmp mean enabled. Restoring enables IPv4 protocol 1 across input/output/forwarding before drops unless this revision explicitly records false. ICMPv6 is unchanged.
+        </v-alert>
         <ConfigDiff
           v-if="store.state.data"
           :before="detail.config"

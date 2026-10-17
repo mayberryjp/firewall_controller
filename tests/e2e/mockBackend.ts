@@ -3,11 +3,15 @@ import { config, runtime, statistics, transaction } from "../fixtures";
 import type { Config, Transaction } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
 
-export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean } = {}) {
-  let committed = config(), revision = "0";
+export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean } = {}) {
+  let committed = options.initialConfig ?? config(), revision = "0";
   const transactions: Record<string, Transaction> = {};
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
   const writes: Array<{ path: string; body: unknown }> = [];
+  const runtimeState = () => {
+    const stored = Object.values(transactions).find(item => item.status === "pending_confirmation")?.candidate ?? committed;
+    return { ...runtime(), dhcp_relay: stored.interfaces.map(link => ({ interface: link.name, state: link.dhcp_relay.enabled ? "simulated" : "disabled" })) };
+  };
   await page.route("**/api/v1/**", async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname.replace("/api/v1", "");
     const reply = (value: unknown, status = 200) => route.fulfill({
@@ -20,7 +24,8 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         return reply({ revision, desired: committed, observed: committed, drift: false,
           active_transaction: Object.values(transactions).find(item => !["committed", "rolled_back"].includes(item.status)) });
       }
-      if (path === "/runtime") return reply(runtime());
+      if (path === "/runtime") return reply(runtimeState());
+      if (path === "/services/dhcp-relay/status") return reply({ interfaces: runtimeState().dhcp_relay, error: "" });
       if (path === "/statistics") return reply(statistics());
       if (path === "/transactions") return reply(transactions);
       if (path.startsWith("/transactions/")) return transactions[path.split("/")[2] ?? ""] ? reply(transactions[path.split("/")[2]!]) : reply({ error: "Not found", transaction: null }, 404);
@@ -49,7 +54,10 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         } else pending.status = "rolled_back";
         return reply(pending);
       }
-      if (path === "/services/softflowd/reconcile") return reply(runtime());
+      if (path === "/services/softflowd/reconcile" || path === "/services/dhcp-relay/reconcile") {
+        if (options.serviceDenied) return reply({ error: "interfaces.write permission required", transaction: null }, 403);
+        return reply(runtimeState());
+      }
     }
     return reply({ error: "Unexpected mocked endpoint", transaction: null }, 404);
   });

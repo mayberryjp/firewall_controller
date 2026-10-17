@@ -295,10 +295,11 @@ export const useControllerStore = defineStore("controller", () => {
       base_revision: capturedBase, confirm_timeout_seconds: seconds, description: trimmed,
     }));
   }
-  async function reconcile(): Promise<void> {
+  async function reconcile(service: "softflowd" | "dhcp-relay" = "softflowd"): Promise<void> {
     if (incompatible.value || uncertain.value || activeTransactions.value.some((item) =>
       ["applying", "rolling_back", "recovery_failed"].includes(item.status))) throw new Error("Service reconciliation is blocked by safety state");
-    await mutate("Reconcile managed services", api.reconcileServices);
+    await mutate("Reconcile managed services", () => api.reconcileServices(service));
+    if (actionError.value) throw new Error(actionError.value);
   }
   function resolveUncertainty(): void {
     if (transactions.stale || state.stale || !freshState.value || busy.value) throw new Error("Fresh transaction and committed state reads are required");

@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { configSchema, type Config, type ParentInterface } from "@/types/domain";
+import { configSchema, type Config, type ManagedInterface, type ParentInterface } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 
 export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
@@ -17,6 +17,7 @@ export function normalize(config: Config): Config {
   result.interfaces.sort((a, b) => a.name.localeCompare(b.name));
   for (const link of result.interfaces) {
     link.addresses.sort();
+    link.dhcp_relay.servers.sort();
     if (link.kind === "wireguard") {
       link.wireguard.peers.sort((a, b) => a.public_key.localeCompare(b.public_key));
       for (const peer of link.wireguard.peers) {
@@ -34,6 +35,18 @@ export function normalize(config: Config): Config {
     if (!rule.source) delete rule.source;
     if ("destination" in rule && !rule.destination) delete rule.destination;
   }
+  if (result.firewall.policies) {
+    result.firewall.policies.hosts.sort((a, b) => a.id.localeCompare(b.id));
+    result.firewall.policies.interfaces.sort((a, b) => a.interface.localeCompare(b.interface));
+    for (const host of result.firewall.policies.hosts) host.addresses.sort();
+    for (const item of [...result.firewall.policies.hosts, ...result.firewall.policies.interfaces]) {
+      for (const rule of item.rules) {
+        rule.destination_ports?.sort((a, b) => a - b);
+        for (const key of ["destination", "destination_host", "protocol"] as const) if (!rule[key]) delete rule[key];
+        if (!rule.destination_ports?.length) delete rule.destination_ports;
+      }
+    }
+  } else delete result.firewall.policies;
   return result;
 }
 export const equalConfig = (a: Config, b: Config): boolean => stableJson(normalize(a)) === stableJson(normalize(b));
@@ -80,6 +93,14 @@ export function differences(before: Config, after: Config): Difference[] {
     area: "firewall-policy", identity: "default policy", kind: "modified",
     before: old.firewall.policy, after: next.firewall.policy,
   });
+  if (old.firewall.allow_all_icmp !== next.firewall.allow_all_icmp) result.push({
+    area: "firewall-icmp", identity: "Allow all IPv4 ICMP", kind: "modified",
+    before: old.firewall.allow_all_icmp, after: next.firewall.allow_all_icmp,
+  });
+  if (stableJson(old.firewall.policies) !== stableJson(next.firewall.policies)) result.push({
+    area: "firewall-policies", identity: "host / ingress policies", kind: "modified",
+    before: old.firewall.policies, after: next.firewall.policies,
+  });
   ordered("firewall", old.firewall.rules, next.firewall.rules);
   ordered("nat", old.firewall.nat.masquerade, next.firewall.nat.masquerade);
   if (stableJson(old.kernel) !== stableJson(next.kernel)) result.push({
@@ -125,6 +146,19 @@ function globalUnicast(address: ipaddr.IPv4 | ipaddr.IPv6, loopback = false): bo
   return !bytes.every((byte) => byte === 0) && (loopback || !isLoopback) &&
     bytes[0] !== 255 && !(bytes[0] === 254 && ((bytes[1] ?? 0) & 192) === 128);
 }
+export function selectedRelayPrefix(link: Pick<ManagedInterface, "addresses">): string | undefined {
+  for (const value of [...link.addresses].sort()) {
+    const parsed = prefix(value, false);
+    if (parsed.family === "ipv4" && globalUnicast(parsed.address)) return value;
+  }
+  return undefined;
+}
+export function serviceRepairPermissions(config: Config, service: "softflowd" | "dhcp-relay"): string[] {
+  const permissions = ["state.read", "transactions.write"];
+  if (service === "dhcp-relay" || config.interfaces.some(link => link.dhcp_relay.enabled)) permissions.push("interfaces.write");
+  if (service === "softflowd" || config.softflowd.some(item => item.enabled)) permissions.push("softflowd.write");
+  return permissions;
+}
 export function endpoint(text: string, collector = false): void {
   const match = /^(\[[^\]]+\]|[^:]+):([1-9]\d*)$/.exec(text);
   if (!match?.[1] || !match[2]) throw new Error("Use numeric IP:port; bracket IPv6");
@@ -144,13 +178,14 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   function bound(value: number, min: number, max: number, path: string, page: string): void {
     if (!Number.isInteger(value) || value < min || value > max) issue(path, `Must be an integer ${min}..${max}`, page);
   }
-  const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), priorities = new Set<number>();
+  const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), priorities = new Set<number>(), relayAddresses = new Set<string>();
   const validName = (name: string) => /^[a-zA-Z0-9_.-]{1,15}$/.test(name) && !["lo", ".", ".."].includes(name);
   const interfaces = new Map(config.interfaces.map((link) => [link.name, link]));
   for (const [index, link] of config.interfaces.entries()) {
     const path = `interfaces.${index}`, page = `/interfaces/${encodeURIComponent(link.name)}`;
     if (!validName(link.name) || names.has(link.name)) issue(`${path}.name`, "Invalid or duplicate interface name", page);
     names.add(link.name);
+    if (!["wan", "lan"].includes(link.role)) issue(`${path}.role`, "Explicitly select WAN or LAN; no role is inferred", page);
     if (parents.some((parent) => parent.name === link.name)) issue(`${path}.name`, "Name collides with a protected parent", page);
     bound(link.mtu, 1280, 65535, `${path}.mtu`, page);
     const seenAddresses = new Set<string>();
@@ -159,6 +194,24 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       if (!globalUnicast(parsed.address) || seenAddresses.has(address)) throw new Error("Address must be unique global unicast (private addresses allowed)");
       seenAddresses.add(address);
     }));
+    const relay = link.dhcp_relay, servers = new Set<string>();
+    relay.servers.forEach((server, i) => check(`${path}.dhcp_relay.servers.${i}`, page, () => {
+      const address = numericAddress(server);
+      if (address.kind() !== "ipv4" || !globalUnicast(address) || servers.has(server)) {
+        throw new Error("Use distinct canonical unicast IPv4 servers; no loopback, link-local, multicast or broadcast");
+      }
+      servers.add(server);
+    }));
+    if (relay.enabled) {
+      if (!relay.servers.length) issue(`${path}.dhcp_relay.servers`, "Enabled relay requires at least one server", page);
+      if (!link.up || link.kind === "wireguard") issue(`${path}.dhcp_relay.enabled`, "Enabled relay requires an administratively up dummy or VLAN interface", page);
+      check(`${path}.dhcp_relay.enabled`, page, () => {
+        const selected = selectedRelayPrefix(link)?.split("/")[0];
+        if (!selected) throw new Error("Enabled relay requires a configured unicast IPv4 address");
+        if (relayAddresses.has(selected)) throw new Error("Enabled relay interfaces must have distinct selected IPv4 addresses");
+        relayAddresses.add(selected);
+      });
+    }
     const original = baseline?.interfaces.find((item) => item.name === link.name);
     if (original && original.kind !== link.kind) issue(path, "Existing interface kind cannot change; stage deletion and confirm before replacement", page);
     if (link.kind === "vlan") {
@@ -247,6 +300,10 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     });
   });
   if (baseline && stableJson(config.kernel) !== stableJson(baseline.kernel)) issue("kernel", "Kernel settings must be preserved unchanged; this spec does not define a kernel editor", "/changes");
+  if (config.firewall.policies && config.firewall.rules.length) issue("firewall.rules", "Host/interface policy mode cannot be combined with legacy forwarding rules", "/firewall");
+  if (baseline && stableJson(normalize(config).firewall.policies) !== stableJson(normalize(baseline).firewall.policies)) {
+    issue("firewall.policies", "Host/interface policies are read-only in this controller; preserve them unchanged", "/firewall");
+  }
   return issues;
 }
 
@@ -258,7 +315,8 @@ export function requiredPermissions(diff: Difference[]): string[] {
   const permissions = new Set(["transactions.write"]);
   const map: Record<string, string> = {
     interfaces: "interfaces.write", routes: "routes.write", "policy-rules": "policy.write",
-    firewall: "firewall.write", "firewall-policy": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
+    firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
+    "firewall-policies": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

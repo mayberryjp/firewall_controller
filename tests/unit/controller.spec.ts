@@ -112,6 +112,31 @@ describe("independent reads and complete shared draft", () => {
   });
 });
 describe("provisional transaction safety", () => {
+  it("uses stored relay repair endpoint, never the local draft or transaction submit", async () => {
+    const store = await connected(), candidate = config();
+    candidate.interfaces[0]!.dhcp_relay = { enabled: true, servers: ["198.51.100.10"] };
+    candidate.interfaces[0]!.role = "wan"; candidate.firewall.allow_all_icmp = false;
+    store.stage(candidate); vi.mocked(api.reconcileServices).mockResolvedValue(runtime());
+    await store.reconcile("dhcp-relay");
+    expect(api.reconcileServices).toHaveBeenCalledWith("dhcp-relay");
+    expect(api.submitPackage).not.toHaveBeenCalled();
+    expect(store.draft).toEqual(candidate);
+  });
+  it("preserves the draft and surfaces forbidden service repair", async () => {
+    const store = await connected(); store.stage(config());
+    vi.mocked(api.reconcileServices).mockRejectedValue(new ApiFailure("HTTP 403: interfaces.write required", 403));
+    await expect(store.reconcile("dhcp-relay")).rejects.toThrow("403");
+    expect(store.uncertain).toBeNull(); expect(store.draft).toEqual(config());
+    expect(api.reconcileServices).toHaveBeenCalledOnce();
+  });
+  it("freezes unknown relay repair outcome and blocks replay", async () => {
+    const store = await connected();
+    vi.mocked(api.reconcileServices).mockRejectedValue(new ApiFailure("Connection lost", undefined, undefined, true));
+    await expect(store.reconcile("dhcp-relay")).rejects.toThrow("Connection lost");
+    expect(store.uncertain).not.toBeNull();
+    await expect(store.reconcile("dhcp-relay")).rejects.toThrow("safety state");
+    expect(api.reconcileServices).toHaveBeenCalledOnce();
+  });
   it("treats 202 as pending, freezes the snapshot and never confirms automatically", async () => {
     const store = await connected(); const candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
     const pending = transaction(); pending.candidate = candidate;
@@ -207,7 +232,7 @@ describe("provisional transaction safety", () => {
     const store = await connected(); const candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
     vi.mocked(api.reconcileServices).mockResolvedValue(runtime());
     await store.reconcile();
-    expect(api.reconcileServices).toHaveBeenCalledWith();
+    expect(api.reconcileServices).toHaveBeenCalledWith("softflowd");
     expect(store.draft).toEqual(candidate); expect(store.state.data?.revision).toBe("0");
   });
   it("clears the submitted draft only after a verified commit and fresh desired state", async () => {

@@ -67,6 +67,26 @@ describe("same-origin authenticated API boundary", () => {
     body = encodeJson(runtime()); await net.reconcileServices();
     expect(captured?.url).toBe("/services/softflowd/reconcile"); expect(captured?.data).toBeUndefined();
   });
+  it("reads relay status with visible top-level and per-interface errors", async () => {
+    body = encodeJson({ interfaces: [{ interface: "lab0", state: "unavailable", error: "binary unavailable" }], error: "relay runtime failed" });
+    const result = await net.getDHCPRelayStatus();
+    expect(captured?.url).toBe("/services/dhcp-relay/status");
+    expect(result.error).toBe("relay runtime failed");
+    expect(result.interfaces[0]?.error).toBe("binary unavailable");
+  });
+  it("repairs relay via the bodyless relay endpoint and decodes shared runtime", async () => {
+    body = encodeJson(runtime());
+    const result = await net.reconcileServices("dhcp-relay");
+    expect(captured?.url).toBe("/services/dhcp-relay/reconcile");
+    expect(captured?.data).toBeUndefined();
+    expect(result.dhcp_relay[0]?.state).toBe("disabled");
+  });
+  it.each([400, 403, 422])("surfaces HTTP %s without replay or uncertain-success fallback", async code => {
+    status = code; body = '{"error":"role or relay rejected","transaction":null}';
+    await expect(net.submitPackage({ base_revision: "0", config: config(), confirm_timeout_seconds: 120 }))
+      .rejects.toMatchObject({ status: code, uncertain: false });
+    expect(adapter).toHaveBeenCalledOnce();
+  });
   it("uses the supplied exact history cursor", async () => {
     body = '{"revisions":[],"next_before_revision":9007199254740993}';
     const page = await net.getRevisions("18446744073709551615");

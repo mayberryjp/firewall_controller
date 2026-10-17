@@ -35,7 +35,7 @@ describe("semantic configuration comparison", () => {
   it("ignores backend-normalized ordering and JSON key order", () => {
     const before = config(), after = config();
     after.interfaces[0]!.addresses.reverse();
-    after.firewall = { nat: after.firewall.nat, rules: after.firewall.rules, policy: after.firewall.policy };
+    after.firewall = { nat: after.firewall.nat, rules: after.firewall.rules, policy: after.firewall.policy, allow_all_icmp: after.firewall.allow_all_icmp };
     expect(equalConfig(before, after)).toBe(true);
   });
   it("preserves ordered firewall/NAT moves and counts default policy separately", () => {
@@ -114,7 +114,7 @@ describe("inclusive validation limits and dependencies", () => {
   });
   it("checks VLAN cycles, parent identity, MTU and immutability", () => {
     const candidate = config();
-    candidate.interfaces.push({ name: "vlan0", kind: "vlan", mtu: 1600, up: false, addresses: [], vlan: { parent: "vlan0", id: 0 } });
+    candidate.interfaces.push({ name: "vlan0", kind: "vlan", role: "lan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1600, up: false, addresses: [], vlan: { parent: "vlan0", id: 0 } });
     const errors = validateConfig(candidate);
     expect(errors.some(issue => issue.message.includes("cycle"))).toBe(true);
     expect(errors.some(issue => issue.path.endsWith(".vlan.id"))).toBe(true);
@@ -126,24 +126,24 @@ describe("inclusive validation limits and dependencies", () => {
   });
   it.each([0, 1, 4094, 4095])("checks inclusive VLAN ID %s", value => {
     const candidate = config();
-    candidate.interfaces.push({ name: "vlan0", kind: "vlan", mtu: 1500, up: false, addresses: [], vlan: { parent: "lab0", id: value } });
+    candidate.interfaces.push({ name: "vlan0", kind: "vlan", role: "lan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1500, up: false, addresses: [], vlan: { parent: "lab0", id: value } });
     expect(validateConfig(candidate).some(issue => issue.path.endsWith(".vlan.id"))).toBe(value < 1 || value > 4094);
   });
   it.each([0, 1, 65535, 65536])("checks WireGuard listen port %s", value => {
     const candidate = config();
-    candidate.interfaces.push({ name: "wg0", kind: "wireguard", mtu: 1420, up: false, addresses: [], wireguard: { key_ref: "lab_key", listen_port: value, peers: [] } });
+    candidate.interfaces.push({ name: "wg0", kind: "wireguard", role: "wan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1420, up: false, addresses: [], wireguard: { key_ref: "lab_key", listen_port: value, peers: [] } });
     expect(validateConfig(candidate).some(issue => issue.path.endsWith(".listen_port"))).toBe(value < 1 || value > 65535);
   });
   it.each([-1, 0, 65535, 65536])("checks keepalive %s, without treating zero as missing", value => {
     const candidate = config();
-    candidate.interfaces.push({ name: "wg0", kind: "wireguard", mtu: 1420, up: false, addresses: [], wireguard: {
+    candidate.interfaces.push({ name: "wg0", kind: "wireguard", role: "wan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1420, up: false, addresses: [], wireguard: {
       key_ref: "lab_key", listen_port: 51820, peers: [{ public_key: btoa("\x01".repeat(32)), allowed_ips: [], persistent_keepalive_seconds: value }],
     } });
     expect(validateConfig(candidate).some(issue => issue.path.endsWith(".persistent_keepalive_seconds"))).toBe(value < 0 || value > 65535);
   });
   it("checks peer keys and exact allowed-IP duplicates but permits overlaps", () => {
     const candidate = config();
-    candidate.interfaces.push({ name: "wg0", kind: "wireguard", mtu: 1420, up: false, addresses: [], wireguard: {
+    candidate.interfaces.push({ name: "wg0", kind: "wireguard", role: "wan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1420, up: false, addresses: [], wireguard: {
       key_ref: "lab_key", listen_port: 51820, peers: [
         { public_key: btoa("\x01".repeat(32)), allowed_ips: ["10.0.0.0/8"], persistent_keepalive_seconds: 0 },
         { public_key: btoa("\x02".repeat(32)), allowed_ips: ["10.0.0.0/16"], persistent_keepalive_seconds: 0 },
@@ -179,7 +179,7 @@ describe("inclusive validation limits and dependencies", () => {
     expect(validateConfig(candidate)).toEqual([]);
     candidate.interfaces[0]!.addresses = ["127.0.0.1/8", "fe80::1/64"];
     expect(validateConfig(candidate).filter(issue => issue.path.includes("addresses"))).toHaveLength(2);
-    candidate.interfaces[0] = { name: "lab0", kind: "wireguard", mtu: 1420, up: true, addresses: [], wireguard: { key_ref: "ref", listen_port: 51820, peers: [] } };
+    candidate.interfaces[0] = { name: "lab0", kind: "wireguard", role: "wan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1420, up: true, addresses: [], wireguard: { key_ref: "ref", listen_port: 51820, peers: [] } };
     expect(validateConfig(candidate, [], config()).some(issue => issue.message.includes("kind cannot change"))).toBe(true);
   });
   it.each([0, 1, 15, 16])("checks interface name length %s", length => {
@@ -192,7 +192,7 @@ describe("inclusive validation limits and dependencies", () => {
   });
   it.each([0, 1, 64, 65])("checks key reference length %s", length => {
     const candidate = config();
-    candidate.interfaces.push({ name: "wg0", kind: "wireguard", mtu: 1420, up: false, addresses: [], wireguard: { key_ref: "a".repeat(length), listen_port: 51820, peers: [] } });
+    candidate.interfaces.push({ name: "wg0", kind: "wireguard", role: "wan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1420, up: false, addresses: [], wireguard: { key_ref: "a".repeat(length), listen_port: 51820, peers: [] } });
     expect(validateConfig(candidate).some(issue => issue.path.endsWith(".key_ref"))).toBe(length < 1 || length > 64);
   });
   it.each([9999, 10000, 19999, 20000])("checks source-policy table %s", table => {

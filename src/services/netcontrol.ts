@@ -1,7 +1,7 @@
 import { request } from "@/services/api";
 import {
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema,
-  revisionDetailSchema, statisticsSchema, transactionsSchema, type PackageRequest,
+  revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema, type PackageRequest,
 } from "@/types/domain";
 
 const id = encodeURIComponent;
@@ -17,6 +17,9 @@ export const getRevision = (revision: string) => request("GET", `/revisions/${id
 export const submitPackage = (body: PackageRequest) => request("POST", "/transactions", transactionSchema, body);
 export const confirmTransaction = (value: string) => request("POST", `/transactions/${id(value)}/confirm`, transactionSchema);
 export const rollbackTransaction = (value: string) => request("POST", `/transactions/${id(value)}/rollback`, transactionSchema);
-export const reconcileServices = () => request("POST", "/services/softflowd/reconcile", runtimeSchema);
+export const getDHCPRelayStatus = (signal?: AbortSignal) =>
+  request("GET", "/services/dhcp-relay/status", dhcpRelayStatusPageSchema, undefined, signal);
+export const reconcileServices = (service: "softflowd" | "dhcp-relay" = "softflowd") =>
+  request("POST", `/services/${service}/reconcile`, runtimeSchema);
 export const restoreRevision = (revision: string, body: Omit<PackageRequest, "config">) =>
   request("POST", `/revisions/${id(revision)}/restore`, transactionSchema, body);

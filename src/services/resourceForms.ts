@@ -11,8 +11,15 @@ export function resourceFields(section: Section, managed: string[], parents: str
     case "interfaces": return [
       text("name", "Interface name", "Rename is a delete/create; review all references. 1..15 characters."),
       { ...select("kind", "Kind", ["dummy", "vlan", "wireguard"]), disabled: immutable },
+      { key: "role", label: "Required interface role", kind: "select", choices: [{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }],
+        hint: "Explicit metadata only; no NAT, firewall or routing is configured. VLAN roles are not inherited." },
       number("mtu", "MTU", "1280..65535"), { key: "up", label: "Administratively up (not carrier readiness)", kind: "switch" },
       { key: "addresses", label: "Interface address prefixes", kind: "lines", hint: "Host bits are retained, e.g. 192.0.2.10/24. Global unicast includes private addresses." },
+      { key: "dhcp_relay", label: "DHCPv4 relay", kind: "object", fields: [
+        { key: "enabled", label: "Enable DHCPv4 relay", kind: "switch", hint: "Requires an up dummy/VLAN with IPv4; WireGuard is not supported." },
+        { key: "servers", label: "DHCPv4 relay servers", kind: "lines",
+          hint: "One canonical numeric unicast IPv4 per line. All servers receive requests, not failover. Lists remain validated and preserved when disabled." },
+      ] },
       ...(kind === "vlan" ? [{
         key: "vlan", label: "VLAN settings", kind: "object" as const, fields: [
           { ...select("parent", "Parent (adopted parents are protected)", [...managed, ...parents]), disabled: immutable },
@@ -63,8 +70,8 @@ export function resourceFields(section: Section, managed: string[], parents: str
 export function preset(section: Section, wireguard = false): unknown {
   switch (section) {
     case "interfaces": return wireguard
-      ? { name: "", kind: "wireguard", mtu: 1420, up: false, addresses: [], wireguard: { key_ref: "", listen_port: 51820, peers: [] } }
-      : { name: "", kind: "dummy", mtu: 1500, up: false, addresses: [] };
+      ? { name: "", kind: "wireguard", mtu: 1420, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "", listen_port: 51820, peers: [] } }
+      : { name: "", kind: "dummy", mtu: 1500, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] } };
     case "routes": return { destination: "", interface: "", table: 10000, metric: 1 };
     case "policy_rules": return { priority: 10000, source: "", table: 10000 };
     case "firewall": return { action: "accept" };

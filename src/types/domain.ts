@@ -13,8 +13,12 @@ export const peerSchema = z.object({
   public_key: z.string(), endpoint: optionalText, allowed_ips: list(z.string()),
   persistent_keepalive_seconds: integer,
 }).strict();
+export const dhcpRelaySchema = z.object({
+  enabled: z.boolean().default(false), servers: list(z.string()).default([]),
+}).strict().default({ enabled: false, servers: [] });
 const interfaceFields = {
-  name: z.string(), mtu: integer, up: z.boolean(), addresses: list(z.string()),
+  name: z.string(), role: z.enum(["wan", "lan"]), mtu: integer, up: z.boolean(), addresses: list(z.string()),
+  dhcp_relay: dhcpRelaySchema,
 };
 export const interfaceSchema = z.discriminatedUnion("kind", [
   z.object({ ...interfaceFields, kind: z.literal("dummy") }).strict(),
@@ -41,11 +45,24 @@ export const softflowdSchema = z.object({
   capture_filter: optionalText,
   timeouts: z.record(z.enum(timeoutNames), integer).nullable().transform((value) => value ?? {}),
 }).strict();
+const hostPolicyRuleSchema = z.object({
+  destination_host: optionalText, destination: optionalText, protocol: z.enum(["", "tcp", "udp"]).optional(),
+  destination_ports: list(integer).optional(), action: z.enum(["accept", "drop"]),
+}).strict();
+export const firewallPoliciesSchema = z.object({
+  hosts: list(z.object({
+    id: z.string(), name: z.string(), addresses: list(z.string()), policy: z.enum(["accept", "drop"]),
+    rules: list(hostPolicyRuleSchema),
+  }).strict()),
+  interfaces: list(z.object({ interface: z.string(), rules: list(hostPolicyRuleSchema) }).strict()),
+}).strict();
 export const configSchema = z.object({
   interfaces: list(interfaceSchema), routes: list(routeSchema), policy_rules: list(policySchema),
   firewall: z.object({
+    allow_all_icmp: z.boolean().nullish().transform(value => value ?? true),
     policy: z.enum(["accept", "drop"]), rules: list(filterSchema),
     nat: z.object({ masquerade: list(masqueradeSchema) }).strict(),
+    policies: firewallPoliciesSchema.nullable().optional(),
   }).strict(),
   softflowd: list(softflowdSchema),
   // The backend added kernel settings after FRONTEND_SPEC; preserve, but do not edit them.
@@ -78,8 +95,16 @@ export const serviceStatusSchema = z.object({
   name: z.string(), state: z.string(), pid: integer.optional(),
   started_at: timestamp.nullable().optional(), error: optionalText,
 });
+export const dhcpRelayStatusSchema = z.object({
+  interface: z.string(), state: z.string(), pid: integer.optional(),
+  started_at: timestamp.nullable().optional(), error: optionalText,
+});
+export const dhcpRelayStatusPageSchema = z.object({
+  interfaces: list(dhcpRelayStatusSchema), error: optionalText,
+});
 export const runtimeSchema = z.object({
   parent_interfaces: list(parentSchema), softflowd: list(serviceStatusSchema), error: optionalText,
+  dhcp_relay: list(dhcpRelayStatusSchema),
 });
 const metadata = {
   revision: revisionSchema, current: z.boolean(), transaction_id: optionalText,
@@ -118,6 +143,7 @@ export type Peer = z.infer<typeof peerSchema>;
 export type Transaction = z.infer<typeof transactionSchema>;
 export type StateView = z.infer<typeof stateSchema>;
 export type RuntimeState = z.infer<typeof runtimeSchema>;
+export type DHCPRelayStatus = z.infer<typeof dhcpRelayStatusSchema>;
 export type ParentInterface = z.infer<typeof parentSchema>;
 export type Revision = z.infer<typeof revisionDetailSchema>;
 export type RevisionMetadata = z.infer<typeof revisionMetadataSchema>;

@@ -3,10 +3,29 @@ import { computed } from "vue";
 import { differences } from "@/services/configuration";
 import type { Config } from "@/types/domain";
 import JsonPanel from "@/components/base/JsonPanel.vue";
+import { record } from "@/types/forms";
 const props = defineProps<{ before: Config; after: Config }>();
 const changes = computed(() => differences(props.before, props.after));
+const relayChanged = computed(() => changes.value.some(item => item.area === "interfaces" &&
+  (record(record(item.before).dhcp_relay).enabled === true || record(record(item.after).dhcp_relay).enabled === true)));
 </script>
 <template>
+  <v-alert
+    v-if="relayChanged"
+    type="warning"
+    variant="tonal"
+    class="mb-4"
+  >
+    Review DHCP relay impact: enabled-interface, selected-address or server changes can restart the shared dnsmasq process and briefly disrupt relay on other interfaces. Every upstream receives requests; local readiness does not verify lease delivery.
+  </v-alert>
+  <v-alert
+    v-if="changes.some(item => item.area === 'firewall-icmp')"
+    type="warning"
+    variant="tonal"
+    class="mb-4"
+  >
+    The IPv4 ICMP exception precedes legacy/host/interface drops across input, output and forwarding on all namespace interfaces. ICMPv6 is unchanged; disabling removes exceptions, not a blanket block. Omitted/null flags, including historical snapshots, mean enabled.
+  </v-alert>
   <p
     v-if="!changes.length"
     class="my-4"
@@ -30,6 +49,9 @@ const changes = computed(() => differences(props.before, props.after));
     >
       <v-expansion-panel-title>
         {{ item.area }} · {{ item.kind }} · {{ item.identity }}
+        <template v-if="item.area === 'interfaces' && record(item.before).role !== record(item.after).role">
+          · Role {{ String(record(item.before).role ?? "None").toUpperCase() }} to {{ String(record(item.after).role ?? "None").toUpperCase() }} (metadata only)
+        </template>
       </v-expansion-panel-title>
       <v-expansion-panel-text>
         <JsonPanel

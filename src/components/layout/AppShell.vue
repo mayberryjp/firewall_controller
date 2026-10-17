@@ -21,7 +21,7 @@ const groups = [
     ["Firewall forwarding", "/firewall", "mdi-shield-outline"], ["NAT masquerading", "/nat", "mdi-swap-horizontal"],
     ["WireGuard", "/wireguard", "mdi-vpn"],
   ] },
-  { title: "Services", links: [["softflowd", "/services/softflowd", "mdi-chart-timeline-variant"]] },
+  { title: "Services", links: [["softflowd", "/services/softflowd", "mdi-chart-timeline-variant"], ["DHCPv4 relay", "/services/dhcp-relay", "mdi-lan-connect"]] },
   { title: "Changes & history", links: [
     ["Review changes", "/changes", "mdi-file-compare"], ["Transactions", "/transactions", "mdi-history"],
     ["Committed revisions", "/history", "mdi-source-commit"],

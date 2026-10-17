@@ -49,6 +49,8 @@ function move(index: number, delta: number): void {
     :model-value="modelValue === true"
     :label="field.label"
     :disabled="field.disabled"
+    :hint="field.hint"
+    :persistent-hint="Boolean(field.hint)"
     :error-messages="errors?.[path]"
     @update:model-value="emit('update:modelValue', Boolean($event))"
   />

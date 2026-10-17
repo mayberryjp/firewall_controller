@@ -18,6 +18,7 @@ const counts = computed(() => {
     ["Routes", config.routes.length], ["Source-policy rules", config.policy_rules.length],
     ["Filter rules", config.firewall.rules.length], ["Masquerade rules", config.firewall.nat.masquerade.length],
     ["softflowd configured / enabled", `${config.softflowd.length} / ${config.softflowd.filter(item => item.enabled).length}`],
+    ["DHCPv4 relay configured / enabled", `${config.interfaces.length} / ${config.interfaces.filter(item => item.dhcp_relay.enabled).length}`],
   ] : [];
 });
 onMounted(() => { void store.refreshRevisions(); });
@@ -99,6 +100,7 @@ onMounted(() => { void store.refreshRevisions(); });
     <p v-if="store.runtime.data">
       {{ store.runtime.data.parent_interfaces.filter(item => item.available).length }} / {{ store.runtime.data.parent_interfaces.length }} parents available.
       {{ store.runtime.data.softflowd.length }} service runtime records. Responsiveness is not collector delivery.
+      {{ store.runtime.data.dhcp_relay.length }} DHCP relay runtime records; local readiness is not lease delivery.
     </p>
     <v-btn
       to="/parents"
@@ -110,6 +112,12 @@ onMounted(() => { void store.refreshRevisions(); });
       variant="text"
     >
       Inspect services
+    </v-btn>
+    <v-btn
+      to="/services/dhcp-relay"
+      variant="text"
+    >
+      Inspect DHCP relay
     </v-btn>
     <h2 class="text-h5 mt-8 mb-3">
       Recent transactions

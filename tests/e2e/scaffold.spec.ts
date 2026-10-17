@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
+import { config } from "../fixtures";
 
 async function connect(page: Page): Promise<void> {
   await page.goto("/connect");
@@ -93,4 +94,65 @@ test("keyboard skip link, unknown routes, and exact statistics values", async ({
   await expect(page.getByRole("link", { name: "Skip to main content" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("main")).toBeFocused();
+});
+
+test("ICMP false is staged explicitly and preserved with host/interface policy mode", async ({ page, isMobile }) => {
+  const initial = config(); initial.firewall.rules = []; initial.firewall.policies = { hosts: [], interfaces: [] };
+  const backend = await mockBackend(page, { initialConfig: initial });
+  await connect(page);
+  if (isMobile) await page.getByRole("button", { name: "Toggle navigation" }).click();
+  await page.getByRole("link", { name: "Firewall forwarding", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("Host/interface policy mode is active");
+  await page.getByLabel("Draft allow all IPv4 ICMP", { exact: true }).uncheck();
+  await page.getByRole("button", { name: "Stage ICMP change", exact: true }).click();
+  expect(backend.writes).toHaveLength(0);
+  await page.getByRole("main").getByRole("link", { name: "Review changes", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("Allow all IPv4 ICMP");
+  await page.getByRole("button", { name: "Review provisional apply" }).click();
+  await page.getByLabel("I reviewed the complete package, deletion impact, disruption risk, deadline, and recovery prerequisites.").check();
+  await page.getByRole("button", { name: "Apply provisionally", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("pending_confirmation");
+  expect(backend.writes[0]?.body).toMatchObject({ config: { firewall: { allow_all_icmp: false, policies: { hosts: [], interfaces: [] } } } });
+  expect(backend.writes).toHaveLength(1);
+});
+
+test("WAN role and multi-server relay stage together without auto-configuring networking", async ({ page, isMobile }) => {
+  const backend = await mockBackend(page); await connect(page);
+  if (isMobile) await page.getByRole("button", { name: "Toggle navigation" }).click();
+  await page.getByRole("link", { name: "Interfaces", exact: true }).click();
+  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await page.getByLabel("Required interface role", { exact: true }).press("Enter");
+  await page.getByRole("option", { name: "WAN", exact: true }).click();
+  await page.getByLabel("Enable DHCPv4 relay", { exact: true }).check();
+  await page.getByLabel("DHCPv4 relay servers", { exact: true }).fill("198.51.100.10\n198.51.100.20");
+  await expect(page.getByRole("dialog")).toContainText("Selected DHCP relay address/subnet: 192.0.2.10/24");
+  await page.getByRole("button", { name: "Stage changes", exact: true }).click();
+  expect(backend.writes).toHaveLength(0);
+  await page.getByRole("main").getByRole("link", { name: "Review changes", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("Role LAN to WAN (metadata only)");
+  await expect(page.getByRole("main")).toContainText("briefly disrupt relay on other interfaces");
+  await page.getByRole("button", { name: "Review provisional apply" }).click();
+  await page.getByLabel("I reviewed the complete package, deletion impact, disruption risk, deadline, and recovery prerequisites.").check();
+  await page.getByRole("button", { name: "Apply provisionally", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("pending_confirmation");
+  expect(backend.writes[0]?.body).toMatchObject({ config: {
+    interfaces: [{ name: "lab0", role: "wan", dhcp_relay: { enabled: true, servers: ["198.51.100.10", "198.51.100.20"] } }],
+    routes: config().routes, firewall: config().firewall,
+  } });
+});
+
+test("relay repair is explicit, bodyless and keeps forbidden errors visible", async ({ page, isMobile }) => {
+  const initial = config(); initial.interfaces[0]!.dhcp_relay = { enabled: true, servers: ["198.51.100.10"] };
+  initial.softflowd[0]!.enabled = true;
+  const backend = await mockBackend(page, { initialConfig: initial, serviceDenied: true }); await connect(page);
+  if (isMobile) await page.getByRole("button", { name: "Toggle navigation" }).click();
+  await page.getByRole("link", { name: "DHCPv4 relay", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("Simulated; no real relay activity");
+  expect(backend.writes).toHaveLength(0);
+  await page.getByRole("button", { name: "Reconcile all managed services", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("softflowd.write");
+  await page.getByRole("button", { name: "Reconcile all services", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("HTTP 403: interfaces.write permission required");
+  expect(backend.writes).toEqual([{ path: "/services/dhcp-relay/reconcile", body: undefined }]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

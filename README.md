@@ -6,7 +6,10 @@ control plane**, following the
 and [Netcontrol frontend specification](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md).
 
 Backend contracts were checked against commit
-`21778ac42b0e87e58459c8f7b7ed321e3b433014`. The spec's React suggestion is optional;
+`a411ff48e87eaf32bb5f4923d3488a07cd0bc145`, including the
+[October 17 journal](https://github.com/mayberryjp/firewall_backend/blob/main/docs/journal/2026-10-17.md)
+and [frontend handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-17.md).
+The spec's React suggestion is optional;
 this project retains the existing Vue/Vuetify stack.
 
 ## Run locally
@@ -39,7 +42,7 @@ networking client. There is intentionally no duplicate account/key-management UI
 or proxy dependency on `/auth/`.
 
 Simulator success does **not** verify Linux networking, WireGuard key-file
-availability, kernel permissions, or softflowd collector delivery. Native tests
+availability, kernel permissions, softflowd collector delivery or DHCP lease delivery. Native tests
 require an explicitly disposable Linux namespace and operator provisioning.
 
 ## Screens
@@ -48,14 +51,15 @@ require an explicitly disposable Linux namespace and operator provisioning.
 | --- | --- |
 | `/connect` | Memory-only bearer entry and independent read-access verification |
 | `/overview` | Committed/live state, drift, runtime, recent history, exact statistics |
-| `/interfaces`, `/interfaces/:name` | Managed dummy/VLAN/WireGuard staged editors |
+| `/interfaces`, `/interfaces/:name` | Managed dummy/VLAN/WireGuard editors, required WAN/LAN roles, DHCPv4 relay |
 | `/parents` | Protected adopted-parent diagnostics; no provisioning controls |
 | `/routes` | Routes and managed-interface/table/metric validation |
 | `/policy-rules` | Source-prefix routing with unique priorities |
-| `/firewall` | Default forward policy and ordered accept/drop rules |
+| `/firewall` | Global IPv4 ICMP exception, default forward policy and ordered accept/drop rules; existing host/ingress policies preserved read-only |
 | `/nat` | Ordered IPv4/IPv6 masquerading with family-correct egress |
 | `/wireguard` | Same interface draft with nested peer/settings editor |
 | `/services/softflowd`, `/services/softflowd/:name` | Staged instances, independent runtime, collective reconcile |
+| `/services/dhcp-relay` | Per-interface stored/observed relay configuration, runtime and explicit collective repair |
 | `/changes` | Shared draft, semantic comparison, import/export, provisional apply |
 | `/transactions`, `/transactions/:id` | Independent recovery discovery and explicit lifecycle actions |
 | `/history`, `/history/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
@@ -93,7 +97,7 @@ routes show an application 404.
   after fresh server outcome; rolled-back candidates are retained.
 - Reconcile services is a distinct bodyless, explicitly confirmed action using
   stored configuration, not the draft. It creates no revision, does not replay
-  networking, and may lose flow caches.
+  networking, and may lose flow caches or briefly disrupt DHCP relay on other interfaces.
 - Restore uses the historical restore endpoint (including revision 0), never
   ordinary package submission. It requires no local draft, shows full impact,
   and follows the same provisional lifecycle.
@@ -108,6 +112,70 @@ that would drop/change them are rejected. Historical restore can include them;
 review the full comparison and operator permissions. This avoids a route-only
 edit accidentally deleting newer backend state. Other unknown configuration
 fields are rejected as incompatible rather than silently stripped.
+
+### October 17 backend features
+
+- Every managed dummy/VLAN/WireGuard interface must explicitly select `role: "wan"`
+  or `"lan"`. There is no default, name-based inference, inheritance or migration.
+  Labels, filters and review summaries expose role changes. Roles are descriptive
+  metadata, not independently observed link attributes, and do not configure
+  firewall/NAT/routes. Protected adopted parents do not have editable roles.
+- `firewall.allow_all_icmp` uses the backend's documented **nullish true default**:
+  omitted/null values, including historical snapshots, enable it. Explicit false
+  survives unrelated edits/import/export/transactions. When enabled, protocol 1
+  (all IPv4 ICMP types/codes) is accepted across every namespace interface for
+  input/output/forwarding, before legacy or host/interface drops. ICMPv6 protocol
+  58 is unchanged; other nftables tables can still drop traffic. Disabling removes
+  exceptions rather than blocking ICMP. Backend startup automatically enables
+  older saved configurations, even those with previous ICMP drops.
+  The toggle works in both legacy and host/interface policy modes. Existing
+  `firewall.policies` are decoded, compared and preserved read-only; no implicit
+  exception rows or host-policy editor are synthesized. Import cannot silently
+  replace these preserved policies; historical restore remains server-authorized.
+- Each interface has `dhcp_relay: { enabled, servers }`, default disabled/empty.
+  Disabled server lists remain preserved and validated. Entries must be distinct
+  canonical numeric unicast IPv4 addresses, with no names, ports, prefixes, IPv6,
+  loopback, link-local, multicast, unspecified or broadcast. All servers receive
+  requests, not ordered failover. Enabled relay requires an administratively up
+  dummy/VLAN link, servers and a configured unicast IPv4 address. The selected
+  address/subnet is the first eligible canonical prefix in lexicographic order;
+  enabled interfaces must have distinct selected relay addresses.
+- Runtime comes from the independently polled `/runtime` dataset, including
+  `dhcp_relay` rows and top-level errors. Missing rows are Unknown, not disabled;
+  simulated is explicitly not real relay activity. Running is local process/socket
+  readiness only, not proof of leases or server reachability. Observed failure
+  never rewrites desired enabled settings.
+- Enabled links share one dnsmasq PID. Server/selected-address/enabled-set changes
+  can restart this process and briefly disrupt other interfaces. Explicit repair
+  is a bodyless `/services/dhcp-relay/reconcile` POST. Both service repair entry
+  points affect all enabled services using stored committed/pending settings,
+  never the draft, and never retry automatically. A forbidden repair leaves its
+  error visible and retains the draft.
+
+Configuration changes require `transactions.write` plus `firewall.write` for
+the ICMP flag or `interfaces.write` for role/relay edits. Lifecycle/restore actions
+require their existing change permissions. Relay repair requires `state.read`,
+`transactions.write`, `interfaces.write`, and `softflowd.write` if softflowd is
+enabled. Softflowd repair additionally requires `interfaces.write` when relay is
+enabled. Permission lists are hints based on stored settings, not claims about
+the credential: the API has no permission-discovery endpoint and authorizes
+every write under its engine lock. HTTP 403 is displayed without replay.
+
+#### Relay operator setup
+
+Install trusted relay-capable dnsmasq on the backend host. Configure
+`-dhcp-relay-binary`, `-dhcp-relay-runtime-dir`, `-dhcp-relay-uid` and
+`-dhcp-relay-gid`; the account/group must exist and be non-root. Meet the backend's
+[binary/runtime ownership and namespace/procfs prerequisites](https://github.com/mayberryjp/firewall_backend#relay-operator-setup).
+Do not launch a second DHCP service on UDP 67 in that namespace. Operators supply
+upstream routes, server return paths and other firewalls' UDP 67/68 permissions.
+WAN/LAN role does not select upstream links or limit relay enablement.
+There is no DHCP server, DHCPv6, DNS, automatic firewall/NAT/routes, daemon
+installation or service-identity editor in the controller.
+
+Before release, verify simulator confirmation/rollback/restart/history and run
+the handoff's isolated Linux packet acceptance: a request must reach both servers
+and an offer return to the client. Mocked frontend tests cannot establish this.
 
 ### Validation and representation
 
@@ -220,10 +288,20 @@ Playwright builds the production app and starts/stops its own preview server on
 3030. Stop any dev/preview server first. Deterministic API fixtures cover invalid
 credentials, independent recovery, route-only complete-package apply/confirm,
 unknown write outcome, reconnect discovery, statistics, mobile overflow, and
-keyboard navigation. These fixtures are **test-only**, never a production demo/
+keyboard navigation, plus ICMP preservation in host/interface policy mode,
+WAN role/multi-server relay staging and forbidden bodyless relay repair.
+These fixtures are **test-only**, never a production demo/
 fallback backend. Run the same operator workflows against the simulator and a
 disposable native environment before a release; mocked browser tests do not
 certify backend/kernel integration.
+
+October 17 validation: 239 unit/component tests and all 18 desktop/mobile
+Playwright cases pass, along with lint, strict type-check and production build.
+An isolated loopback-only instance of the real backend simulator also verified
+the frontend response schemas, explicit ICMP false, WAN role, multi-server relay,
+bodyless repair, confirmation, revision reads/restore, disable/rollback, restart
+persistence, invalid-input status codes and denied edits/repairs. Live Linux
+dnsmasq lifecycle, packet delivery and nftables behavior remain unverified.
 
 CI requires lint, typecheck, unit/component tests, production build, desktop/mobile
 E2E, and a Docker image build. Release branches/version tags publish to
@@ -242,7 +320,7 @@ through `src/main.ts`.
 
 ## Operational limitations
 
-- No physical provisioning, parent adoption, DHCP/DNS, unsupported firewall/NAT
+- No physical provisioning, parent adoption, DHCP server/DHCPv6/DNS, unsupported firewall/NAT
   selectors, private-key generation/upload, arbitrary commands, or general drift
   repair controls.
 - Existing interface kind and VLAN identity are immutable. Renames are
