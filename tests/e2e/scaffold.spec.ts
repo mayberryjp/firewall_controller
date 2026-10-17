@@ -14,7 +14,7 @@ test("invalid credentials do not start a polling loop or persist tokens", async 
   await page.goto("/connect");
   await page.getByLabel("Bearer credential").fill("invalid-key");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("401");
+  await expect(page.getByRole("alert").filter({ hasText: "401" }).first()).toBeVisible();
   await page.waitForTimeout(1500);
   expect(requests).toHaveLength(1);
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);

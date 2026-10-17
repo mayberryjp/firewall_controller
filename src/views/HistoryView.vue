@@ -2,29 +2,32 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
-import { getRevision } from "@/services/netcontrol";
-import { revisionSchema, type Config } from "@/types/domain";
+import { revisionSchema } from "@/types/domain";
 import { useConfigExport } from "@/composables/useConfigExport";
+import { differences, requiredPermissions } from "@/services/configuration";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 const store = useControllerStore(), route = useRoute(), router = useRouter();
 const id = computed(() => typeof route.params.revision === "string" ? route.params.revision : "");
 const detail = computed(() => store.revisionDetail.data);
-const compareID = ref(""), comparison = ref<Config | null>(null), error = ref(""), restoreDialog = ref(false);
+const compareID = ref(""), error = ref(""), restoreDialog = ref(false);
+const comparison = computed(() => store.comparisonRevision.data?.config);
 const seconds = ref<number | string>(120), description = ref(""), acknowledged = ref(false);
 const { exportConfig, exportError } = useConfigExport();
 const canRestore = computed(() => store.freshState && !store.state.data?.drift && !store.draft && !store.submitted &&
   !store.busy && !store.uncertain && !store.activeTransactions.length && !store.incompatible);
+const restorePermissions = computed(() => detail.value && store.state.data
+  ? ["state.read", ...requiredPermissions(differences(store.state.data.desired, detail.value.config))] : []);
 watch(id, async (value) => {
-  error.value = ""; comparison.value = null;
+  error.value = ""; store.clearComparison(); compareID.value = "";
   if (value) {
     if (!revisionSchema.safeParse(value).success) { error.value = "Invalid uint64 revision"; return; }
     await store.loadRevision(value);
   } else await store.refreshRevisions();
 }, { immediate: true });
 async function compare(): Promise<void> {
-  try { revisionSchema.parse(compareID.value); comparison.value = (await getRevision(compareID.value)).config; error.value = ""; }
+  try { revisionSchema.parse(compareID.value); await store.compareRevision(compareID.value); error.value = ""; }
   catch (failure) { error.value = failure instanceof Error ? failure.message : "Comparison unavailable"; }
 }
 async function restore(): Promise<void> {
@@ -117,6 +120,11 @@ async function restore(): Promise<void> {
             Load comparison
           </v-btn>
         </div>
+        <DatasetStatus
+          v-if="store.comparisonRevision.loading || store.comparisonRevision.error || comparison"
+          :query="store.comparisonRevision"
+          label="Selected comparison revision"
+        />
         <ConfigDiff
           v-if="comparison"
           :before="detail.config"
@@ -204,6 +212,9 @@ async function restore(): Promise<void> {
             :before="store.state.data.desired"
             :after="detail.config"
           />
+          <p class="my-4">
+            Required permissions (server authoritative): <span class="mono">{{ restorePermissions.join(", ") }}</span>
+          </p>
           <v-text-field
             v-model="description"
             label="Optional restore description (blank uses server default)"

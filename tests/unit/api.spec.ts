@@ -74,7 +74,7 @@ describe("same-origin authenticated API boundary", () => {
     expect(page.next_before_revision).toBe("9007199254740993");
   });
   it("stops on non-JSON 401 and bounds/sanitizes diagnostics", async () => {
-    const unauthorized = vi.fn(); onUnauthorized(unauthorized);
+    const unauthorized = vi.fn(() => setCredential("")); onUnauthorized(unauthorized);
     status = 401; body = `<h1>test-secret-never-persist</h1>${"x".repeat(6000)}`;
     await expect(net.getState()).rejects.toThrow("HTTP 401");
     expect(unauthorized).toHaveBeenCalledOnce();
@@ -100,5 +100,19 @@ describe("same-origin authenticated API boundary", () => {
   it("measures complete UTF-8 request before sending", async () => {
     await expect(request("POST", "/transactions", z.unknown(), { text: "é".repeat(524288) })).rejects.toBeInstanceOf(ApiFailure);
     expect(adapter).not.toHaveBeenCalled();
+  });
+  it("accepts exactly 1 MiB and rejects a request one byte larger", async () => {
+    body = '{"ok":true}';
+    await request("POST", "/boundary", z.object({ ok: z.boolean() }), { text: "x".repeat(1_048_565) });
+    expect(adapter).toHaveBeenCalledOnce();
+    await expect(request("POST", "/boundary", z.unknown(), { text: "x".repeat(1_048_566) })).rejects.toThrow("1 MiB");
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it("does not log a credential or reflected response payload", async () => {
+    const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
+    status = 403; body = '{"error":"test-secret-never-persist","transaction":null}';
+    await expect(net.getState()).rejects.toThrow("[redacted]");
+    expect(logs.flatMap(log => log.mock.calls).flat().join(" ")).not.toContain("test-secret-never-persist");
+    logs.forEach(log => log.mockRestore());
   });
 });

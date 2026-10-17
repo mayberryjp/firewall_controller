@@ -29,6 +29,7 @@ export const useControllerStore = defineStore("controller", () => {
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
   const transactions = dataset<Record<string, Transaction>>(), statistics = dataset<Statistics>();
   const revisions = dataset<RevisionMetadata[]>(), revisionDetail = dataset<Revision>();
+  const comparisonRevision = dataset<Revision>();
   const nextRevision = ref<string | undefined>(), currentRevisionID = ref("");
   const draft = ref<Config | null>(null), baseline = ref<Config | null>(null), baseRevision = ref<string | null>(null);
   const submitted = ref<{ config: Config; id?: string } | null>(null);
@@ -41,7 +42,8 @@ export const useControllerStore = defineStore("controller", () => {
   const versions = new WeakMap<object, number>();
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
-  const allDatasets = [state, runtime, transactions, statistics, revisions, revisionDetail];
+  const detailReads = new Map<string, Promise<Transaction | null>>();
+  const allDatasets = [state, runtime, transactions, statistics, revisions, revisionDetail, comparisonRevision];
   const activeTransactions = computed(() => {
     const items = new Map<string, Transaction>(Object.values(transactions.data ?? {}).map((item) => [item.id, item]));
     const active = state.data?.active_transaction;
@@ -50,7 +52,7 @@ export const useControllerStore = defineStore("controller", () => {
   });
   const unknownStatus = computed(() => Object.values(transactions.data ?? {}).some((item) => !knownStatuses.includes(item.status)) ||
     Boolean(state.data?.active_transaction && !knownStatuses.includes(state.data.active_transaction.status)));
-  const incompatible = computed(() => unknownStatus.value || allDatasets.some((item) => item.incompatible));
+  const incompatible = computed(() => unknownStatus.value || state.incompatible || transactions.incompatible);
   const draftStale = computed(() => draft.value !== null && baseRevision.value !== state.data?.revision);
   const diff = computed(() => baseline.value && draft.value ? differences(baseline.value, draft.value) : []);
   const validation = computed(() => draft.value ? validateConfig(draft.value, runtime.data?.parent_interfaces, baseline.value ?? undefined) : []);
@@ -73,8 +75,9 @@ export const useControllerStore = defineStore("controller", () => {
     epoch++;
     aborts.forEach((controller) => controller.abort());
     aborts.clear();
-    allDatasets.forEach((query) => { query.stale = true; query.loading = false; });
+    allDatasets.forEach((query) => { query.stale = true; query.loading = false; query.delayed = false; });
     flights.clear();
+    detailReads.clear();
   }
   async function load<T>(query: Dataset<T>, read: (signal: AbortSignal) => Promise<T>): Promise<void> {
     const existing = flights.get(query);
@@ -135,9 +138,8 @@ export const useControllerStore = defineStore("controller", () => {
       return false;
     }
     connected.value = true; connecting.value = false;
-    await Promise.all([refreshState(), refreshRuntime(), refreshRevisions()]);
-    await settleSubmitted();
-    return true;
+    void Promise.all([refreshState(), refreshRuntime(), refreshRevisions()]).then(settleSubmitted);
+    return connected.value;
   }
   function disconnect(): void {
     setCredential(""); connected.value = false; invalidateReads();
@@ -160,7 +162,7 @@ export const useControllerStore = defineStore("controller", () => {
     draft.value = null; baseline.value = null; baseRevision.value = null;
   }
   function restartDraft(): void {
-    if (!state.data || !freshState.value) throw new Error("Refresh committed state before restarting");
+    if (!state.data || !freshState.value || !state.lastSuccess || Date.now() - state.lastSuccess >= 20_000) throw new Error("Refresh committed state before restarting");
     discardDraft();
     baseline.value = cloneConfig(state.data.desired); baseRevision.value = state.data.revision;
     draft.value = cloneConfig(state.data.desired);
@@ -171,20 +173,34 @@ export const useControllerStore = defineStore("controller", () => {
     const transaction = transactions.data[pending.id];
     if (!transaction || !terminal(transaction)) return;
     if (uncertain.value?.id === transaction.id) uncertain.value = null;
+    const session = epoch;
     await refreshState();
-    if (!state.data || state.stale) return;
+    if (session !== epoch || submitted.value?.id !== pending.id || !state.data || state.stale) return;
     if (transaction.status === "committed") {
       if (draft.value && equalConfig(draft.value, pending.config)) {
         draft.value = null; baseline.value = null; baseRevision.value = null;
       }
       notice.value = `Server verified committed transaction ${transaction.id}.`;
     } else {
-      notice.value = `Server verified rollback ${transaction.id}. Candidate retained; explicitly restart/rebase against committed state before applying again.`;
+      if (!draft.value) {
+        draft.value = cloneConfig(pending.config);
+        baseline.value = cloneConfig(state.data.desired);
+        baseRevision.value = state.data.revision;
+      }
+      notice.value = `Server verified rollback ${transaction.id}. Candidate retained; review against the latest committed state before applying again.`;
     }
     submitted.value = null;
     void refreshRevisions();
   }
   async function readTransaction(id: string): Promise<Transaction | null> {
+    const existing = detailReads.get(id);
+    if (existing) return existing;
+    const promise = readTransactionOnce(id);
+    detailReads.set(id, promise);
+    try { return await promise; }
+    finally { if (detailReads.get(id) === promise) detailReads.delete(id); }
+  }
+  async function readTransactionOnce(id: string): Promise<Transaction | null> {
     const session = epoch;
     try {
       const transaction = await api.getTransaction(id);
@@ -213,6 +229,11 @@ export const useControllerStore = defineStore("controller", () => {
         notice.value = `Server reports ${response.status}; only committed is a durable revision.`;
       } else runtime.data = response;
     } catch (error) {
+      if (error instanceof ApiFailure && error.status === 401) {
+        if (submitted.value && !submitted.value.id) submitted.value = null;
+        actionError.value = message(error);
+        return null;
+      }
       if (session !== epoch || !connected.value) return null;
       actionError.value = message(error);
       if (error instanceof ApiFailure && error.transaction) {
@@ -262,10 +283,16 @@ export const useControllerStore = defineStore("controller", () => {
     await Promise.all([refreshState(), refreshTransactions()]);
     if (!freshState.value || incompatible.value || busy.value || uncertain.value || draft.value ||
       submitted.value || activeTransactions.value.length || !state.data || state.data.drift) throw new Error("Restore requires fresh drift-free state, no draft, and no active/uncertain write");
+    const capturedBase = state.data.revision;
     const history = await api.getRevision(revision);
+    if (!freshState.value || !state.lastSuccess || Date.now() - state.lastSuccess >= 20_000 ||
+      busy.value || uncertain.value || submitted.value || draft.value || activeTransactions.value.length ||
+      incompatible.value || state.data?.revision !== capturedBase || state.data.drift) {
+      throw new Error("Pre-restore state changed; review the current state before restoring");
+    }
     submitted.value = { config: cloneConfig(history.config) };
     return mutate(`Restore revision ${revision}`, () => api.restoreRevision(revision, {
-      base_revision: state.data!.revision, confirm_timeout_seconds: seconds, description: trimmed,
+      base_revision: capturedBase, confirm_timeout_seconds: seconds, description: trimmed,
     }));
   }
   async function reconcile(): Promise<void> {
@@ -282,9 +309,10 @@ export const useControllerStore = defineStore("controller", () => {
   async function refreshRevisions(append = false): Promise<void> {
     if (append && !nextRevision.value) return;
     const cursor = append ? nextRevision.value : undefined;
+    const session = epoch;
     await load(revisions, async () => {
       const page = await api.getRevisions(cursor);
-      nextRevision.value = page.next_before_revision;
+      if (session === epoch) nextRevision.value = page.next_before_revision;
       return append ? [...(revisions.data ?? []), ...page.revisions] : page.revisions;
     });
   }
@@ -302,13 +330,28 @@ export const useControllerStore = defineStore("controller", () => {
     await load(revisionDetail, () => api.getRevision(id));
     if (revisionDetail.data?.revision === id && !revisionDetail.stale) revisionCache.set(id, revisionDetail.data);
   }
+  function clearComparison(): void {
+    queryAborts.get(comparisonRevision)?.abort();
+    versions.set(comparisonRevision, (versions.get(comparisonRevision) ?? 0) + 1);
+    flights.delete(comparisonRevision);
+    comparisonRevision.data = null; comparisonRevision.error = null; comparisonRevision.loading = false;
+    comparisonRevision.stale = true; comparisonRevision.lastSuccess = null; comparisonRevision.incompatible = false;
+  }
+  async function compareRevision(id: string): Promise<void> {
+    clearComparison();
+    await load(comparisonRevision, () => {
+      const cached = revisionCache.get(id);
+      return cached ? Promise.resolve(cached) : api.getRevision(id);
+    });
+    if (comparisonRevision.data?.revision === id && !comparisonRevision.stale) revisionCache.set(id, comparisonRevision.data);
+  }
   return {
     connected, connecting, authError, state, runtime, transactions, statistics, revisions, revisionDetail,
-    nextRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, uncertain, editorDirty,
+    nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, uncertain, editorDirty,
     monitoring, activeTransactions, unknownStatus, incompatible, draftStale, diff, validation, freshState,
     canApply, sortedTransactions, readOnlyReason,
     connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics,
-    refreshRevisions, loadRevision, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
+    refreshRevisions, loadRevision, compareRevision, clearComparison, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
     readTransaction, resolveUncertainty,
   };
 });

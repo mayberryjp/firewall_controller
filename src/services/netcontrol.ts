@@ -1,15 +1,14 @@
-import { z } from "zod";
 import { request } from "@/services/api";
 import {
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema,
-  revisionDetailSchema, statisticsSchema, type PackageRequest,
+  revisionDetailSchema, statisticsSchema, transactionsSchema, type PackageRequest,
 } from "@/types/domain";
 
 const id = encodeURIComponent;
 export const getState = (signal?: AbortSignal) => request("GET", "/state", stateSchema, undefined, signal);
 export const getRuntime = (signal?: AbortSignal) => request("GET", "/runtime", runtimeSchema, undefined, signal);
 export const getTransactions = (signal?: AbortSignal) => request("GET", "/transactions",
-  z.record(transactionSchema).nullable().transform((value) => value ?? {}), undefined, signal);
+  transactionsSchema, undefined, signal);
 export const getTransaction = (value: string) => request("GET", `/transactions/${id(value)}`, transactionSchema);
 export const getStatistics = (signal?: AbortSignal) => request("GET", "/statistics", statisticsSchema, undefined, signal);
 export const getRevisions = (before?: string) => request("GET",

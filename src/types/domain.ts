@@ -59,10 +59,17 @@ export const transactionSchema = z.object({
   committed_by: optionalText, restored_from_revision: revisionSchema.optional(),
   kernel_before: kernelSchema.optional(), kernel_after: kernelSchema.optional(),
 }).strict();
+export const transactionsSchema = z.record(transactionSchema).nullable().transform(value => value ?? {}).superRefine((value, context) => {
+  for (const [key, transaction] of Object.entries(value)) {
+    if (key !== transaction.id) context.addIssue({ code: z.ZodIssueCode.custom, path: [key, "id"], message: "Transaction map key does not match ID" });
+  }
+});
 export const stateSchema = z.object({
   revision: revisionSchema, desired: configSchema, observed: z.unknown(),
   drift: z.boolean(), active_transaction: transactionSchema.optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (value.observed === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ["observed"], message: "Observed diagnostics must be present" });
+});
 export const parentSchema = z.object({
   name: z.string(), kind: z.string(), index: integer, mac: z.string(),
   mtu: integer, up: z.boolean(), available: z.boolean(), error: optionalText,

@@ -22,9 +22,19 @@ beforeEach(() => {
 async function connected() {
   const store = useControllerStore();
   expect(await store.connect("test-key")).toBe(true);
+  await store.refresh();
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("opens the authenticated shell without waiting for a blocked observation", async () => {
+    let complete: ((value: ReturnType<typeof state>) => void) | undefined;
+    vi.mocked(api.getState).mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+    const store = useControllerStore();
+    expect(await store.connect("test-key")).toBe(true);
+    expect(store.connected).toBe(true); expect(store.state.loading).toBe(true);
+    expect(store.transactions.data).toEqual({});
+    complete?.(state()); await store.refreshState();
+  });
   it("establishes read access when state observation fails; keeps recovery/runtime usable", async () => {
     vi.mocked(api.getState).mockRejectedValue(new ApiFailure("observation failed", 503));
     vi.mocked(api.getTransactions).mockResolvedValue({ one: transaction("recovery_failed") });
@@ -77,6 +87,28 @@ describe("independent reads and complete shared draft", () => {
     expect(store.statistics.stale).toBe(true);
     expect(store.statistics.data?.interfaces[0]?.counters?.rx_bytes).toBe("18446744073709551615");
     expect(JSON.stringify(store.draft)).toBe(captured);
+  });
+  it("caches immutable revision configs for session comparison and clears caches on disconnect", async () => {
+    const store = await connected();
+    const history = { revision: "0", current: true, submitted_at: null, committed_at: null, config: config() };
+    vi.mocked(api.getRevision).mockResolvedValue(history);
+    await store.loadRevision("0"); await store.compareRevision("0");
+    expect(api.getRevision).toHaveBeenCalledOnce();
+    expect(store.comparisonRevision.data?.config).toEqual(history.config);
+    store.disconnect();
+    expect(store.comparisonRevision.data).toBeNull();
+    await store.connect("test-key"); await store.loadRevision("0");
+    expect(api.getRevision).toHaveBeenCalledTimes(2);
+  });
+  it("ignores older revision detail reads when the selected revision changes", async () => {
+    const store = await connected();
+    let complete: ((value: { revision: string; current: boolean; submitted_at: null; committed_at: null; config: ReturnType<typeof config> }) => void) | undefined;
+    vi.mocked(api.getRevision).mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const first = store.loadRevision("0");
+    vi.mocked(api.getRevision).mockResolvedValueOnce({ revision: "1", current: true, submitted_at: null, committed_at: null, config: config() });
+    await store.loadRevision("1");
+    complete?.({ revision: "0", current: false, submitted_at: null, committed_at: null, config: config() }); await first;
+    expect(store.revisionDetail.data?.revision).toBe("1");
   });
 });
 describe("provisional transaction safety", () => {
@@ -141,6 +173,14 @@ describe("provisional transaction safety", () => {
     await store.lifecycle("tx-test", "rollback");
     expect(api.rollbackTransaction).toHaveBeenCalledWith("tx-test");
   });
+  it("does not let incompatible optional statistics obstruct known recovery", async () => {
+    const store = await connected();
+    store.statistics.incompatible = true; store.statistics.error = "Unsupported monitoring schema";
+    vi.mocked(api.getTransaction).mockResolvedValue(transaction("recovery_failed"));
+    vi.mocked(api.rollbackTransaction).mockResolvedValue(transaction("rolled_back"));
+    await store.lifecycle("tx-test", "rollback");
+    expect(api.rollbackTransaction).toHaveBeenCalledWith("tx-test");
+  });
   it.each([9, 10, 300, 301])("checks confirmation window %s", async seconds => {
     const store = await connected(); const candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
     vi.mocked(api.submitPackage).mockResolvedValue(transaction());
@@ -169,5 +209,35 @@ describe("provisional transaction safety", () => {
     await store.reconcile();
     expect(api.reconcileServices).toHaveBeenCalledWith();
     expect(store.draft).toEqual(candidate); expect(store.state.data?.revision).toBe("0");
+  });
+  it("clears the submitted draft only after a verified commit and fresh desired state", async () => {
+    const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
+    const pending = transaction(); pending.candidate = candidate;
+    vi.mocked(api.submitPackage).mockResolvedValue(pending);
+    vi.mocked(api.getTransactions).mockResolvedValueOnce({}).mockResolvedValue({ [pending.id]: pending });
+    await store.apply(120, "");
+    expect(store.draft).not.toBeNull();
+    const committed = { ...pending, status: "committed" };
+    vi.mocked(api.getTransactions).mockResolvedValue({ [pending.id]: committed });
+    vi.mocked(api.getState).mockRejectedValueOnce(new ApiFailure("temporarily unavailable", 503));
+    await store.refreshTransactions();
+    expect(store.draft).not.toBeNull();
+    vi.mocked(api.getState).mockResolvedValue({ ...state(), revision: "1", desired: candidate });
+    await store.refreshTransactions();
+    expect(store.draft).toBeNull(); expect(store.submitted).toBeNull();
+  });
+  it("retains the candidate as an editable draft after verified rollback", async () => {
+    const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
+    const rolledBack = transaction("rolled_back"); rolledBack.candidate = candidate;
+    vi.mocked(api.submitPackage).mockResolvedValue(rolledBack);
+    vi.mocked(api.getTransactions).mockResolvedValueOnce({}).mockResolvedValue({ [rolledBack.id]: rolledBack });
+    await store.apply(120, "");
+    expect(store.draft).toEqual(candidate); expect(store.submitted).toBeNull(); expect(store.baseRevision).toBe("0");
+  });
+  it("a rejected 401 releases an unsubmitted snapshot but preserves the draft", async () => {
+    const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
+    vi.mocked(api.submitPackage).mockRejectedValue(new ApiFailure("Credential rejected", 401));
+    await store.apply(120, "");
+    expect(store.submitted).toBeNull(); expect(store.draft).toEqual(candidate);
   });
 });

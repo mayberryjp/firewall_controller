@@ -78,6 +78,7 @@ function move(index: number, delta: number): void {
   />
   <fieldset
     v-else-if="field.kind === 'object'"
+    :id="path"
     class="field-group"
   >
     <legend>{{ field.label }}</legend>
@@ -93,6 +94,7 @@ function move(index: number, delta: number): void {
   </fieldset>
   <fieldset
     v-else-if="field.kind === 'rows'"
+    :id="path"
     class="field-group"
   >
     <legend>{{ field.label }}</legend>

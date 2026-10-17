@@ -38,9 +38,9 @@ api.interceptors.request.use((request) => {
   return request;
 });
 
-function diagnostic(text: string): string {
+function diagnostic(text: string, credential = token): string {
   return [...text.replace(/<[^>]*>/g, " ")].map(char => char.charCodeAt(0) < 32 ? " " : char)
-    .join("").slice(0, 4096).split(token || "\u0000").join("[redacted]");
+    .join("").split(credential || "\u0000").join("[redacted]").slice(0, 4096);
 }
 
 export async function request<T>(
@@ -51,6 +51,7 @@ export async function request<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const writing = method === "POST";
+  const requestCredential = token;
   const serialized = body === undefined ? undefined : encodeJson(body);
   if (serialized !== undefined && utf8Size(serialized) > 1_048_576) {
     throw new ApiFailure("Complete UTF-8 request exceeds the 1 MiB limit", 422);
@@ -77,12 +78,12 @@ export async function request<T>(
   let data: unknown;
   try { data = decodeJson(raw); }
   catch {
-    throw new ApiFailure(`HTTP ${response.status}: non-JSON or incompatible response. ${diagnostic(raw)}`,
+    throw new ApiFailure(`HTTP ${response.status}: non-JSON or incompatible response. ${diagnostic(raw, requestCredential)}`,
       response.status, undefined, writing, response.status < 400);
   }
   if (response.status >= 400) {
     const envelope = data && typeof data === "object" ? data : {};
-    const message = "error" in envelope && typeof envelope.error === "string" ? diagnostic(envelope.error) : "Request rejected";
+    const message = "error" in envelope && typeof envelope.error === "string" ? diagnostic(envelope.error, requestCredential) : "Request rejected";
     const transaction = "transaction" in envelope ? transactionSchema.safeParse(envelope.transaction) : undefined;
     const malformedTransaction = "transaction" in envelope && envelope.transaction !== null && !transaction?.success;
     throw new ApiFailure(`HTTP ${response.status}: ${message}${malformedTransaction ? " (incompatible transaction data)" : ""}`, response.status,
@@ -92,7 +93,7 @@ export async function request<T>(
   const decoded = schema.safeParse(data);
   if (!decoded.success) {
     const paths = decoded.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
-    throw new ApiFailure(`Incompatible API response: ${diagnostic(paths)}`, response.status, undefined, writing, true);
+    throw new ApiFailure(`Incompatible API response: ${diagnostic(paths, requestCredential)}`, response.status, undefined, writing, true);
   }
   return decoded.data;
 }

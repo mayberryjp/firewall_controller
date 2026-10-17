@@ -65,12 +65,21 @@ body {
   margin: 48px auto;
 }
 
-.transaction-actions .v-btn {
+.transaction-actions .v-btn,
+.v-alert .v-btn,
+.v-card-actions .v-btn {
   height: auto;
   min-height: 40px;
   white-space: normal;
   padding-block: 10px;
   max-width: 100%;
+}
+
+.transaction-actions .v-btn__content,
+.v-alert .v-btn__content,
+.v-card-actions .v-btn__content {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .v-table td {

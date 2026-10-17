@@ -4,4 +4,4 @@ services:
     ports:
       - "3030:80"
     environment:
-      API_UPSTREAM: ${API_UPSTREAM:-http://firewall-api:8000}
+      API_UPSTREAM: ${API_UPSTREAM:-http://firewall-api:8080}

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
 import {
   configSchema, interfaceSchema, routeSchema, policySchema, filterSchema, masqueradeSchema, softflowdSchema, type Config, type ManagedInterface,
@@ -35,6 +36,7 @@ const descriptions: Record<Section, string> = {
 };
 const showDraft = ref(false), search = ref(""), kindFilter = ref("All"), adminFilter = ref("All"), interfaceFilter = ref("All"), familyFilter = ref("All"), tableFilter = ref("");
 const dialog = ref(false), form = ref<Record<string, unknown>>({}), original = ref<unknown>(), editingIndex = ref(-1);
+const renameAcknowledged = ref(false);
 const formStart = ref(""), errors = ref<Record<string, string[]>>({}), formError = ref("");
 const summary = ref<HTMLElement | null>(null), deletion = ref<{ index: number; value: unknown } | null>(null);
 const policy = ref<"accept" | "drop">("accept"), serviceDialog = ref(false), serviceError = ref("");
@@ -70,7 +72,7 @@ const rows = computed(() => selectedConfig.value ? items(selectedConfig.value).m
   if (familyFilter.value !== "All") {
     try { if (prefix(String(value.destination || value.source), true).family !== familyFilter.value) return false; } catch { return false; }
   }
-  return JSON.stringify(value).toLowerCase().includes(search.value.toLowerCase());
+  return JSON.stringify(value).toLowerCase().includes(String(search.value ?? "").toLowerCase());
 }) : []);
 const allManaged = computed(() => editingConfig.value?.interfaces.map(link => link.name) ?? []);
 const adopted = computed(() => store.runtime.data?.parent_interfaces.filter(parent => parent.available).map(parent => parent.name) ?? []);
@@ -104,9 +106,8 @@ const columns = computed(() => {
   }
   return [];
 });
-const impacts = computed(() => {
-  if (!deletion.value || !editingConfig.value || section.value !== "interfaces") return [];
-  const name = record(deletion.value.value).name;
+function dependencies(name: unknown): string[] {
+  if (!editingConfig.value || section.value !== "interfaces") return [];
   const config = editingConfig.value;
   return [
     ...config.interfaces.filter(link => link.kind === "vlan" && link.vlan.parent === name).map(link => `Child VLAN ${link.name}`),
@@ -114,7 +115,10 @@ const impacts = computed(() => {
     ...config.firewall.nat.masquerade.filter(item => item.out_interface === name).map((_, index) => `Masquerade reference ${index + 1}`),
     ...config.softflowd.filter(item => item.interface === name).map(item => `Capture instance ${item.name}`),
   ];
-});
+}
+const impacts = computed(() => deletion.value ? dependencies(record(deletion.value.value).name) : []);
+const renaming = computed(() => section.value === "interfaces" && original.value !== undefined && record(original.value).name !== form.value.name);
+const renameImpacts = computed(() => renaming.value ? dependencies(record(original.value).name) : []);
 function display(value: unknown, key: string): string {
   if (value === undefined || value === "") return ["source", "destination"].includes(key) ? "Any" : key === "gateway" ? "Direct" : "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
@@ -157,6 +161,7 @@ function open(value?: unknown): void {
   const initial = editingIndex.value >= 0 ? items(editingConfig.value)[editingIndex.value] : preset(section.value, wireguard.value);
   form.value = record(JSON.parse(JSON.stringify(initial)));
   formStart.value = stableJson(form.value); errors.value = {}; formError.value = ""; dialog.value = true;
+  renameAcknowledged.value = false;
 }
 function change(key: string, value: unknown): void {
   const next = { ...form.value, [key]: value };
@@ -174,6 +179,7 @@ function cancel(): void {
 }
 watch(() => route.fullPath, () => {
   dialog.value = false; store.editorDirty = false; formError.value = "";
+  showDraft.value = false;
   search.value = ""; kindFilter.value = "All"; adminFilter.value = "All"; interfaceFilter.value = "All"; familyFilter.value = "All"; tableFilter.value = "";
 });
 onUnmounted(() => { store.editorDirty = false; });
@@ -181,6 +187,7 @@ async function stageForm(): Promise<void> {
   if (!editingConfig.value) return;
   errors.value = {}; formError.value = "";
   try {
+    if (renaming.value && !renameAcknowledged.value) throw new Error("Review and acknowledge interface rename dependency impacts first");
     const value = JSON.parse(JSON.stringify(form.value)) as Record<string, unknown>;
     if (section.value === "softflowd") {
       const timeouts = record(value.timeouts);
@@ -194,12 +201,18 @@ async function stageForm(): Promise<void> {
     const ownIssues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.state.data?.desired).filter(issue =>
       issue.path === basePath || issue.path.startsWith(`${basePath}.`));
     for (const issue of ownIssues) {
-      const key = issue.path.replace(basePath, "editor");
+      const key = issue.path.replace(basePath, "editor").replace(/\.(addresses|allowed_ips)\.\d+$/, ".$1");
       errors.value[key] = [...(errors.value[key] ?? []), issue.message];
     }
     if (ownIssues.length) throw new Error("Correct the highlighted local validation errors. Cross-resource errors remain visible in Review changes.");
     store.stage(candidate); dialog.value = false; store.editorDirty = false; showDraft.value = true;
   } catch (error) {
+    if (error instanceof ZodError) {
+      for (const issue of error.issues) {
+        const key = `editor.${issue.path.join(".")}`;
+        errors.value[key] = [...(errors.value[key] ?? []), issue.message];
+      }
+    }
     formError.value = error instanceof Error ? error.message : "Unable to stage record";
     await nextTick(); summary.value?.focus();
   }
@@ -277,7 +290,14 @@ async function reconcile(): Promise<void> {
         hide-details
         color="primary"
       />
-      <v-btn v-if="!showDraft" variant="text" :disabled="Boolean(store.readOnlyReason)" @click="beginPreview">Start / show shared draft</v-btn>
+      <v-btn
+        v-if="!showDraft"
+        variant="text"
+        :disabled="Boolean(store.readOnlyReason)"
+        @click="beginPreview"
+      >
+        Start / show shared draft
+      </v-btn>
     </div>
     <div class="filter-grid">
       <v-text-field
@@ -465,7 +485,27 @@ async function reconcile(): Promise<void> {
       scrollable
     >
       <v-card :title="`${editingIndex < 0 ? 'Add' : 'Edit'} ${titles[section]} — local draft only`">
-        <v-card-text>
+        <v-card-text id="editor">
+          <v-alert
+            v-if="renaming"
+            type="warning"
+            variant="tonal"
+            class="mb-4"
+          >
+            Rename is a deletion and creation, not an API rename. References are not automatically rewritten.
+            <ul>
+              <li
+                v-for="impact in renameImpacts"
+                :key="impact"
+              >
+                {{ impact }}
+              </li>
+            </ul>
+            <v-checkbox
+              v-model="renameAcknowledged"
+              label="I reviewed rename dependencies and will explicitly stage all reference changes."
+            />
+          </v-alert>
           <p
             v-if="editingIndex < 0"
             class="text-caption mb-4"

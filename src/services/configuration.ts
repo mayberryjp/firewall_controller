@@ -267,6 +267,13 @@ export function requiredPermissions(diff: Difference[]): string[] {
       const after = change.after && typeof change.after === "object" && "wireguard" in change.after ? change.after.wireguard : undefined;
       if (stableJson(before) !== stableJson(after)) permissions.add("wireguard.write");
     }
+    if (change.area === "kernel") {
+      for (const scope of ["namespace", "host"] as const) {
+        const before: unknown = change.before && typeof change.before === "object" && scope in change.before ? Reflect.get(change.before, scope) : {};
+        const after: unknown = change.after && typeof change.after === "object" && scope in change.after ? Reflect.get(change.after, scope) : {};
+        if (stableJson(before) !== stableJson(after)) permissions.add(`kernel.${scope}.write`);
+      }
+    }
   }
   return [...permissions];
 }
