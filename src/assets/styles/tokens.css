@@ -1,0 +1,5 @@
+:root {
+  --app-content-max-width: 1200px;
+  --app-space: 8px;
+  --app-border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+}

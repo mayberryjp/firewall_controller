@@ -1,0 +1,36 @@
+import { onMounted, onUnmounted, watch } from "vue";
+import { useControllerStore } from "@/stores/controller";
+
+export function usePolling(): void {
+  const store = useControllerStore();
+  const stops: Array<() => void> = [];
+  function schedule(action: () => Promise<void>, interval: () => number, failed: () => boolean, enabled = () => true): void {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false, running = false, failures = 0;
+    async function run(): Promise<void> {
+      if (stopped || running) return;
+      if (store.connected && document.visibilityState !== "hidden" && enabled()) {
+        running = true;
+        try { await action(); } finally { running = false; }
+        failures = failed() ? Math.min(failures + 1, 4) : 0;
+      }
+      if (!stopped) timer = setTimeout(() => { void run(); }, failures ? [1000, 2000, 5000, 10000][failures - 1] : interval());
+    }
+    const wake = () => { clearTimeout(timer); void run(); };
+    document.addEventListener("visibilitychange", wake);
+    window.addEventListener("online", wake);
+    const unwatch = watch(() => store.connected, wake);
+    void run();
+    stops.push(() => {
+      stopped = true; clearTimeout(timer); unwatch();
+      document.removeEventListener("visibilitychange", wake); window.removeEventListener("online", wake);
+    });
+  }
+  onMounted(() => {
+    schedule(store.refreshState, () => store.activeTransactions.length || store.uncertain ? 1000 : 5000, () => Boolean(store.state.error));
+    schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error));
+    schedule(store.refreshTransactions, () => store.activeTransactions.length || store.uncertain ? 1000 : 10000, () => Boolean(store.transactions.error));
+    schedule(store.refreshStatistics, () => 3000, () => Boolean(store.statistics.error), () => store.monitoring);
+  });
+  onUnmounted(() => stops.forEach((stop) => stop()));
+}

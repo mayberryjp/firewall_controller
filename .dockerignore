@@ -1,0 +1,12 @@
+.git
+.github
+.sme
+node_modules
+dist
+coverage
+playwright-report
+test-results
+.env
+.env.*
+*.local
+*.tsbuildinfo
