@@ -407,9 +407,36 @@ Live Linux raw ICMP, dnsmasq/nftables behavior, clock discipline, whole-applianc
 logging/delivery and vnStat packet/history collection remain unverified here.
 
 CI requires lint, typecheck, unit/component tests, production build, desktop/mobile
-E2E, and a Docker image build. Release branches/version tags publish to
-`ghcr.io/<owner>/<repository>:sha-<commit>` only after quality gates, using the
-workflow's scoped `GITHUB_TOKEN`. No mutable `latest` tag is published.
+E2E, and a Docker image build.
+
+### Docker Hub publishing
+
+Pushes to `main` and manual runs of the **Build and publish Docker image** workflow
+publish to Docker Hub after lint, typecheck, unit/component tests and desktop/mobile
+E2E pass. The Docker build also runs the production build. Release branches and
+version tags still run CI, but no longer trigger image publishing.
+
+Configure these GitHub Actions repository secrets before publishing:
+
+- `DOCKERHUB_USERNAME`: a Docker Hub account with write access to
+  `mayberry4477/firewall-controller`.
+- `DOCKERHUB_TOKEN`: that account's Docker Hub access token with write permission.
+
+Each run builds without Docker layer caching and pushes both tags:
+
+- `mayberry4477/firewall-controller:latest`
+- `mayberry4477/firewall-controller:<full-commit-sha>`
+
+New runs cancel any in-progress publish run. GHCR publishing and its
+`packages: write` permission are no longer used. To download a published image:
+
+```powershell
+docker pull mayberry4477/firewall-controller:latest
+```
+
+Use the commit-SHA tag to select a specific build. Pulling an image does not
+update running containers; recreate them using the selected image in your
+deployment. The local Compose setup above continues to use `firewall-controller:dev`.
 
 ## Layout
 
