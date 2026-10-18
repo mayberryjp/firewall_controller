@@ -1,0 +1,180 @@
+<script setup lang="ts">
+import { computed, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
+import { ZodError } from "zod";
+import { useControllerStore } from "@/stores/controller";
+import { ntpSchema, syslogSchema, vnstatSchema, type ApplianceService } from "@/types/domain";
+import { record, type Field } from "@/types/forms";
+import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
+import FieldInput from "@/components/base/FieldInput.vue";
+import DatasetStatus from "@/components/base/DatasetStatus.vue";
+import JsonPanel from "@/components/base/JsonPanel.vue";
+import ServiceRepair from "@/components/feature/ServiceRepair.vue";
+import ApplianceWarnings from "@/components/feature/ApplianceWarnings.vue";
+const route = useRoute(), store = useControllerStore();
+const service = computed<ApplianceService>(() => route.path.endsWith("/ntp") ? "ntp" : route.path.endsWith("/syslog") ? "syslog" : "vnstat");
+const titles = { ntp: "Appliance NTP", syslog: "Appliance syslog", vnstat: "Dual-scope vnStat" };
+const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
+const editing = computed(() => store.draft ?? store.state.data?.desired);
+const form = ref<Record<string, unknown>>({}), initial = ref(""), error = ref(""), errors = ref<Record<string, string[]>>({});
+const fields = computed<Field[]>(() => [
+  { key: "enabled", label: "Desired enabled", kind: "switch" },
+  ...(service.value === "ntp" ? [{ key: "servers", label: "NTP server hosts", kind: "lines" as const, hint: "One canonical IP or lowercase ASCII DNS host per line; 1..8 when enabled, 0..8 disabled. Lists remain validated and retained." }] : []),
+  ...(service.value === "syslog" ? [{
+    key: "servers", label: "Syslog destinations", kind: "rows" as const,
+    create: () => ({ host: "", port: "", transport: "" }),
+    fields: [
+      { key: "host", label: "Syslog host", kind: "text" as const, hint: "Canonical unicast/loopback IP or lowercase ASCII DNS; no URI, embedded port, zone or trailing dot." },
+      { key: "port", label: "Explicit syslog port", kind: "number" as const, hint: "1..65535, no default port" },
+      { key: "transport", label: "Explicit transport", kind: "select" as const, choices: ["udp", "tcp", "tls"].map(value => ({ title: value.toUpperCase(), value })) },
+    ],
+  }] : []),
+]);
+function reset(): void {
+  form.value = record(JSON.parse(JSON.stringify(editing.value?.[service.value] ?? { enabled: false, ...(service.value === "vnstat" ? {} : { servers: [] }) })));
+  initial.value = stableJson(form.value); store.editorDirty = false; error.value = ""; errors.value = {};
+}
+watch(service, reset, { immediate: true });
+watch(editing, () => { if (!store.editorDirty) reset(); });
+watch(form, () => { store.editorDirty = stableJson(form.value) !== initial.value; }, { deep: true });
+onUnmounted(() => { store.editorDirty = false; });
+function stage(): void {
+  error.value = ""; errors.value = {};
+  try {
+    if (!editing.value) throw new Error("Committed desired configuration unavailable");
+    const candidate = cloneConfig(editing.value);
+    if (service.value === "ntp") candidate.ntp = ntpSchema.parse(form.value);
+    else if (service.value === "syslog") candidate.syslog = syslogSchema.parse(form.value);
+    else candidate.vnstat = vnstatSchema.parse(form.value);
+    const issues = validateConfig(candidate).filter(issue => issue.path.startsWith(`${service.value}.`));
+    for (const issue of issues) {
+      const path = issue.path.replace(service.value, "editor").replace(/\.servers\.\d+$/, ".servers");
+      errors.value[path] = [...(errors.value[path] ?? []), issue.message];
+    }
+    if (issues.length) throw new Error(issues.map(issue => `${issue.path}: ${issue.message}`).join("; "));
+    store.stage(candidate); initial.value = stableJson(form.value); store.editorDirty = false;
+  } catch (failure) {
+    if (failure instanceof ZodError) for (const issue of failure.issues) errors.value[`editor.${issue.path.join(".")}`] = [issue.message];
+    error.value = failure instanceof Error ? failure.message : "Unable to stage service";
+  }
+}
+const statusNames = computed(() => service.value === "vnstat" ? ["vnstat-host", "vnstat-managed"] : [service.value]);
+const statusRows = computed(() => statusNames.value.map(name => ({
+  name, status: store.runtime.data?.appliance_services.find(item => item.name === name),
+})));
+const statusLabels: Record<string, string> = {
+  disabled: "Disabled", simulated: "Simulated; no real clock/logging/history activity", unavailable: "Unavailable", not_running: "Not running",
+  running: "Running; local readiness only", unhealthy: "Unhealthy", exited: "Exited",
+};
+</script>
+<template>
+  <section>
+    <h1 class="text-h4 mb-4">
+      {{ titles[service] }}
+    </h1>
+    <ApplianceWarnings :service="service" />
+    <DatasetStatus
+      :query="store.state"
+      label="Committed desired configuration"
+    />
+    <DatasetStatus
+      :query="store.runtime"
+      label="Appliance service runtime"
+    />
+    <v-alert
+      v-if="store.runtime.data?.error"
+      type="error"
+      class="mb-4"
+    >
+      {{ store.runtime.data.error }}
+    </v-alert>
+    <v-alert
+      v-if="store.readOnlyReason"
+      type="warning"
+      class="mb-4"
+    >
+      {{ store.readOnlyReason }}
+    </v-alert>
+    <p class="mb-4">
+      Stored committed/pending enabled: {{ stored?.[service].enabled ?? "Unknown" }}. Form shows shared draft settings when a draft exists. Failed processes never overwrite desired enabled or create drift by themselves.
+    </p>
+    <v-table class="mb-5">
+      <thead><tr><th>Instance</th><th>Scope</th><th>State</th><th>PID / started</th><th>Database diagnostics</th><th>Error</th></tr></thead>
+      <tbody>
+        <tr
+          v-for="{ name, status } in statusRows"
+          :key="name"
+        >
+          <td>{{ name }}</td>
+          <td>{{ status?.scope ?? "Unknown" }}</td>
+          <td>{{ status ? statusLabels[status.state] ?? `Unknown (${status.state})` : "Unknown (no runtime data)" }}</td>
+          <td>{{ status?.pid ?? "Unavailable" }} / {{ status?.started_at ?? "Unknown" }}</td>
+          <td class="mono">
+            {{ status?.database_directory ?? "Unavailable" }}
+          </td>
+          <td role="status">
+            {{ status?.error ?? "None reported" }}
+          </td>
+        </tr>
+      </tbody>
+    </v-table>
+    <ServiceRepair :service="service" />
+    <h2 class="text-h5 my-4">
+      Stage settings into complete shared draft
+    </h2>
+    <v-alert
+      v-if="error"
+      type="error"
+      role="alert"
+      class="mb-4"
+    >
+      {{ error }}
+    </v-alert>
+    <FieldInput
+      v-for="field in fields"
+      :key="field.key"
+      :field="{ ...field, disabled: Boolean(store.readOnlyReason) }"
+      :model-value="form[field.key]"
+      :path="`editor.${field.key}`"
+      :errors="errors"
+      @update:model-value="form = { ...form, [field.key]: $event }"
+    />
+    <div class="d-flex flex-wrap ga-3 my-4">
+      <v-btn
+        color="primary"
+        :disabled="Boolean(store.readOnlyReason)"
+        @click="stage"
+      >
+        Stage service changes
+      </v-btn>
+      <v-btn
+        :disabled="!store.editorDirty"
+        @click="reset"
+      >
+        Discard unstaged input
+      </v-btn>
+      <v-btn
+        to="/changes"
+        variant="text"
+      >
+        Review changes
+      </v-btn>
+    </div>
+    <p class="mb-4">
+      Requires transactions.write and {{ service }}.write. Editing/staging sends no write. Disabled lists stay retained and validated. Apply/confirm/rollback/restore use the complete package and server-authorized lifecycle.
+    </p>
+    <JsonPanel
+      :value="store.state.data?.desired[service]"
+      label="Committed desired service settings"
+    />
+    <JsonPanel
+      v-if="store.draft"
+      :value="store.draft[service]"
+      label="Shared draft service settings"
+    />
+    <h2 class="text-h6 mt-6 mb-3">
+      Operator prerequisites
+    </h2>
+    <p>Trusted chronyd/syslog-ng/vnstatd/vnstat packages and explicit binary paths, -allow-host-services, exclusive host ownership, namespace/clock/kernel-log privileges, backend log source, trust bundle and host DNS/routes are operator responsibilities. Stop competing clock/logging daemons before use. No arbitrary host commands, package installation or OpenRC management are exposed here. Simulation never changes time or creates real history.</p>
+  </section>
+</template>

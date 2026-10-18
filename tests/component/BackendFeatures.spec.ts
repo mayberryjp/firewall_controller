@@ -8,9 +8,12 @@ import RelayStatus from "@/components/feature/RelayStatus.vue";
 import ServiceRepair from "@/components/feature/ServiceRepair.vue";
 import FieldInput from "@/components/base/FieldInput.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
+import ApplianceServiceView from "@/views/ApplianceServiceView.vue";
+import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
+import * as api from "@/services/netcontrol";
 import { useControllerStore } from "@/stores/controller";
 import { configSchema } from "@/types/domain";
-import { config, state, runtime, transaction } from "../fixtures";
+import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics } from "../fixtures";
 import type { Component } from "vue";
 
 const box = { template: "<div><slot /></div>" };
@@ -27,6 +30,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   const store = useControllerStore();
   store.connected = true; store.state.data = state(); store.runtime.data = runtime();
+  vi.spyOn(api, "getGatewayStatistics").mockResolvedValue({ sample: statistics().sample, monitors: [] });
 });
 async function render(component: Component, path: string) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component }] });
@@ -34,6 +38,69 @@ async function render(component: Component, path: string) {
   return mount(component, { global: { plugins: [router], stubs } });
 }
 describe("October 17 frontend workflows", () => {
+  it("stages NTP retained servers into the shared draft without a network write", async () => {
+    const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
+    const wrapper = await render(ApplianceServiceView, "/services/ntp");
+    expect(wrapper.text()).toContain("whole appliance clock");
+    const fields = wrapper.findAllComponents(FieldInput);
+    fields.find(item => item.props("field").key === "enabled")!.vm.$emit("update:modelValue", true);
+    fields.find(item => item.props("field").key === "servers")!.vm.$emit("update:modelValue", ["clock.example", "::1"]);
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Stage service changes")!.trigger("click");
+    expect(store.draft?.ntp).toEqual({ enabled: true, servers: ["clock.example", "::1"] });
+    expect(store.draft?.interfaces).toEqual(config().interfaces);
+    expect(store.draft?.syslog).toEqual(config().syslog);
+    expect(store.editorDirty).toBe(false); expect(submit).not.toHaveBeenCalled();
+  });
+  it("blocks invalid disabled syslog destinations and explains local logging risk", async () => {
+    const store = useControllerStore();
+    const wrapper = await render(ApplianceServiceView, "/services/syslog");
+    expect(wrapper.text()).toContain("stop local system logging");
+    wrapper.findAllComponents(FieldInput).find(item => item.props("field").key === "servers")!.vm.$emit("update:modelValue", [{ host: "UPPER.example", transport: "tls", port: 6514 }]);
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Stage service changes")!.trigger("click");
+    expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("lowercase ASCII DNS");
+  });
+  it("renders both vnStat scopes as diagnostic paths, not traffic history", async () => {
+    const store = useControllerStore();
+    store.runtime.data!.appliance_services[2] = { name: "vnstat-host", scope: "host", state: "simulated", pid: 11, database_directory: "/host-db" };
+    store.runtime.data!.appliance_services[3] = { name: "vnstat-managed", scope: "managed", state: "unhealthy", pid: 12, database_directory: "/managed-db", error: "inventory failed" };
+    const wrapper = await render(ApplianceServiceView, "/services/vnstat");
+    expect(wrapper.find("tbody").text()).toContain("vnstat-host"); expect(wrapper.find("tbody").text()).toContain("vnstat-managed");
+    expect(wrapper.text()).toContain("/host-db"); expect(wrapper.text()).toContain("/managed-db");
+    expect(wrapper.text()).toContain("inventory failed"); expect(wrapper.text()).toContain("No HTTP historical metrics exist");
+  });
+  it("keeps missing gateway samples unknown and old cached health stale", async () => {
+    const store = useControllerStore(), sample = gatewayStatistics();
+    sample.collected_at = new Date(Date.now() - 10000).toISOString();
+    vi.mocked(api.getGatewayStatistics).mockResolvedValue({ sample: statistics().sample, monitors: [sample] });
+    store.state.data!.desired.gateway_monitors = [monitor(), { ...monitor(), name: "missing" }];
+    const wrapper = mount(GatewayStatisticsPanel, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).toContain("stale"); expect(wrapper.text()).toContain("unknown");
+    expect(wrapper.text()).toContain("Unknown (no monitor sample)");
+    expect(wrapper.text()).toContain("0 ms"); expect(wrapper.text()).toContain("1.25 ms");
+    expect(store.gatewayMonitoring).toBe(true);
+    wrapper.unmount(); expect(store.gatewayMonitoring).toBe(false);
+  });
+  it("retains monitoring errors without modifying the shared configuration", async () => {
+    const store = useControllerStore(); store.draft = config();
+    vi.mocked(api.getGatewayStatistics).mockRejectedValue(new Error("Gateway cache unavailable"));
+    const wrapper = mount(GatewayStatisticsPanel, { global: { stubs } }); await flushPromises();
+    expect(store.gatewayStatistics.error).toBe("Gateway cache unavailable");
+    expect(store.gatewayStatistics.stale).toBe(true); expect(store.draft).toEqual(config());
+    wrapper.unmount();
+  });
+  it("shows appliance risks in full-package diffs and all-service permissions during repair", async () => {
+    const before = config(), after = config();
+    after.ntp.enabled = true; after.syslog.enabled = true; after.vnstat.enabled = true; after.gateway_monitors = [monitor()];
+    const diff = mount(ConfigDiff, { props: { before, after }, global: { stubs } });
+    expect(diff.text()).toContain("past clock state"); expect(diff.text()).toContain("stop local system logging");
+    const store = useControllerStore(), pending = transaction(); pending.candidate = after;
+    store.transactions.data = { [pending.id]: pending };
+    const wrapper = mount(ServiceRepair, { props: { service: "softflowd" }, global: { stubs } });
+    await wrapper.findAll("button").find(button => button.text() === "Reconcile all managed services")!.trigger("click");
+    for (const permission of ["gateway_monitors.write", "ntp.write", "syslog.write", "vnstat.write"]) expect(wrapper.text()).toContain(permission);
+  });
   it("stages explicit false in both firewall modes without adding implicit rows", async () => {
     const store = useControllerStore();
     for (const policyMode of [false, true]) {

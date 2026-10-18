@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { configSchema, type Config, type ManagedInterface, type ParentInterface } from "@/types/domain";
+import { configSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 
 export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
@@ -31,6 +31,12 @@ export function normalize(config: Config): Config {
   result.policy_rules.sort((a, b) => a.priority - b.priority);
   result.softflowd.sort((a, b) => a.name.localeCompare(b.name));
   result.softflowd.forEach((service) => { if (!service.capture_filter) delete service.capture_filter; });
+  result.gateway_monitors.sort((a, b) => a.name.localeCompare(b.name));
+  result.ntp.servers.sort();
+  result.syslog.servers.sort((a, b) => {
+    const first = `${a.transport}:${a.host}:${a.port}`, second = `${b.transport}:${b.host}:${b.port}`;
+    return first < second ? -1 : first > second ? 1 : 0;
+  });
   for (const rule of [...result.firewall.rules, ...result.firewall.nat.masquerade]) {
     if (!rule.source) delete rule.source;
     if ("destination" in rule && !rule.destination) delete rule.destination;
@@ -89,6 +95,12 @@ export function differences(before: Config, after: Config): Difference[] {
   named("routes", old.routes, next.routes, (item) => `${item.table}/${item.destination}/${item.metric}`);
   named("policy-rules", old.policy_rules, next.policy_rules, (item) => String(item.priority));
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
+  named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
+  for (const area of ["ntp", "syslog", "vnstat"] as const) {
+    if (stableJson(old[area]) !== stableJson(next[area])) result.push({
+      area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
+    });
+  }
   if (old.firewall.policy !== next.firewall.policy) result.push({
     area: "firewall-policy", identity: "default policy", kind: "modified",
     before: old.firewall.policy, after: next.firewall.policy,
@@ -153,11 +165,25 @@ export function selectedRelayPrefix(link: Pick<ManagedInterface, "addresses">): 
   }
   return undefined;
 }
-export function serviceRepairPermissions(config: Config, service: "softflowd" | "dhcp-relay"): string[] {
+export function serviceRepairPermissions(config: Config, service: RepairService): string[] {
   const permissions = ["state.read", "transactions.write"];
   if (service === "dhcp-relay" || config.interfaces.some(link => link.dhcp_relay.enabled)) permissions.push("interfaces.write");
   if (service === "softflowd" || config.softflowd.some(item => item.enabled)) permissions.push("softflowd.write");
+  if (service === "gateway-monitoring" || config.gateway_monitors.some(item => item.enabled)) permissions.push("gateway_monitors.write");
+  for (const name of ["ntp", "syslog", "vnstat"] as const) {
+    if (service === name || config[name].enabled) permissions.push(`${name}.write`);
+  }
   return permissions;
+}
+export function validateServerHost(host: string): void {
+  if (ipaddr.isValid(host)) {
+    if (!globalUnicast(numericAddress(host), true)) throw new Error("Use canonical unicast/loopback IP or lowercase ASCII DNS host");
+    return;
+  }
+  if (!host || host.length > 253 || /^[\d.]+$/.test(host) ||
+    !host.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) {
+    throw new Error("Use canonical unicast/loopback IP or lowercase ASCII DNS labels, no URI, port, zone, whitespace or trailing dot");
+  }
 }
 export function endpoint(text: string, collector = false): void {
   const match = /^(\[[^\]]+\]|[^:]+):([1-9]\d*)$/.exec(text);
@@ -181,6 +207,61 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), priorities = new Set<number>(), relayAddresses = new Set<string>();
   const validName = (name: string) => /^[a-zA-Z0-9_.-]{1,15}$/.test(name) && !["lo", ".", ".."].includes(name);
   const interfaces = new Map(config.interfaces.map((link) => [link.name, link]));
+  if (config.gateway_monitors.length > 64) issue("gateway_monitors", "At most 64 gateway monitors", "/gateway-monitors");
+  const monitorNames = new Set<string>();
+  config.gateway_monitors.forEach((monitor, index) => {
+    const path = `gateway_monitors.${index}`, page = "/gateway-monitors";
+    if (!/^[a-zA-Z0-9_-]{1,32}$/.test(monitor.name) || monitorNames.has(monitor.name)) issue(`${path}.name`, "Use a unique case-sensitive name, 1..32 letters, digits, underscore or hyphen", page);
+    monitorNames.add(monitor.name);
+    if (!validName(monitor.interface)) issue(`${path}.interface`, "Use a valid explicit interface name", page);
+    bound(monitor.routing_table, 10000, 19999, `${path}.routing_table`, page);
+    for (const [key, min, max] of [
+      ["probe_interval_ms", 100, 60000], ["loss_timeout_ms", 100, 60000], ["window_ms", 1000, 300000],
+      ["latency_threshold_ms", 1, 60000], ["loss_threshold_percent", 1, 100],
+      ["rtt_variation_threshold_ms", 0, 60000], ["failure_hold_ms", 100, 60000], ["recovery_hold_ms", 100, 60000],
+    ] as const) bound(monitor[key], min, max, `${path}.${key}`, page);
+    if (monitor.loss_timeout_ms > 10 * monitor.probe_interval_ms) issue(`${path}.loss_timeout_ms`, "Timeout must be <= 10 probe intervals", page);
+    if (monitor.window_ms < 2 * monitor.loss_timeout_ms || monitor.window_ms < 3 * monitor.probe_interval_ms || monitor.window_ms > 1024 * monitor.probe_interval_ms) {
+      issue(`${path}.window_ms`, "Window must be >= 2 timeouts, >= 3 intervals and <= 1024 intervals", page);
+    }
+    check(path, page, () => {
+      const source = numericAddress(monitor.source_address), gateway = numericAddress(monitor.gateway), target = numericAddress(monitor.target);
+      if (!globalUnicast(source) || ![gateway, target].every(address => globalUnicast(address) || (address.kind() === "ipv6" && address.range() === "linkLocal"))) {
+        throw new Error("Use canonical unicast numeric addresses; IPv6 link-local is allowed only for gateway/target, scoped by interface");
+      }
+      if (source.kind() !== gateway.kind() || source.kind() !== target.kind() || monitor.source_address === monitor.gateway || monitor.source_address === monitor.target) {
+        throw new Error("Source, gateway and target must share a family; gateway and target must be remote");
+      }
+      if (!monitor.enabled) return;
+      const link = interfaces.get(monitor.interface);
+      if (!link?.up || !link.addresses.some(value => prefix(value, false).address.toString() === source.toString())) {
+        throw new Error("Enabled monitor requires its source on an up managed interface");
+      }
+      const contains = (network: string, address: ipaddr.IPv4 | ipaddr.IPv6): boolean => {
+        const parsed = ipaddr.parseCIDR(network);
+        return parsed[0].kind() === address.kind() && address.match(parsed);
+      };
+      const matchingRoute = config.routes.some(route => route.table === monitor.routing_table && route.interface === monitor.interface &&
+        contains(route.destination, target) && (route.gateway === monitor.gateway || (monitor.target === monitor.gateway && !route.gateway)));
+      const matchingRule = config.policy_rules.some(rule => rule.table === monitor.routing_table && contains(rule.source, source));
+      if (!matchingRoute || !matchingRule) throw new Error("Enabled monitor requires an explicit matching route through its gateway/table and source-policy rule; nothing is auto-created");
+    });
+  });
+  for (const name of ["ntp", "syslog"] as const) {
+    const settings = config[name], path = name, page = `/services/${name}`;
+    if (settings.servers.length > 8 || (settings.enabled && !settings.servers.length)) issue(`${path}.servers`, "Use 1..8 servers when enabled, at most 8 when disabled", page);
+    const seen = new Set<string>();
+    settings.servers.forEach((server, index) => check(`${path}.servers.${index}`, page, () => {
+      const host = typeof server === "string" ? server : server.host;
+      validateServerHost(host);
+      const key = typeof server === "string" ? server : `${server.transport}:${server.host}:${server.port}`;
+      if (seen.has(key)) throw new Error("Duplicate server destination");
+      seen.add(key);
+      if (typeof server !== "string" && (!Number.isInteger(server.port) || server.port < 1 || server.port > 65535 || !["udp", "tcp", "tls"].includes(server.transport))) {
+        throw new Error("Select explicit transport udp/tcp/tls and integer port 1..65535");
+      }
+    }));
+  }
   for (const [index, link] of config.interfaces.entries()) {
     const path = `interfaces.${index}`, page = `/interfaces/${encodeURIComponent(link.name)}`;
     if (!validName(link.name) || names.has(link.name)) issue(`${path}.name`, "Invalid or duplicate interface name", page);
@@ -317,6 +398,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     interfaces: "interfaces.write", routes: "routes.write", "policy-rules": "policy.write",
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
+    gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

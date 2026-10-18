@@ -76,6 +76,7 @@ function move(index: number, delta: number): void {
     :hint="field.hint || 'One value per line. Values are validated, never silently canonicalized.'"
     persistent-hint
     :error-messages="errors?.[path]"
+    :disabled="field.disabled"
     @update:model-value="updateLines(String($event))"
   />
   <fieldset
@@ -87,7 +88,7 @@ function move(index: number, delta: number): void {
     <FieldInput
       v-for="child in field.fields"
       :key="child.key"
-      :field="child"
+      :field="{ ...child, disabled: field.disabled || child.disabled }"
       :path="`${path}.${child.key}`"
       :errors="errors"
       :model-value="record(modelValue)[child.key]"
@@ -112,7 +113,7 @@ function move(index: number, delta: number): void {
       <FieldInput
         v-for="child in field.fields"
         :key="child.key"
-        :field="child"
+        :field="{ ...child, disabled: field.disabled || child.disabled }"
         :path="`${path}.${index}.${child.key}`"
         :errors="errors"
         :model-value="record(row)[child.key]"
@@ -122,7 +123,7 @@ function move(index: number, delta: number): void {
         <v-btn
           size="small"
           :aria-label="`Move ${field.label} ${index + 1} up`"
-          :disabled="index === 0"
+          :disabled="field.disabled || index === 0"
           @click="move(index, -1)"
         >
           Move up
@@ -130,7 +131,7 @@ function move(index: number, delta: number): void {
         <v-btn
           size="small"
           :aria-label="`Move ${field.label} ${index + 1} down`"
-          :disabled="index === rows.length - 1"
+          :disabled="field.disabled || index === rows.length - 1"
           @click="move(index, 1)"
         >
           Move down
@@ -138,6 +139,7 @@ function move(index: number, delta: number): void {
         <v-btn
           size="small"
           color="error"
+          :disabled="field.disabled"
           :aria-label="`Remove ${field.label} ${index + 1}`"
           @click="remove(index)"
         >
@@ -153,6 +155,7 @@ function move(index: number, delta: number): void {
     </p>
     <v-btn
       size="small"
+      :disabled="field.disabled"
       @click="emit('update:modelValue', [...rows, field.create?.()])"
     >
       Add {{ field.label.toLowerCase() }}

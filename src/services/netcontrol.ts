@@ -1,7 +1,10 @@
 import { request } from "@/services/api";
 import {
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema,
-  revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema, type PackageRequest,
+  revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
+  gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
+  applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema,
+  gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
 } from "@/types/domain";
 
 const id = encodeURIComponent;
@@ -19,7 +22,19 @@ export const confirmTransaction = (value: string) => request("POST", `/transacti
 export const rollbackTransaction = (value: string) => request("POST", `/transactions/${id(value)}/rollback`, transactionSchema);
 export const getDHCPRelayStatus = (signal?: AbortSignal) =>
   request("GET", "/services/dhcp-relay/status", dhcpRelayStatusPageSchema, undefined, signal);
-export const reconcileServices = (service: "softflowd" | "dhcp-relay" = "softflowd") =>
+export const getGatewayStatistics = (signal?: AbortSignal) =>
+  request("GET", "/statistics/gateways", gatewayStatisticsPageSchema, undefined, signal);
+export const getGatewayMonitors = (signal?: AbortSignal) =>
+  request("GET", "/gateway-monitors", gatewayMonitorSchema.array().nullable().transform(value => value ?? []), undefined, signal);
+export const getGatewayStatistic = (name: string, signal?: AbortSignal) =>
+  request("GET", `/statistics/gateways/${id(name)}`, gatewayStatisticsDetailSchema, undefined, signal);
+export const getGatewayStatus = (signal?: AbortSignal) =>
+  request("GET", "/services/gateway-monitoring/status", gatewayStatusPageSchema, undefined, signal);
+export const getApplianceStatus = (service: ApplianceService, signal?: AbortSignal) =>
+  request("GET", `/services/${service}/status`, applianceStatusPageSchema, undefined, signal);
+export const getApplianceConfig = (service: ApplianceService, signal?: AbortSignal) =>
+  request("GET", `/services/${service}`, service === "ntp" ? ntpSchema : service === "syslog" ? syslogSchema : vnstatSchema, undefined, signal);
+export const reconcileServices = (service: RepairService = "softflowd") =>
   request("POST", `/services/${service}/reconcile`, runtimeSchema);
 export const restoreRevision = (revision: string, body: Omit<PackageRequest, "config">) =>
   request("POST", `/revisions/${id(revision)}/restore`, transactionSchema, body);

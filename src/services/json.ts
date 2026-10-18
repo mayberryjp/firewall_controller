@@ -8,7 +8,9 @@ export function decodeJson(text: string): unknown {
     if (!isLosslessNumber(value)) return value;
     if (revisionKeys.has(key)) return revisionSchema.parse(value.value);
     const number = Number(value.value);
-    if (!Number.isSafeInteger(number)) throw new Error("Unsafe numeric value in API response");
+    if (!Number.isFinite(number) || Math.abs(number) > Number.MAX_SAFE_INTEGER) throw new Error("Unsafe numeric value in API response");
+    // Integer tokens must remain exact; bounded fractional measurements use JSON numbers.
+    if (/^-?\d+$/.test(value.value) && !Number.isSafeInteger(number)) throw new Error("Unsafe numeric value in API response");
     return number;
   });
 }

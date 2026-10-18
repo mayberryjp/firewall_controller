@@ -4,7 +4,7 @@ import { useRoute } from "vue-router";
 import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
 import {
-  configSchema, interfaceSchema, routeSchema, policySchema, filterSchema, masqueradeSchema, softflowdSchema, type Config, type ManagedInterface,
+  configSchema, interfaceSchema, routeSchema, policySchema, filterSchema, masqueradeSchema, softflowdSchema, gatewayMonitorSchema, type Config, type ManagedInterface,
 } from "@/types/domain";
 import { record } from "@/types/forms";
 import { preset, resourceFields, type Section } from "@/services/resourceForms";
@@ -14,8 +14,10 @@ import FieldInput from "@/components/base/FieldInput.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 import ServiceRepair from "@/components/feature/ServiceRepair.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
+import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
 const route = useRoute(), store = useControllerStore();
 const section = computed<Section>(() => {
+  if (route.path.startsWith("/gateway-monitors")) return "gateway_monitors";
   if (route.path.startsWith("/services")) return "softflowd";
   if (route.path.startsWith("/wireguard") || route.path.startsWith("/interfaces")) return "interfaces";
   if (route.path.startsWith("/policy-rules")) return "policy_rules";
@@ -27,6 +29,7 @@ const wireguard = computed(() => route.path === "/wireguard");
 const titles: Record<Section, string> = {
   interfaces: "Managed interfaces", routes: "Routes", policy_rules: "Source-policy routing",
   firewall: "Firewall forwarding", nat: "NAT masquerading", softflowd: "softflowd",
+  gateway_monitors: "Gateway monitors",
 };
 const descriptions: Record<Section, string> = {
   interfaces: "Administrative up is not carrier/readiness. WAN/LAN is required descriptive metadata, not automatic NAT/firewall/routing. VLAN identity is immutable. All edits stage into one complete shared draft.",
@@ -35,6 +38,7 @@ const descriptions: Record<Section, string> = {
   firewall: "Forwarding rule order is significant. The global IPv4 ICMP exception also covers owned input/output chains; it is not management-listener access control.",
   nat: "Masquerading does not enable forwarding, create routes, or bypass filter rules. Order is preserved.",
   softflowd: "Runtime responsiveness is not delivery verification. Reconcile affects all managed services using stored configuration, never the local draft.",
+  gateway_monitors: "Native ICMP monitoring in the managed namespace, IPv4/IPv6. Explicit source/interface/gateway/target/table; no inferred WAN, automatic routing, firewall exceptions or failover. Disabled settings are retained and validated.",
 };
 const showDraft = ref(false), search = ref(""), kindFilter = ref("All"), roleFilter = ref("All"), adminFilter = ref("All"), interfaceFilter = ref("All"), familyFilter = ref("All"), tableFilter = ref("");
 const dialog = ref(false), form = ref<Record<string, unknown>>({}), original = ref<unknown>(), editingIndex = ref(-1);
@@ -67,6 +71,7 @@ function replaceItems(config: Config, values: unknown[]): void {
     case "firewall": config.firewall.rules = values.map(value => filterSchema.parse(value)); break;
     case "nat": config.firewall.nat.masquerade = values.map(value => masqueradeSchema.parse(value)); break;
     case "softflowd": config.softflowd = values.map(value => softflowdSchema.parse(value)); break;
+    case "gateway_monitors": config.gateway_monitors = values.map(value => gatewayMonitorSchema.parse(value)); break;
   }
 }
 const rows = computed(() => selectedConfig.value ? items(selectedConfig.value).map((value, index) => ({
@@ -114,6 +119,7 @@ const columns = computed(() => {
     case "firewall": return ["source", "destination", "action"];
     case "nat": return ["family", "source", "out_interface"];
     case "softflowd": return ["name", "enabled", "interface", "collector", "export_version"];
+    case "gateway_monitors": return ["name", "enabled", "interface", "source_address", "gateway", "target", "routing_table"];
   }
   return [];
 });
@@ -125,6 +131,7 @@ function dependencies(name: unknown): string[] {
     ...config.routes.filter(item => item.interface === name).map(item => `Route ${item.destination}`),
     ...config.firewall.nat.masquerade.filter(item => item.out_interface === name).map((_, index) => `Masquerade reference ${index + 1}`),
     ...config.softflowd.filter(item => item.interface === name).map(item => `Capture instance ${item.name}`),
+    ...config.gateway_monitors.filter(item => item.interface === name).map(item => `Gateway monitor ${item.name}`),
   ];
 }
 const impacts = computed(() => deletion.value ? dependencies(record(deletion.value.value).name) : []);
@@ -298,7 +305,7 @@ watch(() => editingConfig.value?.firewall.allow_all_icmp, value => { if (value !
         :disabled="editingBlocked"
         @click="open()"
       >
-        Add {{ section === "interfaces" ? "interface" : section === "softflowd" ? "instance" : "rule / route" }}
+        Add {{ section === "interfaces" ? "interface" : section === "softflowd" ? "instance" : section === "gateway_monitors" ? "monitor" : "rule / route" }}
       </v-btn>
       <v-switch
         v-model="showDraft"
@@ -338,6 +345,18 @@ watch(() => editingConfig.value?.firewall.allow_all_icmp, value => { if (value !
           :items="['All', 'Up', 'Down']"
           label="Administrative state"
         />
+      </template>
+      <template v-if="section === 'gateway_monitors'">
+        <v-alert
+          type="info"
+          variant="tonal"
+          class="mb-4"
+        >
+          Linux requires explicit -gateway-monitoring, raw socket/namespace privileges and ICMP/ICMPv6 return paths. Default full-window warmup is 30 seconds; failure/recovery holds are 3/5 seconds, with rolling-window effects adding delay.
+          Monitoring changes/repair/restart can reset measurement history. Requires transactions.write and gateway_monitors.write plus permissions for other changed areas.
+        </v-alert>
+        <ServiceRepair service="gateway-monitoring" />
+        <GatewayStatisticsPanel />
       </template>
       <template v-if="section === 'routes'">
         <v-select

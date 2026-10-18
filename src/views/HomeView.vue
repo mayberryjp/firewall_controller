@@ -6,6 +6,7 @@ import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 import StatisticsPanel from "@/components/feature/StatisticsPanel.vue";
+import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
 const store = useControllerStore();
 const observed = computed(() => configSchema.safeParse(store.state.data?.observed));
 const expected = computed(() => store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
@@ -19,6 +20,7 @@ const counts = computed(() => {
     ["Filter rules", config.firewall.rules.length], ["Masquerade rules", config.firewall.nat.masquerade.length],
     ["softflowd configured / enabled", `${config.softflowd.length} / ${config.softflowd.filter(item => item.enabled).length}`],
     ["DHCPv4 relay configured / enabled", `${config.interfaces.length} / ${config.interfaces.filter(item => item.dhcp_relay.enabled).length}`],
+    ["Gateway monitors configured / enabled", `${config.gateway_monitors.length} / ${config.gateway_monitors.filter(item => item.enabled).length}`],
   ] : [];
 });
 onMounted(() => { void store.refreshRevisions(); });
@@ -155,6 +157,7 @@ onMounted(() => { void store.refreshRevisions(); });
       />
     </v-list>
     <StatisticsPanel />
+    <GatewayStatisticsPanel />
     <v-alert
       type="info"
       variant="tonal"

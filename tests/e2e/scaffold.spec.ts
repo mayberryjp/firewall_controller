@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
-import { config } from "../fixtures";
+import { config, gatewayStatistics, monitor } from "../fixtures";
 
 async function connect(page: Page): Promise<void> {
   await page.goto("/connect");
@@ -155,4 +155,93 @@ test("relay repair is explicit, bodyless and keeps forbidden errors visible", as
   await expect(page.getByRole("dialog")).toContainText("HTTP 403: interfaces.write permission required");
   expect(backend.writes).toEqual([{ path: "/services/dhcp-relay/reconcile", body: undefined }]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+async function navigate(page: Page, mobile: boolean, label: string): Promise<void> {
+  if (mobile) await page.getByRole("button", { name: "Toggle navigation" }).click();
+  await page.getByRole("navigation").getByRole("link", { name: label, exact: true }).click();
+}
+
+test("gateway create stages an explicit path and preserves complete package state", async ({ page, isMobile }) => {
+  const backend = await mockBackend(page); await connect(page);
+  await navigate(page, isMobile, "Gateway monitors");
+  await page.getByRole("button", { name: "Add monitor", exact: true }).click();
+  await page.getByLabel("Monitor name", { exact: true }).fill("uplink");
+  await page.getByLabel("Desired monitoring enabled", { exact: true }).check();
+  await page.getByLabel("Explicit managed interface", { exact: true }).fill("lab0");
+  await page.getByLabel("Numeric source address", { exact: true }).fill("192.0.2.10");
+  await page.getByLabel("Numeric gateway", { exact: true }).fill("198.51.100.1");
+  await page.getByLabel("Numeric probe target", { exact: true }).fill("198.51.100.1");
+  await page.getByRole("button", { name: "Stage changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  expect(backend.writes).toHaveLength(0);
+  await navigate(page, isMobile, "Review changes");
+  await expect(page.getByRole("main")).toContainText("gateway_monitors.write");
+  await page.getByRole("button", { name: "Review provisional apply" }).click();
+  await page.getByLabel("I reviewed the complete package, deletion impact, disruption risk, deadline, and recovery prerequisites.").check();
+  await page.getByRole("button", { name: "Apply provisionally", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("pending_confirmation");
+  expect(backend.writes[0]?.body).toMatchObject({ config: { gateway_monitors: [monitor()], ntp: config().ntp, syslog: config().syslog, vnstat: config().vnstat, interfaces: config().interfaces } });
+  expect(backend.writes).toHaveLength(1);
+});
+
+test("appliance settings share one draft and explain clock and local logger rollback risk", async ({ page, isMobile }) => {
+  const backend = await mockBackend(page); await connect(page);
+  await navigate(page, isMobile, "Appliance NTP");
+  await expect(page.getByRole("main")).toContainText("whole appliance clock");
+  await page.getByLabel("Desired enabled", { exact: true }).check();
+  await page.getByLabel("NTP server hosts", { exact: true }).fill("clock.example\n::1");
+  await page.getByRole("button", { name: "Stage service changes", exact: true }).click();
+  await navigate(page, isMobile, "Appliance syslog");
+  await expect(page.getByRole("main")).toContainText("stop local system logging");
+  await page.getByRole("button", { name: "Add syslog destinations", exact: true }).click();
+  await page.getByLabel("Syslog host", { exact: true }).fill("logs.example");
+  await page.getByLabel("Explicit syslog port", { exact: true }).fill("6514");
+  await page.getByLabel("Explicit transport", { exact: true }).press("Enter");
+  await page.getByRole("option", { name: "TLS", exact: true }).click();
+  await page.getByLabel("Desired enabled", { exact: true }).check();
+  await page.getByRole("button", { name: "Stage service changes", exact: true }).click();
+  await navigate(page, isMobile, "vnStat");
+  await expect(page.getByRole("main")).toContainText("No HTTP historical metrics exist");
+  await page.getByLabel("Desired enabled", { exact: true }).check();
+  await page.getByRole("button", { name: "Stage service changes", exact: true }).click();
+  expect(backend.writes).toHaveLength(0);
+  await navigate(page, isMobile, "Review changes");
+  await expect(page.getByRole("main")).toContainText("ntp.write, syslog.write, vnstat.write");
+  await page.getByRole("button", { name: "Review provisional apply" }).click();
+  await page.getByLabel("I reviewed the complete package, deletion impact, disruption risk, deadline, and recovery prerequisites.").check();
+  await page.getByRole("button", { name: "Apply provisionally", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("pending_confirmation");
+  expect(backend.writes[0]?.body).toMatchObject({ config: {
+    ntp: { enabled: true, servers: ["clock.example", "::1"] },
+    syslog: { enabled: true, servers: [{ host: "logs.example", port: 6514, transport: "tls" }] },
+    vnstat: { enabled: true }, routes: config().routes, gateway_monitors: [],
+  } });
+  expect(backend.writes).toHaveLength(1);
+});
+
+test("gateway fractional metrics, null gaps and stale health remain distinct", async ({ page }) => {
+  const initial = config(); initial.gateway_monitors = [monitor()];
+  const row = gatewayStatistics(); row.rtt_variation_ms = null;
+  row.collected_at = new Date(Date.now() - 10000).toISOString();
+  await mockBackend(page, { initialConfig: initial, gatewayRows: [row] });
+  await connect(page);
+  const panel = page.getByRole("region", { name: "Gateway health statistics" });
+  await expect(panel).toContainText("33.333333333333336 %");
+  await expect(panel).toContainText("0 ms"); await expect(panel).toContainText("1.25 ms");
+  await expect(panel).toContainText("Unavailable"); await expect(panel).toContainText("stale");
+  await expect(panel.getByRole("cell", { name: "unknown", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("appliance repair uses stored cross-service permissions and keeps 403 visible", async ({ page, isMobile }) => {
+  const initial = config(); initial.gateway_monitors = [monitor()]; initial.ntp = { enabled: true, servers: ["clock.example"] }; initial.vnstat.enabled = true;
+  const backend = await mockBackend(page, { initialConfig: initial, serviceDenied: true }); await connect(page);
+  await navigate(page, isMobile, "Appliance NTP");
+  await page.getByRole("button", { name: "Reconcile all managed services", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("gateway_monitors.write");
+  await expect(page.getByRole("dialog")).toContainText("vnstat.write");
+  await page.getByRole("button", { name: "Reconcile all services", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("HTTP 403");
+  expect(backend.writes).toEqual([{ path: "/services/ntp/reconcile", body: undefined }]);
 });

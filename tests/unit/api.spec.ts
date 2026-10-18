@@ -4,7 +4,7 @@ import api, { ApiFailure, onUnauthorized, request, setCredential } from "@/servi
 import * as net from "@/services/netcontrol";
 import { z } from "zod";
 import { encodeJson } from "@/services/json";
-import { config, state, runtime, transaction, statistics } from "../fixtures";
+import { config, state, runtime, transaction, statistics, gatewayStatistics } from "../fixtures";
 
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined;
 const adapter = vi.fn(async (input: InternalAxiosRequestConfig) => {
@@ -92,6 +92,29 @@ describe("same-origin authenticated API boundary", () => {
     const page = await net.getRevisions("18446744073709551615");
     expect(captured?.url).toBe("/revisions?limit=50&before_revision=18446744073709551615");
     expect(page.next_before_revision).toBe("9007199254740993");
+  });
+  it("reads independent fractional gateway measurements with no query", async () => {
+    body = encodeJson({ sample: statistics().sample, monitors: [gatewayStatistics()] });
+    const data = await net.getGatewayStatistics();
+    expect(captured?.url).toBe("/statistics/gateways");
+    expect(data.monitors[0]?.rtt_avg_ms).toBe(1.25);
+    body = encodeJson({ sample: statistics().sample, monitor: gatewayStatistics() });
+    await net.getGatewayStatistic("a /b");
+    expect(captured?.url).toBe("/statistics/gateways/a%20%2Fb");
+  });
+  it.each(["ntp", "syslog", "vnstat"] as const)("reads %s metadata/status and repairs bodylessly", async service => {
+    body = encodeJson(config()[service]);
+    await net.getApplianceConfig(service); expect(captured?.url).toBe(`/services/${service}`);
+    body = encodeJson({ instances: runtime().appliance_services, error: "partial" });
+    expect((await net.getApplianceStatus(service)).error).toBe("partial");
+    expect(captured?.url).toBe(`/services/${service}/status`);
+    body = encodeJson(runtime()); await net.reconcileServices(service);
+    expect(captured?.url).toBe(`/services/${service}/reconcile`); expect(captured?.data).toBeUndefined();
+  });
+  it("surfaces unknown gateway 404 without manufacturing an empty successful sample", async () => {
+    status = 404; body = '{"error":"gateway monitor not found","transaction":null}';
+    await expect(net.getGatewayStatistic("missing")).rejects.toMatchObject({ status: 404 });
+    expect(adapter).toHaveBeenCalledOnce();
   });
   it("stops on non-JSON 401 and bounds/sanitizes diagnostics", async () => {
     const unauthorized = vi.fn(() => setCredential("")); onUnauthorized(unauthorized);

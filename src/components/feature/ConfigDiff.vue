@@ -4,12 +4,22 @@ import { differences } from "@/services/configuration";
 import type { Config } from "@/types/domain";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 import { record } from "@/types/forms";
+import ApplianceWarnings from "@/components/feature/ApplianceWarnings.vue";
 const props = defineProps<{ before: Config; after: Config }>();
 const changes = computed(() => differences(props.before, props.after));
 const relayChanged = computed(() => changes.value.some(item => item.area === "interfaces" &&
   (record(record(item.before).dhcp_relay).enabled === true || record(record(item.after).dhcp_relay).enabled === true)));
 </script>
 <template>
+  <ApplianceWarnings v-if="changes.some(item => ['ntp', 'syslog', 'vnstat'].includes(item.area))" />
+  <v-alert
+    v-if="changes.some(item => item.area === 'gateway_monitors')"
+    type="info"
+    variant="tonal"
+    class="mb-4"
+  >
+    Gateway monitor settings persist, but affected configuration/network changes and repair/restart reset measurements. No automatic failover, routes or firewall exceptions are installed. Simulated data is not real reachability.
+  </v-alert>
   <v-alert
     v-if="relayChanged"
     type="warning"

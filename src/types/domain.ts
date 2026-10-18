@@ -56,6 +56,24 @@ export const firewallPoliciesSchema = z.object({
   }).strict()),
   interfaces: list(z.object({ interface: z.string(), rules: list(hostPolicyRuleSchema) }).strict()),
 }).strict();
+const defaultInteger = (fallback: number) => integer.default(fallback).transform(value => value === 0 ? fallback : value);
+export const gatewayMonitorSchema = z.object({
+  name: z.string(), enabled: z.boolean(), interface: z.string(),
+  source_address: z.string(), gateway: z.string(), target: z.string(), routing_table: integer,
+  probe_interval_ms: defaultInteger(1000), loss_timeout_ms: defaultInteger(2000), window_ms: defaultInteger(30000),
+  latency_threshold_ms: defaultInteger(150), loss_threshold_percent: defaultInteger(20),
+  rtt_variation_threshold_ms: integer.default(0), failure_hold_ms: defaultInteger(3000), recovery_hold_ms: defaultInteger(5000),
+}).strict();
+export const ntpSchema = z.object({
+  enabled: z.boolean().default(false), servers: list(z.string()).default([]),
+}).strict().default({ enabled: false, servers: [] });
+export const syslogServerSchema = z.object({
+  host: z.string(), port: integer, transport: z.enum(["udp", "tcp", "tls"]),
+}).strict();
+export const syslogSchema = z.object({
+  enabled: z.boolean().default(false), servers: list(syslogServerSchema).default([]),
+}).strict().default({ enabled: false, servers: [] });
+export const vnstatSchema = z.object({ enabled: z.boolean().default(false) }).strict().default({ enabled: false });
 export const configSchema = z.object({
   interfaces: list(interfaceSchema), routes: list(routeSchema), policy_rules: list(policySchema),
   firewall: z.object({
@@ -65,6 +83,8 @@ export const configSchema = z.object({
     policies: firewallPoliciesSchema.nullable().optional(),
   }).strict(),
   softflowd: list(softflowdSchema),
+  gateway_monitors: list(gatewayMonitorSchema).default([]),
+  ntp: ntpSchema, syslog: syslogSchema, vnstat: vnstatSchema,
   // The backend added kernel settings after FRONTEND_SPEC; preserve, but do not edit them.
   kernel: kernelSchema.optional(),
 }).strict();
@@ -102,9 +122,33 @@ export const dhcpRelayStatusSchema = z.object({
 export const dhcpRelayStatusPageSchema = z.object({
   interfaces: list(dhcpRelayStatusSchema), error: optionalText,
 });
+const metric = z.number().finite().nonnegative().nullable();
+export const gatewayStatisticsSchema = z.object({
+  name: z.string(), process_state: z.string(), sample_status: z.string(), health: z.string(),
+  started_at: timestamp.nullable(), collected_at: timestamp.nullable(),
+  health_changed_at: timestamp.nullable(), last_success_at: timestamp.nullable(),
+  sent: integer.nonnegative(), received: integer.nonnegative(), lost: integer.nonnegative(),
+  pending: integer.nonnegative(), variation_pairs: integer.nonnegative(),
+  loss_percent: z.number().finite().min(0).max(100).nullable(),
+  rtt_min_ms: metric, rtt_max_ms: metric, rtt_avg_ms: metric, rtt_stddev_ms: metric,
+  rtt_p50_ms: metric, rtt_p95_ms: metric, rtt_variation_ms: metric, error: optionalText,
+});
+const sampleSchema = z.object({
+  scope: z.string(), started_at: timestamp, collected_at: timestamp, status: z.string(),
+});
+export const gatewayStatisticsPageSchema = z.object({ sample: sampleSchema, monitors: list(gatewayStatisticsSchema) });
+export const gatewayStatisticsDetailSchema = z.object({ sample: sampleSchema, monitor: gatewayStatisticsSchema });
+export const gatewayStatusPageSchema = z.object({ monitors: list(gatewayStatisticsSchema), error: optionalText });
+export const applianceStatusSchema = z.object({
+  name: z.string(), scope: z.enum(["host", "managed"]), state: z.string(),
+  pid: integer.optional(), started_at: timestamp.nullable().optional(),
+  database_directory: optionalText, error: optionalText,
+});
+export const applianceStatusPageSchema = z.object({ instances: list(applianceStatusSchema), error: optionalText });
 export const runtimeSchema = z.object({
   parent_interfaces: list(parentSchema), softflowd: list(serviceStatusSchema), error: optionalText,
   dhcp_relay: list(dhcpRelayStatusSchema),
+  gateway_monitors: list(gatewayStatisticsSchema), appliance_services: list(applianceStatusSchema),
 });
 const metadata = {
   revision: revisionSchema, current: z.boolean(), transaction_id: optionalText,
@@ -119,9 +163,8 @@ export const revisionPageSchema = z.object({
 });
 const decimal = z.string().regex(/^-?\d+$/);
 export const statisticsSchema = z.object({
-  sample: z.object({
-    scope: z.string(), started_at: timestamp, collected_at: timestamp, status: z.string(),
-  }),
+  sample: sampleSchema,
+  gateways: list(gatewayStatisticsSchema).optional(),
   interfaces: list(z.object({
     name: z.string(), index: integer.optional(), kind: z.string(), ownership: z.string(),
     mtu: integer, admin_up: z.boolean(), oper_state: z.string(), mac: optionalText,
@@ -148,6 +191,11 @@ export type ParentInterface = z.infer<typeof parentSchema>;
 export type Revision = z.infer<typeof revisionDetailSchema>;
 export type RevisionMetadata = z.infer<typeof revisionMetadataSchema>;
 export type Statistics = z.infer<typeof statisticsSchema>;
+export type GatewayMonitor = z.infer<typeof gatewayMonitorSchema>;
+export type GatewayStatistics = z.infer<typeof gatewayStatisticsSchema>;
+export type GatewayStatisticsPage = z.infer<typeof gatewayStatisticsPageSchema>;
+export type ApplianceService = "ntp" | "syslog" | "vnstat";
+export type RepairService = "softflowd" | "dhcp-relay" | "gateway-monitoring" | ApplianceService;
 export interface PackageRequest {
   base_revision: string;
   confirm_timeout_seconds: number;

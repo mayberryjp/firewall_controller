@@ -2,7 +2,8 @@
 import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { serviceRepairPermissions } from "@/services/configuration";
-const props = defineProps<{ service: "softflowd" | "dhcp-relay" }>();
+import type { RepairService } from "@/types/domain";
+const props = defineProps<{ service: RepairService }>();
 const store = useControllerStore();
 const dialog = ref(false), error = ref("");
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
@@ -33,6 +34,9 @@ async function repair(): Promise<void> {
         <p>Uses committed/pending stored configuration, never the local draft. No networking replay or new revision. No automatic retry.</p>
         <p class="mt-3">
           May lose flow caches and briefly disrupt DHCP relay on other interfaces: enabled links share one dnsmasq process. Running is local readiness, not lease delivery or upstream reachability.
+        </p>
+        <p class="mt-3">
+          Repairs may reset gateway measurements. NTP affects the whole appliance clock, not reversible clock history. Syslog owns local system logging as well as forwarding; stopping it can stop local logs. vnStat databases persist across graceful repair but are not delivery/synchronization metrics.
         </p>
         <p class="mt-3">
           Required permissions across stored enabled services: <span class="mono">{{ permissions }}</span>. The backend checks authorization under its engine lock; this client has no permission-discovery endpoint.

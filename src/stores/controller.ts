@@ -5,7 +5,7 @@ import * as api from "@/services/netcontrol";
 import {
   configSchema, knownStatuses, terminal,
   type Config, type StateView, type RuntimeState, type Transaction,
-  type Statistics, type Revision, type RevisionMetadata,
+  type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService,
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
@@ -28,6 +28,7 @@ export const useControllerStore = defineStore("controller", () => {
   const connected = ref(false), connecting = ref(false), authError = ref<string | null>(null);
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
   const transactions = dataset<Record<string, Transaction>>(), statistics = dataset<Statistics>();
+  const gatewayStatistics = dataset<GatewayStatisticsPage>();
   const revisions = dataset<RevisionMetadata[]>(), revisionDetail = dataset<Revision>();
   const comparisonRevision = dataset<Revision>();
   const nextRevision = ref<string | undefined>(), currentRevisionID = ref("");
@@ -35,7 +36,7 @@ export const useControllerStore = defineStore("controller", () => {
   const submitted = ref<{ config: Config; id?: string } | null>(null);
   const busy = ref(false), actionError = ref<string | null>(null), notice = ref<string | null>(null);
   const uncertain = ref<{ operation: string; id?: string; priorIDs: string[]; base: string | null; startedAt: string } | null>(null);
-  const editorDirty = ref(false), monitoring = ref(false);
+  const editorDirty = ref(false), monitoring = ref(false), gatewayMonitoring = ref(false);
   let epoch = 0;
   const flights = new Map<object, Promise<void>>();
   const aborts = new Set<AbortController>();
@@ -43,7 +44,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, transactions, statistics, revisions, revisionDetail, comparisonRevision];
+  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, revisions, revisionDetail, comparisonRevision];
   const activeTransactions = computed(() => {
     const items = new Map<string, Transaction>(Object.values(transactions.data ?? {}).map((item) => [item.id, item]));
     const active = state.data?.active_transaction;
@@ -117,6 +118,7 @@ export const useControllerStore = defineStore("controller", () => {
     await settleSubmitted();
   }
   const refreshStatistics = () => load(statistics, api.getStatistics);
+  const refreshGatewayStatistics = () => load(gatewayStatistics, api.getGatewayStatistics);
   async function refresh(): Promise<void> {
     if (!connected.value) return;
     await Promise.all([refreshState(), refreshRuntime(), refreshTransactions()]);
@@ -295,7 +297,7 @@ export const useControllerStore = defineStore("controller", () => {
       base_revision: capturedBase, confirm_timeout_seconds: seconds, description: trimmed,
     }));
   }
-  async function reconcile(service: "softflowd" | "dhcp-relay" = "softflowd"): Promise<void> {
+  async function reconcile(service: RepairService = "softflowd"): Promise<void> {
     if (incompatible.value || uncertain.value || activeTransactions.value.some((item) =>
       ["applying", "rolling_back", "recovery_failed"].includes(item.status))) throw new Error("Service reconciliation is blocked by safety state");
     await mutate("Reconcile managed services", () => api.reconcileServices(service));
@@ -347,11 +349,11 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale) revisionCache.set(id, comparisonRevision.data);
   }
   return {
-    connected, connecting, authError, state, runtime, transactions, statistics, revisions, revisionDetail,
+    connected, connecting, authError, state, runtime, transactions, statistics, gatewayStatistics, revisions, revisionDetail,
     nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, uncertain, editorDirty,
-    monitoring, activeTransactions, unknownStatus, incompatible, draftStale, diff, validation, freshState,
+    monitoring, gatewayMonitoring, activeTransactions, unknownStatus, incompatible, draftStale, diff, validation, freshState,
     canApply, sortedTransactions, readOnlyReason,
-    connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics,
+    connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics, refreshGatewayStatistics,
     refreshRevisions, loadRevision, compareRevision, clearComparison, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
     readTransaction, resolveUncertainty,
   };

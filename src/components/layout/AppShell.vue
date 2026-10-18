@@ -20,8 +20,13 @@ const groups = [
     ["Routes", "/routes", "mdi-routes"], ["Source-policy rules", "/policy-rules", "mdi-source-branch"],
     ["Firewall forwarding", "/firewall", "mdi-shield-outline"], ["NAT masquerading", "/nat", "mdi-swap-horizontal"],
     ["WireGuard", "/wireguard", "mdi-vpn"],
+    ["Gateway monitors", "/gateway-monitors", "mdi-access-point-network"],
   ] },
-  { title: "Services", links: [["softflowd", "/services/softflowd", "mdi-chart-timeline-variant"], ["DHCPv4 relay", "/services/dhcp-relay", "mdi-lan-connect"]] },
+  { title: "Services", links: [
+    ["softflowd", "/services/softflowd", "mdi-chart-timeline-variant"], ["DHCPv4 relay", "/services/dhcp-relay", "mdi-lan-connect"],
+    ["Appliance NTP", "/services/ntp", "mdi-clock-outline"], ["Appliance syslog", "/services/syslog", "mdi-text-box-outline"],
+    ["vnStat", "/services/vnstat", "mdi-chart-bar"],
+  ] },
   { title: "Changes & history", links: [
     ["Review changes", "/changes", "mdi-file-compare"], ["Transactions", "/transactions", "mdi-history"],
     ["Committed revisions", "/history", "mdi-source-commit"],

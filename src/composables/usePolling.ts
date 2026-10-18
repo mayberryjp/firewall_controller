@@ -31,6 +31,7 @@ export function usePolling(): void {
     schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error));
     schedule(store.refreshTransactions, () => store.activeTransactions.length || store.uncertain ? 1000 : 10000, () => Boolean(store.transactions.error));
     schedule(store.refreshStatistics, () => 3000, () => Boolean(store.statistics.error), () => store.monitoring);
+    schedule(store.refreshGatewayStatistics, () => 3000, () => Boolean(store.gatewayStatistics.error), () => store.gatewayMonitoring);
   });
   onUnmounted(() => stops.forEach((stop) => stop()));
 }

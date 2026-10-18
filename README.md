@@ -6,7 +6,7 @@ control plane**, following the
 and [Netcontrol frontend specification](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md).
 
 Backend contracts were checked against commit
-`a411ff48e87eaf32bb5f4923d3488a07cd0bc145`, including the
+`4d416a2f318b1bce29de7149ccac138db4d9c41f`, including the
 [October 17 journal](https://github.com/mayberryjp/firewall_backend/blob/main/docs/journal/2026-10-17.md)
 and [frontend handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-17.md).
 The spec's React suggestion is optional;
@@ -44,6 +44,8 @@ or proxy dependency on `/auth/`.
 Simulator success does **not** verify Linux networking, WireGuard key-file
 availability, kernel permissions, softflowd collector delivery or DHCP lease delivery. Native tests
 require an explicitly disposable Linux namespace and operator provisioning.
+Simulator results also do not verify gateway reachability, clock synchronization,
+whole-appliance log capture/delivery or real vnStat history.
 
 ## Screens
 
@@ -60,6 +62,8 @@ require an explicitly disposable Linux namespace and operator provisioning.
 | `/wireguard` | Same interface draft with nested peer/settings editor |
 | `/services/softflowd`, `/services/softflowd/:name` | Staged instances, independent runtime, collective reconcile |
 | `/services/dhcp-relay` | Per-interface stored/observed relay configuration, runtime and explicit collective repair |
+| `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
+| `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors, scoped runtime and collective repair |
 | `/changes` | Shared draft, semantic comparison, import/export, provisional apply |
 | `/transactions`, `/transactions/:id` | Independent recovery discovery and explicit lifecycle actions |
 | `/history`, `/history/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
@@ -177,6 +181,102 @@ Before release, verify simulator confirmation/rollback/restart/history and run
 the handoff's isolated Linux packet acceptance: a request must reach both servers
 and an offer return to the client. Mocked frontend tests cannot establish this.
 
+### Gateway monitoring and appliance services
+
+The October 17 handoffs 05/06 add `gateway_monitors`, `ntp`, `syslog`, and
+`vnstat` to every complete configuration. These fields are preserved across
+unrelated edits, imports/exports, transactions and historical comparisons.
+Normalized monitor identity is its case-sensitive name; NTP/syslog server
+ordering is semantically insignificant. Disabled settings remain retained and
+validated; no WAN/source/route is inferred and no service is toggled on navigation.
+
+#### Native gateway monitoring
+
+- `/gateway-monitors` stages explicit managed interface, source/gateway/target,
+  routing table, timing and threshold settings. At most 64 named monitors,
+  names 1..32 letters/digits/underscore/hyphen. Enabled monitors need an up
+  interface with the configured source, matching route through the specified
+  gateway/table and a source-policy rule. Canonical numeric addresses must share
+  a family; IPv6 link-local gateway/target are scoped by the selected interface.
+  Disabled monitors need valid settings but not live references.
+- Interval and timeout: 100..60000 ms, timeout <=10 intervals. Window:
+  1000..300000 ms, >=2 timeouts, >=3 intervals, <=1024 intervals.
+  Mean RTT threshold: 1..60000 ms; loss threshold: 1..100%; variation threshold:
+  0..60000 ms (0 disables); failure/recovery holds: 100..60000 ms.
+  The backend's documented omitted/zero timing defaults normalize explicitly.
+- Overview and monitor screens read `/statistics/gateways` independently of
+  configuration observation. Visible polling is non-overlapping every 3 seconds,
+  with existing hidden-tab pause/backoff. GETs read cached measurements, not new
+  probes. Gateway runtime is also decoded from `/runtime`.
+- Worker lifecycle, sample availability and health are separate. Stale after
+  max(1 second, 3 probe intervals), errors, warmup and simulated/no-data results
+  are Unknown, not current reachability or remote Down. Per-row measurement
+  timestamps are distinct from envelope retrieval timestamps.
+- Fractional loss/RTT values are JSON numbers; null is unavailable, genuine zero
+  is displayed as zero. Revisions remain exact uint64 numeric tokens and kernel
+  counters remain exact quoted decimal strings. Loss excludes pending probes.
+  RTT standard deviation is population deviation; p50/p95 are nearest-rank.
+  **RTT variation** is mean absolute RTT difference between adjacent transmitted
+  probes that both replied, never bridging lost/pending probes; it is not
+  one-way/RTP jitter. Window counts are not lifetime counters or traffic rates.
+- Defaults: full-window 30-second warmup, 100% finalized loss Down; 20% loss or
+  150 ms mean RTT Degraded; optional variation threshold off. Failure/recovery
+  holds are 3/5 seconds and rolling-window effects add delay. Last success is
+  since worker start and can predate the current window.
+- Linux requires explicit `-gateway-monitoring`, raw-socket/namespace privileges,
+  explicit source-policy routing and ICMP/ICMPv6 return paths. No dpinger,
+  automatic firewall exceptions, routing changes or failover are provided.
+  Affected networking/config changes, repair and restart reset measurements;
+  health never rewrites desired enabled or creates modeled configuration drift.
+
+#### Appliance NTP, syslog and vnStat
+
+- NTP/syslog accept 0..8 unique destinations disabled and 1..8 enabled.
+  Hosts are canonical unicast/private/ULA/loopback IPs or lowercase ASCII DNS
+  labels (1..63 characters each, total <=253), without URIs, embedded ports,
+  zones, mapped addresses, whitespace or trailing dots. Syslog requires explicit
+  `udp`/`tcp`/`tls` and port 1..65535; uniqueness is transport+host+port.
+- NTP uses host networking and changes the **whole appliance clock**, slew-only,
+  client-only and without NTS. Running is not proof of synchronization; no
+  offset/sync metrics exist. Rollback restores settings, not past clock state.
+- Syslog owns whole-appliance system/kernel/internal/backend-file logging.
+  Disabling/rolling back the managed logger can stop **local system logging**,
+  not only remote forwarding; an alternative logger is an operator responsibility.
+  TLS needs trusted certificates; UDP/TCP are unencrypted and UDP unacknowledged.
+  DNS destinations use IPv4, canonical IPv6 literals choose IPv6. Running does
+  not verify complete capture or delivery; no durable queue/ack guarantee exists.
+- One vnStat toggle covers all host and managed interfaces, including loopback,
+  unmanaged and dynamically created links. Separate instance/PID/database scopes
+  are shown. Inventory/poll/update is 5 seconds, save/rescan 1 minute; manually
+  inserted links may take up to a minute. Never sum overlapping physical/VLAN/
+  veth/loopback links/scopes as device-wide traffic. No HTTP historical counters
+  are exposed: paths/status are diagnostics, not traffic numbers. Graceful
+  repair/restart preserves history; changed boot/namespace identity selects
+  another database.
+- Status uses the independently polled `/runtime` dataset. Missing rows are
+  Unknown; disabled/simulated/error states stay distinct, including top-level
+  and per-row failures in HTTP 200. Simulation changes no clock and creates no
+  real history. Failures never overwrite desired enabled settings.
+
+All six service repair entry points repair **all enabled services** using stored
+committed/pending settings under the backend lock, never the draft. Gateway
+changes require `gateway_monitors.write`; appliance changes require `ntp.write`,
+`syslog.write` or `vnstat.write`, alongside `transactions.write`. Repair requires
+`state.read`, `transactions.write`, its endpoint write permission and permissions
+for every enabled service (gateway monitoring, appliance services, softflowd,
+DHCP relay). Confirmation/rollback/restore require the relevant change permissions.
+Hints do not imply credential capabilities; 403 stays visible without replay.
+
+Install trusted operator-provided chronyd/syslog-ng/vnstatd/vnstat and configure
+binary paths, explicit `-allow-host-services`, exclusive host ownership,
+namespace/clock/kernel-log privileges, backend log source, trust bundle and host
+DNS/routes. Stop competing clock/logging daemons first. The frontend exposes no
+host commands, package installation or OpenRC management.
+See the backend [operator guide](https://github.com/mayberryjp/firewall_backend#appliance-time-remote-logging-and-vnstat)
+and [Alpine build/install guide](https://github.com/mayberryjp/firewall_backend/blob/main/docs/BUILD_AND_INSTALL.md).
+Package installation defaults to loopback simulator mode; it does not establish
+native readiness or native reboot recovery. Deployment labels stay explicit.
+
 ### Validation and representation
 
 - Strict Zod runtime decoding rejects missing/incompatible desired configuration.
@@ -289,19 +389,22 @@ Playwright builds the production app and starts/stops its own preview server on
 credentials, independent recovery, route-only complete-package apply/confirm,
 unknown write outcome, reconnect discovery, statistics, mobile overflow, and
 keyboard navigation, plus ICMP preservation in host/interface policy mode,
-WAN role/multi-server relay staging and forbidden bodyless relay repair.
+WAN role/multi-server relay staging, explicit gateway creation, fractional/null/
+stale measurements, shared appliance-service staging and forbidden bodyless repairs.
 These fixtures are **test-only**, never a production demo/
 fallback backend. Run the same operator workflows against the simulator and a
 disposable native environment before a release; mocked browser tests do not
 certify backend/kernel integration.
 
-October 17 validation: 239 unit/component tests and all 18 desktop/mobile
+October 18 validation: 316 unit/component tests and all 26 desktop/mobile
 Playwright cases pass, along with lint, strict type-check and production build.
 An isolated loopback-only instance of the real backend simulator also verified
-the frontend response schemas, explicit ICMP false, WAN role, multi-server relay,
-bodyless repair, confirmation, revision reads/restore, disable/rollback, restart
-persistence, invalid-input status codes and denied edits/repairs. Live Linux
-dnsmasq lifecycle, packet delivery and nftables behavior remain unverified.
+all new configuration/runtime/statistics/status response schemas, bodyless repairs,
+confirmation, revision reads/restore, disable/rollback, disabled-server retention,
+restart persistence, invalid-host rejection, unknown-monitor 404 and cross-service
+403 from every repair endpoint. Earlier ICMP/role/relay checks remain covered.
+Live Linux raw ICMP, dnsmasq/nftables behavior, clock discipline, whole-appliance
+logging/delivery and vnStat packet/history collection remain unverified here.
 
 CI requires lint, typecheck, unit/component tests, production build, desktop/mobile
 E2E, and a Docker image build. Release branches/version tags publish to

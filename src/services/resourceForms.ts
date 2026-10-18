@@ -1,13 +1,30 @@
 import type { Field } from "@/types/forms";
 import { timeoutNames } from "@/types/domain";
 
-export type Section = "interfaces" | "routes" | "policy_rules" | "firewall" | "nat" | "softflowd";
+export type Section = "interfaces" | "routes" | "policy_rules" | "firewall" | "nat" | "softflowd" | "gateway_monitors";
 const choices = (values: Array<string | number>) => values.map(value => ({ title: String(value), value }));
 const text = (key: string, label: string, hint?: string): Field => ({ key, label, kind: "text", hint });
 const number = (key: string, label: string, hint?: string): Field => ({ key, label, kind: "number", hint });
 const select = (key: string, label: string, values: Array<string | number>, hint?: string): Field => ({ key, label, kind: "select", choices: choices(values), hint });
 export function resourceFields(section: Section, managed: string[], parents: string[], immutable: boolean, kind: unknown, family: unknown, familyInterfaces: string[]): Field[] {
   switch (section) {
+    case "gateway_monitors": return [
+      text("name", "Monitor name", "Unique case-sensitive name, 1..32 letters, digits, underscore/hyphen; maximum 64 monitors."),
+      { key: "enabled", label: "Desired monitoring enabled", kind: "switch" },
+      text("interface", "Explicit managed interface", `Available: ${managed.join(", ") || "none"}. Disabled settings may refer to absent links.`),
+      text("source_address", "Numeric source address", "Must be configured on the selected up interface when enabled. No WAN/LAN inference."),
+      text("gateway", "Numeric gateway", "Same family; IPv6 link-local is scoped by selected interface, not a zone suffix."),
+      text("target", "Numeric probe target", "Same family; source cannot equal target or gateway."),
+      number("routing_table", "Routing table", "10000..19999. Stage matching routes and source-policy rules separately."),
+      number("probe_interval_ms", "Probe interval (ms)", "100..60000; default 1000"),
+      number("loss_timeout_ms", "Loss timeout (ms)", "100..60000, <=10 intervals; default 2000"),
+      number("window_ms", "Rolling window (ms)", "1000..300000, >=2 timeouts, >=3 and <=1024 intervals; default 30000"),
+      number("latency_threshold_ms", "Mean RTT degradation threshold (ms)", "1..60000; default 150"),
+      number("loss_threshold_percent", "Loss degradation threshold (%)", "1..100; default 20"),
+      number("rtt_variation_threshold_ms", "RTT variation threshold (ms)", "0..60000; 0 disables this threshold"),
+      number("failure_hold_ms", "Failure hold (ms)", "100..60000; default 3000"),
+      number("recovery_hold_ms", "Recovery hold (ms)", "100..60000; default 5000"),
+    ];
     case "interfaces": return [
       text("name", "Interface name", "Rename is a delete/create; review all references. 1..15 characters."),
       { ...select("kind", "Kind", ["dummy", "vlan", "wireguard"]), disabled: immutable },
@@ -69,6 +86,11 @@ export function resourceFields(section: Section, managed: string[], parents: str
 }
 export function preset(section: Section, wireguard = false): unknown {
   switch (section) {
+    case "gateway_monitors": return {
+      name: "", enabled: false, interface: "", source_address: "", gateway: "", target: "", routing_table: 10000,
+      probe_interval_ms: 1000, loss_timeout_ms: 2000, window_ms: 30000, latency_threshold_ms: 150,
+      loss_threshold_percent: 20, rtt_variation_threshold_ms: 0, failure_hold_ms: 3000, recovery_hold_ms: 5000,
+    };
     case "interfaces": return wireguard
       ? { name: "", kind: "wireguard", mtu: 1420, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "", listen_port: 51820, peers: [] } }
       : { name: "", kind: "dummy", mtu: 1500, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] } };

@@ -7,7 +7,7 @@ import { cloneConfig } from "@/services/configuration";
 import { config, state, transaction, runtime, statistics } from "../fixtures";
 vi.mock("@/services/netcontrol", () => ({
   getState: vi.fn(), getRuntime: vi.fn(), getTransactions: vi.fn(), getTransaction: vi.fn(),
-  getStatistics: vi.fn(), getRevisions: vi.fn(), getRevision: vi.fn(),
+  getStatistics: vi.fn(), getGatewayStatistics: vi.fn(), getRevisions: vi.fn(), getRevision: vi.fn(),
   submitPackage: vi.fn(), confirmTransaction: vi.fn(), rollbackTransaction: vi.fn(),
   restoreRevision: vi.fn(), reconcileServices: vi.fn(),
 }));
@@ -18,6 +18,7 @@ beforeEach(() => {
   vi.mocked(api.getTransactions).mockResolvedValue({});
   vi.mocked(api.getRevisions).mockResolvedValue({ revisions: [] });
   vi.mocked(api.getStatistics).mockResolvedValue(statistics());
+  vi.mocked(api.getGatewayStatistics).mockResolvedValue({ sample: statistics().sample, monitors: [] });
 });
 async function connected() {
   const store = useControllerStore();
@@ -26,6 +27,13 @@ async function connected() {
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("loads gateway statistics while observation is unavailable and clears their cache on disconnect", async () => {
+    const store = await connected();
+    vi.mocked(api.getState).mockRejectedValue(new Error("observation failed"));
+    await store.refreshState(); await store.refreshGatewayStatistics();
+    expect(store.gatewayStatistics.stale).toBe(false); expect(store.state.stale).toBe(true);
+    store.disconnect(); expect(store.gatewayStatistics.data).toBeNull();
+  });
   it("opens the authenticated shell without waiting for a blocked observation", async () => {
     let complete: ((value: ReturnType<typeof state>) => void) | undefined;
     vi.mocked(api.getState).mockImplementation(() => new Promise(resolve => { complete = resolve; }));
