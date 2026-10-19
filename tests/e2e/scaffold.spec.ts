@@ -2,18 +2,23 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { config, gatewayStatistics, monitor } from "../fixtures";
 
+async function signInToRegistry(page: Page): Promise<void> {
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Test firewall", exact: true })).toBeVisible();
+}
 async function connect(page: Page): Promise<void> {
   await page.goto("/connect");
-  await page.getByLabel("Bearer credential").fill("browser-test-key");
+  await signInToRegistry(page);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
 }
-test("invalid credentials do not start a polling loop or persist tokens", async ({ page }) => {
-  await mockBackend(page);
+test("invalid device credentials do not start a polling loop or persist tokens", async ({ page }) => {
+  await mockBackend(page, { invalidCredential: true });
   const requests: string[] = [];
-  page.on("request", request => { if (request.url().includes("/api/v1")) requests.push(request.url()); });
+  page.on("request", request => { if (new URL(request.url()).port === "8080") requests.push(request.url()); });
   await page.goto("/connect");
-  await page.getByLabel("Bearer credential").fill("invalid-key");
+  await signInToRegistry(page);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "401" }).first()).toBeVisible();
   await page.waitForTimeout(1500);
@@ -78,8 +83,8 @@ test("unknown write outcomes are frozen and never automatically replayed", async
 test("reload requires credential re-entry and rediscovers pending transactions", async ({ page }) => {
   await mockBackend(page, { initialStatus: "pending_confirmation" }); await connect(page);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Connect to Netcontrol" })).toBeVisible();
-  await page.getByLabel("Bearer credential").fill("browser-test-key");
+  await expect(page.getByRole("heading", { name: "Connect to a firewall" })).toBeVisible();
+  await signInToRegistry(page);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("main")).toContainText("pending confirmation");
 });

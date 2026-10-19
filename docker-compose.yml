@@ -3,5 +3,26 @@ services:
     image: firewall-controller:dev
     ports:
       - "3030:80"
+  registry:
+    build: ./registry
+    image: firewall-controller-registry:dev
+    ports:
+      - "3031:8080"
     environment:
-      API_UPSTREAM: ${API_UPSTREAM:-http://firewall-api:8080}
+      REGISTRY_ADMIN_PASSWORD: ${REGISTRY_ADMIN_PASSWORD:?Set REGISTRY_ADMIN_PASSWORD}
+      REGISTRY_ENCRYPTION_KEY: ${REGISTRY_ENCRYPTION_KEY:?Set REGISTRY_ENCRYPTION_KEY}
+      REGISTRY_DB_PATH: /data/registry.sqlite3
+      REGISTRY_TLS_CERT: ${REGISTRY_TLS_CERT:-}
+      REGISTRY_TLS_KEY: ${REGISTRY_TLS_KEY:-}
+    volumes:
+      - registry-data:/data
+      - ./registry-certs:/certs:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  registry-data:

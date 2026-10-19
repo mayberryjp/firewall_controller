@@ -25,6 +25,11 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:unit
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r registry/requirements.txt
+      - run: python -m unittest discover -s registry -p "test_*.py"
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - uses: docker/setup-buildx-action@v3
@@ -43,3 +48,12 @@ jobs:
           tags: |
             mayberry4477/firewall-controller:latest
             mayberry4477/firewall-controller:${{ github.sha }}
+      - name: Build and push device registry
+        uses: docker/build-push-action@v7
+        with:
+          context: ./registry
+          push: true
+          no-cache: true
+          tags: |
+            mayberry4477/firewall-controller-registry:latest
+            mayberry4477/firewall-controller-registry:${{ github.sha }}

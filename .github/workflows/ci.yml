@@ -23,6 +23,11 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r registry/requirements.txt
+      - run: python -m unittest discover -s registry -p "test_*.py"
 
   e2e:
     runs-on: ubuntu-latest
@@ -46,3 +51,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t firewall-controller:dev .
+      - run: docker build -t firewall-controller-registry:dev ./registry

@@ -1,6 +1,7 @@
 .git
 .github
 .sme
+registry-certs
 node_modules
 dist
 coverage

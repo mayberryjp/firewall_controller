@@ -13,13 +13,6 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 3030,
       strictPort: true,
-      proxy: {
-        "/api": {
-          target: env.API_PROXY_TARGET || "http://127.0.0.1:8080",
-          changeOrigin: true,
-          proxyTimeout: 95_000,
-        },
-      },
     },
     build: {
       sourcemap: env.BUILD_SOURCEMAP === "true",

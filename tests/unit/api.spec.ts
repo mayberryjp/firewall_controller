@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
-import api, { ApiFailure, onUnauthorized, request, setCredential } from "@/services/api";
+import api, { ApiFailure, onUnauthorized, request, setApiTarget, setCredential } from "@/services/api";
 import * as net from "@/services/netcontrol";
 import { z } from "zod";
 import { encodeJson } from "@/services/json";
@@ -13,13 +13,21 @@ const adapter = vi.fn(async (input: InternalAxiosRequestConfig) => {
 });
 beforeEach(() => {
   vi.clearAllMocks(); status = 200; body = "{}"; captured = undefined;
-  api.defaults.adapter = adapter; setCredential("test-secret-never-persist");
+  api.defaults.adapter = adapter; setApiTarget(""); setCredential("test-secret-never-persist");
 });
-describe("same-origin authenticated API boundary", () => {
-  it("uses trusted /api/v1, read timeout, no cache/cookies, and rejects redirects", () => {
+describe("direct authenticated API boundary", () => {
+  it("uses /api/v1, read timeout, no cache/cookies, and rejects redirects", () => {
     expect(api.defaults.baseURL).toBe("/api/v1");
     expect(api.defaults.timeout).toBe(80_000);
     expect(api.defaults.fetchOptions).toEqual({ redirect: "error", credentials: "omit", cache: "no-store" });
+  });
+  it("targets a selected remote device directly and rejects non-origin addresses", () => {
+    setApiTarget("https://192.0.2.1:8080");
+    expect(api.defaults.baseURL).toBe("https://192.0.2.1:8080/api/v1");
+    expect(() => setApiTarget("https://device.example/api/v1")).toThrow(/origin/);
+    expect(() => setApiTarget("https://user:pass@device.example")).toThrow(/origin/);
+    setApiTarget("");
+    expect(api.defaults.baseURL).toBe("/api/v1");
   });
   it("sends bearer auth without browser persistence or URL leakage", async () => {
     body = encodeJson(state());

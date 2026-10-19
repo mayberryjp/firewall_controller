@@ -1,6 +1,6 @@
 import { computed, ref, shallowReactive } from "vue";
 import { defineStore } from "pinia";
-import { ApiFailure, onUnauthorized, setCredential } from "@/services/api";
+import { ApiFailure, onUnauthorized, setApiTarget, setCredential } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import {
   configSchema, knownStatuses, terminal,
@@ -128,8 +128,10 @@ export const useControllerStore = defineStore("controller", () => {
     setCredential(""); invalidateReads();
     authError.value = "Credential rejected (401). Re-enter a valid credential; your in-memory draft is preserved.";
   });
-  async function connect(credential: string): Promise<boolean> {
+  async function connect(credential: string, address = ""): Promise<boolean> {
     if (!credential.trim() || /[\r\n]/.test(credential)) { authError.value = "Enter a valid bearer credential"; return false; }
+    try { setApiTarget(address); }
+    catch (error) { authError.value = error instanceof Error ? error.message : "Invalid device address"; return false; }
     connecting.value = true; authError.value = null;
     setCredential(credential.trim());
     invalidateReads();

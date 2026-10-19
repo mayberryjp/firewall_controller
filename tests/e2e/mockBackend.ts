@@ -3,7 +3,7 @@ import { config, runtime, statistics, transaction, gatewayStatistics } from "../
 import type { Config, Transaction, GatewayStatistics } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
 
-export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[] } = {}) {
+export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; invalidCredential?: boolean } = {}) {
   let committed = options.initialConfig ?? config(), revision = "0";
   const transactions: Record<string, Transaction> = {};
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
@@ -28,8 +28,37 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
   await page.route("**/api/v1/**", async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname.replace("/api/v1", "");
     const reply = (value: unknown, status = 200) => route.fulfill({
-      status, contentType: "application/json", headers: { "Cache-Control": "no-store" }, body: encodeJson(value),
+      status, contentType: "application/json", headers: {
+        "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*",
+      }, body: encodeJson(value),
     });
+    if (request.method() === "OPTIONS") {
+      return route.fulfill({ status: 204, headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type",
+      } });
+    }
+    if (url.port === "3031") {
+      if (path === "/session" && request.method() === "POST") {
+        return reply({ token: "registry-test-session", expires_in: 28800 });
+      }
+      if (request.headers().authorization !== "Bearer registry-test-session") {
+        return reply({ error: "Registry login required" }, 401);
+      }
+      if (path === "/devices" && request.method() === "GET") {
+        return reply({ devices: [{
+          id: "11111111-1111-4111-8111-111111111111", name: "Test firewall",
+          address: `http://${url.hostname}:8080`, created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }] });
+      }
+      if (path.endsWith("/credential") && request.method() === "POST") {
+        return reply({ credential: "browser-test-key" });
+      }
+      return reply({ error: "Unexpected registry endpoint" }, 404);
+    }
+    if (options.invalidCredential) return reply({ error: "Invalid credential", transaction: null }, 401);
     if (request.headers().authorization !== "Bearer browser-test-key") return reply({ error: "Invalid credential", transaction: null }, 401);
     if (request.method() === "GET") {
       if (path === "/state") {

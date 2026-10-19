@@ -5,6 +5,7 @@ import { useDisplay } from "vuetify";
 import { useRouter } from "vue-router";
 import { useAppStore } from "@/stores/app";
 import { useControllerStore } from "@/stores/controller";
+import { logoutRegistry } from "@/services/registry";
 import SafetyBanner from "@/components/layout/SafetyBanner.vue";
 const app = useAppStore(), store = useControllerStore(), router = useRouter();
 const { navigationOpen } = storeToRefs(app);
@@ -33,7 +34,7 @@ const groups = [
   ] },
 ];
 async function disconnect(): Promise<void> {
-  store.disconnect(); disconnectDialog.value = false; await router.replace("/connect");
+  store.disconnect(); logoutRegistry(); disconnectDialog.value = false; await router.replace("/connect");
 }
 </script>
 <template>

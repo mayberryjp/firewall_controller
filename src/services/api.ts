@@ -10,8 +10,24 @@ export function onUnauthorized(callback: () => void): void { unauthorized = call
 
 const base = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 const resolved = new URL(base, window.location.origin);
-if (resolved.origin !== window.location.origin || resolved.search || resolved.hash) {
-  throw new Error("API base must be a trusted same-origin path without query or fragment");
+if (resolved.search || resolved.hash) {
+  throw new Error("API base must not include a query or fragment");
+}
+const apiPath = resolved.pathname.replace(/\/+$/, "");
+const defaultBase = resolved.origin === window.location.origin ? apiPath : resolved.origin + apiPath;
+
+/** Points the client at a remote device (e.g. https://192.0.2.1:8080); blank restores the default base. */
+export function setApiTarget(address: string): void {
+  const value = address.trim();
+  if (!value) { api.defaults.baseURL = defaultBase; return; }
+  let url: URL;
+  try { url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`); }
+  catch { throw new Error("Enter a valid device address, e.g. https://192.0.2.1:8080"); }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
+    !["", "/"].includes(url.pathname)) {
+    throw new Error("Device address must be an http(s) origin without credentials, path, query or fragment");
+  }
+  api.defaults.baseURL = url.origin + apiPath;
 }
 
 export class ApiFailure extends Error {
@@ -25,7 +41,7 @@ export class ApiFailure extends Error {
 }
 
 const api = axios.create({
-  baseURL: resolved.pathname.replace(/\/+$/, ""),
+  baseURL: defaultBase,
   timeout: 80_000,
   adapter: "fetch",
   fetchOptions: { redirect: "error", credentials: "omit", cache: "no-store" },
@@ -69,7 +85,7 @@ export async function request<T>(
     throw new ApiFailure(
       axios.isAxiosError(error) && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT")
         ? "Request timed out. Server outcome may still be pending."
-        : "Connection failed or API redirected. Check the trusted same-origin deployment.",
+        : "Connection failed or API redirected. Check the device address, that it is reachable, and that it allows CORS from this site.",
       undefined, undefined, writing,
     );
   }

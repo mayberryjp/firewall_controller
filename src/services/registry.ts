@@ -1,0 +1,101 @@
+import axios from "axios";
+import { z } from "zod";
+
+const configuredBase = import.meta.env.VITE_REGISTRY_API_URL;
+const baseUrl = configuredBase ? new URL(configuredBase) : new URL(window.location.origin);
+if (!configuredBase) {
+  baseUrl.port = "3031";
+  baseUrl.pathname = "/api/v1";
+}
+if (!["http:", "https:"].includes(baseUrl.protocol) || baseUrl.username || baseUrl.password ||
+  baseUrl.search || baseUrl.hash || !baseUrl.pathname.replace(/\/+$/, "").endsWith("/api/v1")) {
+  throw new Error("Registry API URL must be an http(s) URL ending in /api/v1 without credentials, query or fragment");
+}
+
+const tokenSchema = z.object({ token: z.string().min(1), expires_in: z.number().int().positive() }).strict();
+const deviceSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1),
+  address: z.string().url(),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).strict();
+const devicesSchema = z.object({ devices: z.array(deviceSchema) }).strict();
+const deviceResponseSchema = z.object({ device: deviceSchema }).strict();
+const credentialSchema = z.object({ credential: z.string().min(1) }).strict();
+const deletedSchema = z.object({ deleted: z.literal(true) }).strict();
+
+export type RegistryDevice = z.infer<typeof deviceSchema>;
+export interface RegistryDeviceInput {
+  name: string;
+  address: string;
+  credential?: string;
+}
+
+let sessionToken = "";
+
+const registry = axios.create({
+  baseURL: baseUrl.origin + baseUrl.pathname.replace(/\/+$/, ""),
+  timeout: 15_000,
+  adapter: "fetch",
+  fetchOptions: { redirect: "error", credentials: "omit", cache: "no-store" },
+  headers: { Accept: "application/json" },
+});
+
+function requestHeaders(): Record<string, string> {
+  if (!sessionToken) throw new Error("Sign in to the device registry first");
+  return { Authorization: `Bearer ${sessionToken}` };
+}
+
+async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T>, body?: unknown, authenticated = true): Promise<T> {
+  try {
+    const response = await registry.request<unknown>({
+      method,
+      url: path,
+      data: body,
+      headers: authenticated ? requestHeaders() : {},
+    });
+    const parsed = schema.safeParse(response.data);
+    if (!parsed.success) throw new Error(`Incompatible device registry response: ${parsed.error.message}`);
+    return parsed.data;
+  } catch (error) {
+    if (error instanceof Error && !axios.isAxiosError(error)) throw error;
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data && typeof error.response.data === "object" &&
+        "error" in error.response.data && typeof error.response.data.error === "string"
+        ? error.response.data.error
+        : "Device registry request failed. Check the registry address, availability, and CORS settings.";
+      throw new Error(message);
+    }
+    throw error;
+  }
+}
+
+export async function loginRegistry(password: string): Promise<void> {
+  const response = await call("POST", "/session", tokenSchema, { password }, false);
+  sessionToken = response.token;
+}
+
+export function logoutRegistry(): void {
+  sessionToken = "";
+}
+
+export async function listRegistryDevices(): Promise<RegistryDevice[]> {
+  return (await call("GET", "/devices", devicesSchema)).devices;
+}
+
+export async function createRegistryDevice(device: RegistryDeviceInput): Promise<RegistryDevice> {
+  return (await call("POST", "/devices", deviceResponseSchema, device)).device;
+}
+
+export async function updateRegistryDevice(id: string, device: RegistryDeviceInput): Promise<RegistryDevice> {
+  return (await call("POST", `/devices/${encodeURIComponent(id)}/update`, deviceResponseSchema, device)).device;
+}
+
+export async function getRegistryCredential(id: string): Promise<string> {
+  return (await call("POST", `/devices/${encodeURIComponent(id)}/credential`, credentialSchema, {})).credential;
+}
+
+export async function deleteRegistryDevice(id: string): Promise<void> {
+  await call("POST", `/devices/${encodeURIComponent(id)}/delete`, deletedSchema, {});
+}

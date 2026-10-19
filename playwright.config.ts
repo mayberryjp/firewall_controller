@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const port = Number(process.env.PLAYWRIGHT_PORT || 3030);
+
 export default defineConfig({
   tsconfig: "./tsconfig.node.json",
   testDir: "./tests/e2e",
@@ -8,7 +10,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: "http://127.0.0.1:3030",
+    baseURL: `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
   },
   projects: [
@@ -16,8 +18,8 @@ export default defineConfig({
     { name: "mobile-chromium", use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
-    command: "npm run build && npm run preview -- --host 127.0.0.1 --port 3030 --strictPort",
-    url: "http://127.0.0.1:3030",
+    command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${port} --strictPort`,
+    url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
     timeout: 120_000,
   },

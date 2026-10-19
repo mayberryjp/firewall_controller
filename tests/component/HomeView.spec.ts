@@ -7,13 +7,14 @@ import { useControllerStore } from "@/stores/controller";
 vi.mock("vue-router", () => ({ useRouter: () => ({ replace: vi.fn() }), useRoute: () => ({ query: {} }) }));
 beforeEach(() => setActivePinia(createPinia()));
 describe("connection and editor contracts", () => {
-  it("explains in-memory credentials, device-session separation and disconnect semantics", () => {
+  it("explains registry sign-in and server-persisted device credentials", () => {
     const wrapper = mount(ConnectView, { global: {
-      stubs: { VCard: { template: "<div><slot /></div>" }, VForm: { template: "<form><slot /></form>" }, VTextField: true, VBtn: true },
+      stubs: { VAlert: true, VCard: { template: "<div><slot /></div>" }, VForm: { template: "<form><slot /></form>" }, VTextField: true, VBtn: true },
     } });
-    expect(wrapper.get("h1").text()).toBe("Connect to Netcontrol");
-    expect(wrapper.text()).toContain("Device-account cookies do not authorize");
-    expect(wrapper.text()).toContain("does not revoke a key");
+    expect(wrapper.get("h1").text()).toBe("Connect to a firewall");
+    expect(wrapper.text()).toContain("central device registry");
+    expect(wrapper.text()).toContain("Device records persist on the registry server across browser reloads");
+    expect(wrapper.text()).toContain("Firewall keys are encrypted at rest");
     expect(useControllerStore().connected).toBe(false);
   });
   it("splits address lines into separate values without rewriting host bits", async () => {

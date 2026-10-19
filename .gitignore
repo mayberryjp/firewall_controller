@@ -6,6 +6,8 @@ test-results/
 .env
 .env.*
 !.env.example
+registry-certs/
 *.local
 *.tsbuildinfo
 .sme/
+__pycache__/

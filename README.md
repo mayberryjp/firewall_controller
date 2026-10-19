@@ -18,28 +18,39 @@ Use Node.js 22+ and npm.
 
 ```powershell
 npm ci
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) {
+  $securePassword = Read-Host "Registry admin password (minimum 16 characters)" -AsSecureString
+  $adminPassword = [System.Net.NetworkCredential]::new("", $securePassword).Password
+  $encryptionKey = python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+  @(
+    "REGISTRY_ADMIN_PASSWORD=$adminPassword"
+    "REGISTRY_ENCRYPTION_KEY=$encryptionKey"
+  ) | Set-Content .env
+}
+docker compose up -d --build registry
 npm run dev
 ```
 
-Open http://localhost:3030, enter a networking bearer key, and connect. The dev
-proxy preserves `/api/v1` and forwards it to `http://127.0.0.1:8080`, the daemon's
-default listener. Set `API_PROXY_TARGET` for a different deployment.
-Port 3030 is strict; stop other listeners before starting.
+Open http://localhost:3030, sign in with the registry password, then add a
+firewall's name, API address and networking bearer key. The registry runs on
+port 3031 and persists entries in a Docker volume. Stop other listeners on
+ports 3030 and 3031 before starting. Keep the ignored `.env` file and back up
+its encryption key securely; never regenerate the key for an existing registry
+database. If `.env` already exists, add both registry settings without replacing
+any existing encryption key.
 
-The backend is not provisioned by this project. For simulator testing, run the
-backend separately using its documented setup, for example from its checkout:
+For simulator testing, run the firewall backend separately using its documented
+setup, for example from its checkout:
 
 ```powershell
 go run .\cmd\netcontrold -backend simulator -listen 127.0.0.1:8080 -state lab-state.json
 ```
 
 Complete initial account/key onboarding on the daemon's embedded website at
-http://127.0.0.1:8080 before using its key here. An explicit legacy `-auth-file`
-deployment is also supported by the backend. The dashboard's bearer credential
-does not authorize `/auth/`, and device-account cookies do not authorize the
-networking client. There is intentionally no duplicate account/key-management UI
-or proxy dependency on `/auth/`.
+http://127.0.0.1:8080, then add its networking bearer key to the registry.
+Device-account cookies do not authorize networking requests. The registry stores
+device keys encrypted at rest; after sign-in, a selected key is loaded into
+browser memory and sent directly to that device's API.
 
 Simulator success does **not** verify Linux networking, WireGuard key-file
 availability, kernel permissions, softflowd collector delivery or DHCP lease delivery. Native tests
@@ -51,7 +62,7 @@ whole-appliance log capture/delivery or real vnStat history.
 
 | Browser route | Purpose |
 | --- | --- |
-| `/connect` | Memory-only bearer entry and independent read-access verification |
+| `/connect` | Registry sign-in, persistent firewall list, encrypted key storage and direct device connection |
 | `/overview` | Committed/live state, drift, runtime, recent history, exact statistics |
 | `/interfaces`, `/interfaces/:name` | Managed dummy/VLAN/WireGuard editors, required WAN/LAN roles, DHCPv4 relay |
 | `/parents` | Protected adopted-parent diagnostics; no provisioning controls |
@@ -68,8 +79,8 @@ whole-appliance log capture/delivery or real vnStat history.
 | `/transactions`, `/transactions/:id` | Independent recovery discovery and explicit lifecycle actions |
 | `/history`, `/history/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
 
-Deep links fall back to the SPA; reload requires credential re-entry. Unknown
-routes show an application 404.
+Deep links fall back to the SPA; reload requires registry password re-entry.
+Unknown routes show an application 404.
 
 ## Safety model
 
@@ -78,8 +89,9 @@ routes show an application 404.
   Stage, reorder, delete, import, and discard make no mutation requests.
 - Lists default to committed desired; use staged preview to inspect the shared
   draft. Cancel discards only unstaged form values. Route/reload warnings protect
-  unsaved input. Drafts, credentials, and server caches are never written to
-  local/session storage or service-worker caches.
+  unsaved input. Drafts and device API keys are never written to browser storage
+  or service-worker caches. Device addresses and encrypted keys are persisted in
+  the central registry; a selected key is held in memory while connected.
 - Apply validates the complete package, its cross-resource references, captured
   revision, fresh transaction discovery, drift, and actual serialized UTF-8 size.
   Pre-submit reads are UX checks, not a server concurrency guarantee.
@@ -313,7 +325,7 @@ labelled; no overlapping request storm or invented progress is shown. Old read
 results are discarded after mutation/disconnect/refetch. A `401` stops background
 network requests and asks for a new key while preserving an in-memory draft until
 explicit disconnect. A `403` remains an action-level error; permission discovery
-is unavailable. Non-JSON proxy errors show bounded textual diagnostics.
+is unavailable. Non-JSON API errors show bounded textual diagnostics.
 
 No client-derived rate charts, summed traffic totals, CPU/RAM figures, tunnel
 handshake status, per-flow data, or collector-delivery claims are fabricated.
@@ -328,44 +340,63 @@ simulated states. There is no offline mutation queue.
 | `VITE_APP_ENV` | Vite mode | Available frontend deployment metadata |
 | `VITE_DEPLOYMENT_LABEL` | `Unknown` | Operator-supplied lab/deployment label |
 | `VITE_BACKEND_MODE` | `Unknown` | Operator-supplied mode label, not API-discovered capability |
-| `VITE_API_BASE_URL` | `/api/v1` | Trusted same-origin full API path; do not append another `/api` |
-| `API_PROXY_TARGET` | `http://127.0.0.1:8080` | Vite-only upstream |
+| `VITE_API_BASE_URL` | `/api/v1` | API path appended to the selected device origin; do not append another `/api` |
+| `VITE_REGISTRY_API_URL` | Same host, port `3031`, path `/api/v1` | Public central-registry URL compiled into the frontend; no secrets |
 | `BUILD_SOURCEMAP` | `false` | Explicit opt-in build sourcemaps |
-| `API_UPSTREAM` | `http://firewall-api:8080` | Runtime Docker/Nginx upstream origin without path/trailing slash |
+| `REGISTRY_ADMIN_PASSWORD` | Required | Registry administrator password (at least 16 characters) |
+| `REGISTRY_ENCRYPTION_KEY` | Required | Fernet key used to encrypt stored device credentials |
+| `REGISTRY_TLS_CERT` | Empty | Optional in-container TLS certificate path for the registry |
+| `REGISTRY_TLS_KEY` | Empty | Optional in-container TLS private-key path for the registry |
 
 `VITE_*` settings are public build-time settings. Do not put secrets in them.
-Cross-origin API bases, query strings, and fragments are rejected. The fetch
-adapter refuses API redirects rather than forwarding Authorization elsewhere;
-it omits cookies and sets `cache: no-store`. Error text redacts the current key.
+Query strings and fragments in API URLs are rejected. The fetch adapter refuses
+API redirects rather than forwarding Authorization elsewhere; it omits cookies
+and sets `cache: no-store`. Error text redacts the current device key.
 
-Production requires one trusted **HTTPS** frontend/API origin. Terminate HTTPS at
-the operator's trusted ingress; the static container listens internally on 80.
-The backend requires native TLS for non-loopback listeners. For an HTTPS upstream,
-configure `API_UPSTREAM=https://...` and provide an appropriate trusted CA bundle
-to Nginx (`/etc/ssl/certs/ca-certificates.crt`); certificate verification and SNI are
-enabled. Do not disable verification as a deployment workaround. Device-account
-onboarding uses a separate operator-provided daemon URL with native TLS; `/auth/`
-does not trust forwarded headers.
+### Central registry, remote devices and CORS
 
-Nginx preserves `/api/v1` and query strings, disables upstream retries, allows
-long operations, and returns SPA fallback for browser routes. Hashed assets are
-cached; the app document is revalidated. The document receives a same-origin CSP,
+The registry API is a separate service on port 3031; Nginx does not proxy
+registry or device API calls. Registry access uses one operator-configured
+administrator password and an eight-hour in-memory bearer session. Device names
+and addresses are stored in SQLite on the `registry-data` volume. Device keys
+are encrypted at rest using `REGISTRY_ENCRYPTION_KEY`, never returned in device
+list responses, and decrypted only for an authenticated connect request.
+Back up the encryption key separately from the database; without it, stored
+keys cannot be recovered. Keep both the database and encryption key private.
+
+The browser calls each selected firewall API directly using its saved origin
+(for example `https://192.0.2.1:8080`) and key. The device API must allow CORS
+from the website origin, including `Authorization`, `Content-Type`, `GET`,
+`POST`, and preflight `OPTIONS`. This project’s firewall backend responds with
+`Access-Control-Allow-Origin: *`; do not enable cookie-based CORS. The registry
+also allows all origins and does not use cookies.
+
+Use HTTPS for both the website and registry in a network deployment, and use
+HTTPS device APIs when the site is served over HTTPS; browsers block mixed
+content. To enable registry TLS, place certificate files in the ignored
+`registry-certs` directory and set `REGISTRY_TLS_CERT=/certs/fullchain.pem` and
+`REGISTRY_TLS_KEY=/certs/private-key.pem`. Set
+`VITE_REGISTRY_API_URL` at frontend build time if the registry is not reachable
+at the website hostname on port 3031. The container CSP permits direct
+`connect-src` connections to `http:` and `https:` origins.
+
+Nginx returns SPA fallback for browser routes. Hashed assets are
+cached; the app document is revalidated. The document receives a CSP,
 no-referrer and nosniff headers. Vuetify needs inline styles, not inline scripts.
 Apply additional HTTPS/HSTS policy at ingress. No third-party analytics/CDNs are
 used.
 
 ```powershell
 docker build -t firewall-controller:dev .
-docker compose up -d
+docker compose up -d --build
 ```
 
-Compose references the already-built image and declares **only the frontend**.
-Configure a resolvable/reachable upstream and join the API's existing container
-network where applicable. `firewall-api` is a placeholder name, not a provisioned
-backend. Docker embedded DNS resolves it at request time, so the UI can start
-before the API; requests will fail honestly until it is configured. There are no
-container healthchecks; orchestrator readiness is external. Stop this stack with
-`docker compose down`.
+Compose starts the static frontend and the central registry. Set
+`REGISTRY_ADMIN_PASSWORD` and generate `REGISTRY_ENCRYPTION_KEY` before starting,
+as shown in the local setup commands above. The registry database persists in a
+named Docker volume. Stop the stack with `docker compose down`; the named volume
+is retained. There are no container healthchecks; orchestrator readiness is
+external.
 
 ## Tests and delivery
 
@@ -406,32 +437,38 @@ restart persistence, invalid-host rejection, unknown-monitor 404 and cross-servi
 Live Linux raw ICMP, dnsmasq/nftables behavior, clock discipline, whole-appliance
 logging/delivery and vnStat packet/history collection remain unverified here.
 
-CI requires lint, typecheck, unit/component tests, production build, desktop/mobile
-E2E, and a Docker image build.
+CI requires lint, typecheck, frontend unit/component tests, registry service tests,
+production build, desktop/mobile E2E, and Docker builds for both images.
 
 ### Docker Hub publishing
 
 Pushes to `main` and manual runs of the **Build and publish Docker image** workflow
-publish to Docker Hub after lint, typecheck, unit/component tests and desktop/mobile
-E2E pass. The Docker build also runs the production build. Release branches and
+publish both images to Docker Hub after lint, typecheck, frontend and registry
+tests, and desktop/mobile E2E pass. The frontend Docker build also runs the
+production build. Release branches and
 version tags still run CI, but no longer trigger image publishing.
 
 Configure these GitHub Actions repository secrets before publishing:
 
 - `DOCKERHUB_USERNAME`: a Docker Hub account with write access to
-  `mayberry4477/firewall-controller`.
-- `DOCKERHUB_TOKEN`: that account's Docker Hub access token with write permission.
+  `mayberry4477/firewall-controller` and
+  `mayberry4477/firewall-controller-registry`.
+- `DOCKERHUB_TOKEN`: that account's Docker Hub access token with write permission
+  to both image repositories.
 
 Each run builds without Docker layer caching and pushes both tags:
 
 - `mayberry4477/firewall-controller:latest`
 - `mayberry4477/firewall-controller:<full-commit-sha>`
+- `mayberry4477/firewall-controller-registry:latest`
+- `mayberry4477/firewall-controller-registry:<full-commit-sha>`
 
 New runs cancel any in-progress publish run. GHCR publishing and its
 `packages: write` permission are no longer used. To download a published image:
 
 ```powershell
 docker pull mayberry4477/firewall-controller:latest
+docker pull mayberry4477/firewall-controller-registry:latest
 ```
 
 Use the commit-SHA tag to select a specific build. Pulling an image does not
