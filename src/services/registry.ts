@@ -1,4 +1,5 @@
 import axios from "axios";
+import { ref } from "vue";
 import { z } from "zod";
 
 const configuredBase = import.meta.env.VITE_REGISTRY_API_URL;
@@ -11,6 +12,7 @@ if (!["http:", "https:"].includes(baseUrl.protocol) || baseUrl.username || baseU
   baseUrl.search || baseUrl.hash || !baseUrl.pathname.replace(/\/+$/, "").endsWith("/api/v1")) {
   throw new Error("Registry API URL must be an http(s) URL ending in /api/v1 without credentials, query or fragment");
 }
+export const registryApiBaseUrl = baseUrl.origin + baseUrl.pathname.replace(/\/+$/, "");
 
 const tokenSchema = z.object({ token: z.string().min(1), expires_in: z.number().int().positive() }).strict();
 const deviceSchema = z.object({
@@ -22,7 +24,6 @@ const deviceSchema = z.object({
 }).strict();
 const devicesSchema = z.object({ devices: z.array(deviceSchema) }).strict();
 const deviceResponseSchema = z.object({ device: deviceSchema }).strict();
-const credentialSchema = z.object({ credential: z.string().min(1) }).strict();
 const deletedSchema = z.object({ deleted: z.literal(true) }).strict();
 
 export type RegistryDevice = z.infer<typeof deviceSchema>;
@@ -32,10 +33,10 @@ export interface RegistryDeviceInput {
   credential?: string;
 }
 
-let sessionToken = "";
+const sessionToken = ref("");
 
 const registry = axios.create({
-  baseURL: baseUrl.origin + baseUrl.pathname.replace(/\/+$/, ""),
+  baseURL: registryApiBaseUrl,
   timeout: 15_000,
   adapter: "fetch",
   fetchOptions: { redirect: "error", credentials: "omit", cache: "no-store" },
@@ -43,8 +44,16 @@ const registry = axios.create({
 });
 
 function requestHeaders(): Record<string, string> {
-  if (!sessionToken) throw new Error("Sign in to the device registry first");
-  return { Authorization: `Bearer ${sessionToken}` };
+  if (!sessionToken.value) throw new Error("Sign in to the device registry first");
+  return { Authorization: `Bearer ${sessionToken.value}` };
+}
+
+export function getRegistrySessionToken(): string {
+  return sessionToken.value;
+}
+
+export function setRegistrySessionToken(value: string): void {
+  sessionToken.value = value;
 }
 
 async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T>, body?: unknown, authenticated = true): Promise<T> {
@@ -61,6 +70,7 @@ async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T
   } catch (error) {
     if (error instanceof Error && !axios.isAxiosError(error)) throw error;
     if (axios.isAxiosError(error)) {
+      if (error.response?.status === 401) logoutRegistry();
       const message = error.response?.data && typeof error.response.data === "object" &&
         "error" in error.response.data && typeof error.response.data.error === "string"
         ? error.response.data.error
@@ -73,11 +83,11 @@ async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T
 
 export async function loginRegistry(password: string): Promise<void> {
   const response = await call("POST", "/session", tokenSchema, { password }, false);
-  sessionToken = response.token;
+  setRegistrySessionToken(response.token);
 }
 
 export function logoutRegistry(): void {
-  sessionToken = "";
+  setRegistrySessionToken("");
 }
 
 export async function listRegistryDevices(): Promise<RegistryDevice[]> {
@@ -90,10 +100,6 @@ export async function createRegistryDevice(device: RegistryDeviceInput): Promise
 
 export async function updateRegistryDevice(id: string, device: RegistryDeviceInput): Promise<RegistryDevice> {
   return (await call("POST", `/devices/${encodeURIComponent(id)}/update`, deviceResponseSchema, device)).device;
-}
-
-export async function getRegistryCredential(id: string): Promise<string> {
-  return (await call("POST", `/devices/${encodeURIComponent(id)}/credential`, credentialSchema, {})).credential;
 }
 
 export async function deleteRegistryDevice(id: string): Promise<void> {

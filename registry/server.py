@@ -4,11 +4,13 @@ import base64
 import binascii
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import re
 import secrets
 import sqlite3
+import socket
 import ssl
 import threading
 import time
@@ -23,6 +25,8 @@ from cryptography.fernet import Fernet, InvalidToken
 
 SESSION_LIFETIME_SECONDS = 8 * 60 * 60
 MAX_BODY_BYTES = 64 * 1024
+MAX_PROXY_BODY_BYTES = 1024 * 1024
+PROXY_TIMEOUT_SECONDS = 95
 MAX_DEVICES = 500
 NAME_LIMIT = 80
 ADDRESS_LIMIT = 300
@@ -205,17 +209,18 @@ class DeviceRegistry:
             ).fetchone()
         return self._public(row)
 
-    def get_credential(self, device_id: str) -> str:
+    def get_proxy_target(self, device_id: str) -> tuple[str, str]:
         with self._connection() as connection:
             row = connection.execute(
-                "SELECT encrypted_credential FROM devices WHERE id = ?", (device_id,)
+                "SELECT address, encrypted_credential FROM devices WHERE id = ?", (device_id,)
             ).fetchone()
         if row is None:
             raise LookupError("Device not found")
         try:
-            return self.cipher.decrypt(row["encrypted_credential"]).decode("utf-8")
+            credential = self.cipher.decrypt(row["encrypted_credential"]).decode("utf-8")
         except (InvalidToken, UnicodeDecodeError) as error:
             raise RuntimeError("Stored device credential could not be decrypted") from error
+        return row["address"], credential
 
     def update_device(self, device_id: str, name: object, address: object, credential: object = None) -> dict[str, str]:
         normalized_name = normalize_name(name)
@@ -253,29 +258,48 @@ def make_server(
     class Handler(BaseHTTPRequestHandler):
         server_version = "DeviceRegistry"
 
-        def _send(self, status: int, data: object = None, headers: dict[str, str] | None = None) -> None:
-            payload = b"" if data is None else json.dumps(data, separators=(",", ":")).encode("utf-8")
+        def _send_raw(
+            self,
+            status: int,
+            payload: bytes,
+            content_type: str | None = None,
+            headers: dict[str, str] | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             if self.path.startswith("/api/v1/"):
                 self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Expose-Headers", "WWW-Authenticate")
+                self.send_header("Access-Control-Expose-Headers", "WWW-Authenticate, X-Registry-Auth-Error")
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
-            if data is not None:
-                self.send_header("Content-Type", "application/json; charset=utf-8")
+            if content_type:
+                self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             if payload:
                 self.wfile.write(payload)
 
+        def _send(self, status: int, data: object = None, headers: dict[str, str] | None = None) -> None:
+            payload = b"" if data is None else json.dumps(data, separators=(",", ":")).encode("utf-8")
+            content_type = "application/json; charset=utf-8" if data is not None else None
+            self._send_raw(status, payload, content_type, headers)
+
+        def _raw_body(self, limit: int) -> bytes:
+            raw_length = self.headers.get("Content-Length", "0")
+            if not raw_length.isdigit() or int(raw_length) > limit:
+                raise ValueError(f"Request body exceeds the {limit}-byte limit")
+            length = int(raw_length)
+            payload = self.rfile.read(length)
+            if len(payload) != length:
+                raise ValueError("Request body ended unexpectedly")
+            return payload
+
         def _body(self) -> dict[str, object]:
-            raw_length = self.headers.get("Content-Length", "")
-            if not raw_length.isdigit() or int(raw_length) > MAX_BODY_BYTES:
+            if not self.headers.get("Content-Length"):
                 raise ValueError("Request body is missing or exceeds the 64 KiB limit")
             try:
-                value = json.loads(self.rfile.read(int(raw_length)))
+                value = json.loads(self._raw_body(MAX_BODY_BYTES))
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
                 raise ValueError("Request body must be valid JSON") from error
             if not isinstance(value, dict):
@@ -286,6 +310,87 @@ def make_server(
             header = self.headers.get("Authorization", "")
             scheme, separator, token = header.partition(" ")
             return bool(separator and scheme == "Bearer" and self.registry.verify_session(token))
+
+        def _proxy(self, method: str, device_id: str, endpoint: str) -> None:
+            if not self._authorized():
+                headers = {"X-Registry-Auth-Error": "true"}
+                if method == "POST":
+                    self.close_connection = True
+                    headers["Connection"] = "close"
+                self._send(401, {"error": "Registry login required"}, headers)
+                return
+            if (
+                not endpoint.startswith("/")
+                or endpoint.startswith("//")
+                or "\\" in endpoint
+                or any(ord(char) < 32 for char in endpoint)
+            ):
+                headers = None
+                if method == "POST":
+                    self.close_connection = True
+                    headers = {"Connection": "close"}
+                self._send(400, {"error": "Invalid firewall API path"}, headers)
+                return
+            try:
+                body = self._raw_body(MAX_PROXY_BODY_BYTES) if method == "POST" else None
+                address, credential = self.registry.get_proxy_target(device_id)
+                target = urlsplit(address)
+                upstream_path = "/api/v1" + endpoint
+                query = urlsplit(self.path).query
+                if query:
+                    upstream_path += f"?{query}"
+                connection_type = http.client.HTTPSConnection if target.scheme == "https" else http.client.HTTPConnection
+                connection = connection_type(
+                    target.hostname,
+                    target.port or (443 if target.scheme == "https" else 80),
+                    timeout=PROXY_TIMEOUT_SECONDS,
+                )
+            except ValueError as error:
+                headers = None
+                if method == "POST":
+                    self.close_connection = True
+                    headers = {"Connection": "close"}
+                self._send(400, {"error": str(error)}, headers)
+                return
+            except LookupError as error:
+                self._send(404, {"error": str(error)})
+                return
+            except RuntimeError as error:
+                self.log_error("firewall proxy credential operation failed: %s", error)
+                self._send(500, {"error": "Stored firewall key could not be decrypted"})
+                return
+            except sqlite3.Error as error:
+                self.log_error("firewall proxy registry read failed: %s", error)
+                self._send(503, {"error": "Device registry storage is unavailable"})
+                return
+
+            request_headers = {
+                "Authorization": f"Bearer {credential}",
+                "Accept": "application/json",
+            }
+            content_type = self.headers.get("Content-Type", "")
+            if body is not None and body:
+                if content_type.split(";", 1)[0].strip().lower() != "application/json":
+                    connection.close()
+                    self._send(415, {"error": "Firewall API requests must use application/json"})
+                    return
+                request_headers["Content-Type"] = content_type
+            try:
+                connection.request(method, upstream_path, body=body, headers=request_headers)
+                response = connection.getresponse()
+                payload = response.read()
+                for secret in (credential.encode("utf-8"), f"Bearer {credential}".encode("utf-8")):
+                    payload = payload.replace(secret, b"[redacted]")
+                forwarded_type = response.getheader("Content-Type")
+                self._send_raw(response.status, payload, forwarded_type)
+            except (socket.timeout, TimeoutError):
+                self.log_error("firewall proxy request timed out for device %s", device_id)
+                self._send(504, {"error": "Firewall request timed out"})
+            except (OSError, http.client.HTTPException) as error:
+                self.log_error("firewall proxy request failed for device %s: %s", device_id, error)
+                self._send(502, {"error": "Firewall is unreachable or returned an invalid HTTP response"})
+            finally:
+                connection.close()
 
         def do_OPTIONS(self) -> None:
             if not self.path.startswith("/api/v1/"):
@@ -312,11 +417,16 @@ def make_server(
             if self.path == "/health":
                 self._send(200, {"status": "ok"})
                 return
-            if self.path != "/api/v1/devices":
+            path = urlsplit(self.path).path
+            proxy_match = re.fullmatch(r"/api/v1/devices/([0-9a-fA-F-]{36})/proxy(/.*)", path)
+            if proxy_match is not None:
+                self._proxy("GET", proxy_match.group(1), proxy_match.group(2))
+                return
+            if path != "/api/v1/devices":
                 self._send(404, {"error": "Not found"})
                 return
             if not self._authorized():
-                self._send(401, {"error": "Registry login required"})
+                self._send(401, {"error": "Registry login required"}, {"X-Registry-Auth-Error": "true"})
                 return
             try:
                 devices = self.registry.list_devices()
@@ -328,28 +438,30 @@ def make_server(
 
         def do_POST(self) -> None:
             try:
-                body = self._body()
                 path = urlsplit(self.path).path
+                proxy_match = re.fullmatch(r"/api/v1/devices/([0-9a-fA-F-]{36})/proxy(/.*)", path)
+                if proxy_match is not None:
+                    self._proxy("POST", proxy_match.group(1), proxy_match.group(2))
+                    return
+                body = self._body()
                 if path == "/api/v1/session":
                     token = self.registry.authenticate_password(body.get("password"), self.client_address[0])
                     self._send(200, {"token": token, "expires_in": SESSION_LIFETIME_SECONDS})
                     return
                 if not self._authorized():
-                    self._send(401, {"error": "Registry login required"})
+                    self._send(401, {"error": "Registry login required"}, {"X-Registry-Auth-Error": "true"})
                     return
                 if path == "/api/v1/devices":
                     self._send(201, {"device": self.registry.create_device(
                         body.get("name"), body.get("address"), body.get("credential")
                     )})
                     return
-                match = re.fullmatch(r"/api/v1/devices/([0-9a-fA-F-]{36})/(credential|update|delete)", path)
+                match = re.fullmatch(r"/api/v1/devices/([0-9a-fA-F-]{36})/(update|delete)", path)
                 if match is None:
                     self._send(404, {"error": "Not found"})
                     return
                 device_id, action = match.groups()
-                if action == "credential":
-                    self._send(200, {"credential": self.registry.get_credential(device_id)})
-                elif action == "update":
+                if action == "update":
                     self._send(200, {"device": self.registry.update_device(
                         device_id, body.get("name"), body.get("address"), body.get("credential")
                     )})

@@ -164,7 +164,7 @@ async function disconnect(): Promise<void> {
     >
       <v-card title="Disconnect and clear local state?">
         <v-card-text>
-          This clears the credential, cached data, and any draft or unstaged input.
+          This clears the registry session, cached data, and any draft or unstaged input.
           It does not revoke the key, confirm a candidate, cancel durable intent, or reliably trigger immediate rollback.
           <p
             v-if="store.activeTransactions.length || store.uncertain"

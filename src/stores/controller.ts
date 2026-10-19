@@ -1,6 +1,6 @@
 import { computed, ref, shallowReactive } from "vue";
 import { defineStore } from "pinia";
-import { ApiFailure, onUnauthorized, setApiTarget, setCredential } from "@/services/api";
+import { ApiFailure, onUnauthorized, setApiDevice } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import {
   configSchema, knownStatuses, terminal,
@@ -9,6 +9,7 @@ import {
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
+import { logoutRegistry } from "@/services/registry";
 
 export interface Dataset<T> {
   data: T | null;
@@ -65,7 +66,7 @@ export const useControllerStore = defineStore("controller", () => {
   const sortedTransactions = computed(() => Object.values(transactions.data ?? {}).sort((a, b) =>
     (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || a.id.localeCompare(b.id)));
   const readOnlyReason = computed(() => {
-    if (!connected.value) return "Connect with a bearer credential.";
+    if (!connected.value) return "Sign in and select a registered firewall.";
     if (incompatible.value) return "Incompatible API data or unknown lifecycle state. Editing is disabled; retain diagnostics.";
     if (busy.value || submitted.value || uncertain.value) return "A submitted snapshot or uncertain write is frozen. Reconcile its server outcome first.";
     if (!state.data) return "Committed desired configuration is unavailable. Recovery remains accessible.";
@@ -125,19 +126,17 @@ export const useControllerStore = defineStore("controller", () => {
   }
   onUnauthorized(() => {
     connected.value = false; connecting.value = false;
-    setCredential(""); invalidateReads();
-    authError.value = "Credential rejected (401). Re-enter a valid credential; your in-memory draft is preserved.";
+    setApiDevice(""); logoutRegistry(); invalidateReads();
+    authError.value = "Registry session expired (401). Sign in again; your in-memory draft is preserved.";
   });
-  async function connect(credential: string, address = ""): Promise<boolean> {
-    if (!credential.trim() || /[\r\n]/.test(credential)) { authError.value = "Enter a valid bearer credential"; return false; }
-    try { setApiTarget(address); }
-    catch (error) { authError.value = error instanceof Error ? error.message : "Invalid device address"; return false; }
+  async function connect(deviceId: string): Promise<boolean> {
+    try { setApiDevice(deviceId); }
+    catch (error) { authError.value = error instanceof Error ? error.message : "Invalid saved firewall"; return false; }
     connecting.value = true; authError.value = null;
-    setCredential(credential.trim());
     invalidateReads();
     await load(transactions, api.getTransactions);
     if (transactions.stale) {
-      setCredential(""); connecting.value = false;
+      setApiDevice(""); connecting.value = false;
       authError.value = transactions.error ?? authError.value ?? "Unable to establish read access";
       return false;
     }
@@ -146,7 +145,7 @@ export const useControllerStore = defineStore("controller", () => {
     return connected.value;
   }
   function disconnect(): void {
-    setCredential(""); connected.value = false; invalidateReads();
+    setApiDevice(""); connected.value = false; invalidateReads();
     allDatasets.forEach((query) => { query.data = null; query.error = null; query.lastSuccess = null; query.incompatible = false; });
     draft.value = null; baseline.value = null; baseRevision.value = null; submitted.value = null;
     uncertain.value = null; actionError.value = null; notice.value = null; authError.value = null;

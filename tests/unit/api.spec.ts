@@ -1,42 +1,44 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
-import api, { ApiFailure, onUnauthorized, request, setApiTarget, setCredential } from "@/services/api";
+import api, { ApiFailure, onUnauthorized, request, setApiDevice } from "@/services/api";
+import { registryApiBaseUrl, setRegistrySessionToken } from "@/services/registry";
 import * as net from "@/services/netcontrol";
 import { z } from "zod";
 import { encodeJson } from "@/services/json";
 import { config, state, runtime, transaction, statistics, gatewayStatistics } from "../fixtures";
 
-let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined;
+const deviceId = "11111111-1111-4111-8111-111111111111";
+let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
 const adapter = vi.fn(async (input: InternalAxiosRequestConfig) => {
   captured = input;
-  return { status, data: body, statusText: "", headers: new AxiosHeaders(), config: input };
+  return { status, data: body, statusText: "", headers: responseHeaders, config: input };
 });
 beforeEach(() => {
-  vi.clearAllMocks(); status = 200; body = "{}"; captured = undefined;
-  api.defaults.adapter = adapter; setApiTarget(""); setCredential("test-secret-never-persist");
+  vi.clearAllMocks(); status = 200; body = "{}"; captured = undefined; responseHeaders = new AxiosHeaders();
+  api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
-describe("direct authenticated API boundary", () => {
-  it("uses /api/v1, read timeout, no cache/cookies, and rejects redirects", () => {
-    expect(api.defaults.baseURL).toBe("/api/v1");
+describe("controller-proxied API boundary", () => {
+  it("targets the selected device through the registry with no cache/cookies or redirects", () => {
+    expect(api.defaults.baseURL).toBe(`${registryApiBaseUrl}/devices/${deviceId}/proxy`);
     expect(api.defaults.timeout).toBe(80_000);
     expect(api.defaults.fetchOptions).toEqual({ redirect: "error", credentials: "omit", cache: "no-store" });
   });
-  it("targets a selected remote device directly and rejects non-origin addresses", () => {
-    setApiTarget("https://192.0.2.1:8080");
-    expect(api.defaults.baseURL).toBe("https://192.0.2.1:8080/api/v1");
-    expect(() => setApiTarget("https://device.example/api/v1")).toThrow(/origin/);
-    expect(() => setApiTarget("https://user:pass@device.example")).toThrow(/origin/);
-    setApiTarget("");
-    expect(api.defaults.baseURL).toBe("/api/v1");
+  it("selects only a saved device ID and restores the registry base when disconnected", () => {
+    const otherId = "22222222-2222-4222-8222-222222222222";
+    setApiDevice(otherId);
+    expect(api.defaults.baseURL).toBe(`${registryApiBaseUrl}/devices/${otherId}/proxy`);
+    expect(() => setApiDevice("https://device.example")).toThrow(/saved firewall/);
+    setApiDevice("");
+    expect(api.defaults.baseURL).toBe(registryApiBaseUrl);
   });
-  it("sends bearer auth without browser persistence or URL leakage", async () => {
+  it("sends the registry session without persisting a firewall key or leaking tokens in URLs", async () => {
     body = encodeJson(state());
     await net.getState();
-    expect(captured?.headers.Authorization).toBe("Bearer test-secret-never-persist");
+    expect(captured?.headers.Authorization).toBe("Bearer registry-test-session");
     expect(captured?.url).toBe("/state");
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
-    expect(location.href).not.toContain("test-secret");
-    expect(JSON.stringify(config())).not.toContain("test-secret");
+    expect(location.href).not.toContain("registry-test-session");
+    expect(JSON.stringify(config())).not.toContain("registry-test-session");
   });
   it.each([
     ["state", "/state"], ["runtime", "/runtime"], ["transactions", "/transactions"], ["statistics", "/statistics"],
@@ -124,15 +126,22 @@ describe("direct authenticated API boundary", () => {
     await expect(net.getGatewayStatistic("missing")).rejects.toMatchObject({ status: 404 });
     expect(adapter).toHaveBeenCalledOnce();
   });
-  it("stops on non-JSON 401 and bounds/sanitizes diagnostics", async () => {
-    const unauthorized = vi.fn(() => setCredential("")); onUnauthorized(unauthorized);
-    status = 401; body = `<h1>test-secret-never-persist</h1>${"x".repeat(6000)}`;
+  it("stops on non-JSON registry 401 and bounds/sanitizes diagnostics", async () => {
+    const unauthorized = vi.fn(() => setRegistrySessionToken("")); onUnauthorized(unauthorized);
+    responseHeaders = new AxiosHeaders({ "X-Registry-Auth-Error": "true" });
+    status = 401; body = `<h1>registry-test-session</h1>${"x".repeat(6000)}`;
     await expect(net.getState()).rejects.toThrow("HTTP 401");
     expect(unauthorized).toHaveBeenCalledOnce();
     try { await net.getState(); } catch (failure) {
-      expect(String(failure)).not.toContain("test-secret-never-persist"); expect(String(failure).length).toBeLessThan(4300);
+      expect(String(failure)).not.toContain("registry-test-session"); expect(String(failure).length).toBeLessThan(4300);
       expect(String(failure)).not.toContain("<h1>");
     }
+  });
+  it("does not treat a firewall 401 as an expired registry session", async () => {
+    const unauthorized = vi.fn(); onUnauthorized(unauthorized);
+    status = 401; body = '{"error":"Invalid device key","transaction":null}';
+    await expect(net.getState()).rejects.toMatchObject({ status: 401 });
+    expect(unauthorized).not.toHaveBeenCalled();
   });
   it("retains a transaction on operational failure", async () => {
     status = 500; body = encodeJson({ error: "recovery detail", transaction: transaction("recovery_failed") });
@@ -161,9 +170,9 @@ describe("direct authenticated API boundary", () => {
   });
   it("does not log a credential or reflected response payload", async () => {
     const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
-    status = 403; body = '{"error":"test-secret-never-persist","transaction":null}';
+    status = 403; body = '{"error":"registry-test-session","transaction":null}';
     await expect(net.getState()).rejects.toThrow("[redacted]");
-    expect(logs.flatMap(log => log.mock.calls).flat().join(" ")).not.toContain("test-secret-never-persist");
+    expect(logs.flatMap(log => log.mock.calls).flat().join(" ")).not.toContain("registry-test-session");
     logs.forEach(log => log.mockRestore());
   });
 });

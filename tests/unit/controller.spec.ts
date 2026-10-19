@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 async function connected() {
   const store = useControllerStore();
-  expect(await store.connect("test-key")).toBe(true);
+  expect(await store.connect("11111111-1111-4111-8111-111111111111")).toBe(true);
   await store.refresh();
   return store;
 }
@@ -38,7 +38,7 @@ describe("independent reads and complete shared draft", () => {
     let complete: ((value: ReturnType<typeof state>) => void) | undefined;
     vi.mocked(api.getState).mockImplementation(() => new Promise(resolve => { complete = resolve; }));
     const store = useControllerStore();
-    expect(await store.connect("test-key")).toBe(true);
+    expect(await store.connect("11111111-1111-4111-8111-111111111111")).toBe(true);
     expect(store.connected).toBe(true); expect(store.state.loading).toBe(true);
     expect(store.transactions.data).toEqual({});
     complete?.(state()); await store.refreshState();
@@ -105,7 +105,7 @@ describe("independent reads and complete shared draft", () => {
     expect(store.comparisonRevision.data?.config).toEqual(history.config);
     store.disconnect();
     expect(store.comparisonRevision.data).toBeNull();
-    await store.connect("test-key"); await store.loadRevision("0");
+    await store.connect("11111111-1111-4111-8111-111111111111"); await store.loadRevision("0");
     expect(api.getRevision).toHaveBeenCalledTimes(2);
   });
   it("ignores older revision detail reads when the selected revision changes", async () => {

@@ -48,9 +48,12 @@ go run .\cmd\netcontrold -backend simulator -listen 127.0.0.1:8080 -state lab-st
 
 Complete initial account/key onboarding on the daemon's embedded website at
 http://127.0.0.1:8080, then add its networking bearer key to the registry.
-Device-account cookies do not authorize networking requests. The registry stores
-device keys encrypted at rest; after sign-in, a selected key is loaded into
-browser memory and sent directly to that device's API.
+Device-account cookies do not authorize networking requests. When the registry
+runs in Compose, the simulator must listen on an address reachable from its
+container; `127.0.0.1` inside that container refers to the registry itself.
+The registry stores device keys encrypted at rest. After sign-in, the browser
+selects a saved firewall; the controller decrypts its key server-side and
+proxies firewall API requests without returning that key to the browser.
 
 Simulator success does **not** verify Linux networking, WireGuard key-file
 availability, kernel permissions, softflowd collector delivery or DHCP lease delivery. Native tests
@@ -62,7 +65,7 @@ whole-appliance log capture/delivery or real vnStat history.
 
 | Browser route | Purpose |
 | --- | --- |
-| `/connect` | Registry sign-in, persistent firewall list, encrypted key storage and direct device connection |
+| `/connect` | Registry sign-in, persistent firewall list, encrypted key storage and controller-proxied device connection |
 | `/overview` | Committed/live state, drift, runtime, recent history, exact statistics |
 | `/interfaces`, `/interfaces/:name` | Managed dummy/VLAN/WireGuard editors, required WAN/LAN roles, DHCPv4 relay |
 | `/parents` | Protected adopted-parent diagnostics; no provisioning controls |
@@ -89,9 +92,10 @@ Unknown routes show an application 404.
   Stage, reorder, delete, import, and discard make no mutation requests.
 - Lists default to committed desired; use staged preview to inspect the shared
   draft. Cancel discards only unstaged form values. Route/reload warnings protect
-  unsaved input. Drafts and device API keys are never written to browser storage
-  or service-worker caches. Device addresses and encrypted keys are persisted in
-  the central registry; a selected key is held in memory while connected.
+  unsaved input. Device API keys are never returned to the browser or written to
+  browser storage or service-worker caches. Device addresses and encrypted keys
+  are persisted in the central registry; the controller attaches the selected
+  key when proxying requests to the firewall.
 - Apply validates the complete package, its cross-resource references, captured
   revision, fresh transaction discovery, drift, and actual serialized UTF-8 size.
   Pre-submit reads are UX checks, not a server concurrency guarantee.
@@ -340,7 +344,6 @@ simulated states. There is no offline mutation queue.
 | `VITE_APP_ENV` | Vite mode | Available frontend deployment metadata |
 | `VITE_DEPLOYMENT_LABEL` | `Unknown` | Operator-supplied lab/deployment label |
 | `VITE_BACKEND_MODE` | `Unknown` | Operator-supplied mode label, not API-discovered capability |
-| `VITE_API_BASE_URL` | `/api/v1` | API path appended to the selected device origin; do not append another `/api` |
 | `VITE_REGISTRY_API_URL` | Same host, port `3031`, path `/api/v1` | Public central-registry URL compiled into the frontend; no secrets |
 | `BUILD_SOURCEMAP` | `false` | Explicit opt-in build sourcemaps |
 | `REGISTRY_ADMIN_PASSWORD` | Required | Registry administrator password (at least 16 characters) |
@@ -349,35 +352,36 @@ simulated states. There is no offline mutation queue.
 | `REGISTRY_TLS_KEY` | Empty | Optional in-container TLS private-key path for the registry |
 
 `VITE_*` settings are public build-time settings. Do not put secrets in them.
-Query strings and fragments in API URLs are rejected. The fetch adapter refuses
-API redirects rather than forwarding Authorization elsewhere; it omits cookies
-and sets `cache: no-store`. Error text redacts the current device key.
+The fetch adapter refuses controller redirects rather than forwarding
+Authorization elsewhere; it omits cookies and sets `cache: no-store`. Error
+text redacts the registry session token.
 
 ### Central registry, remote devices and CORS
 
-The registry API is a separate service on port 3031; Nginx does not proxy
-registry or device API calls. Registry access uses one operator-configured
-administrator password and an eight-hour in-memory bearer session. Device names
-and addresses are stored in SQLite on the `registry-data` volume. Device keys
-are encrypted at rest using `REGISTRY_ENCRYPTION_KEY`, never returned in device
-list responses, and decrypted only for an authenticated connect request.
-Back up the encryption key separately from the database; without it, stored
-keys cannot be recovered. Keep both the database and encryption key private.
+The registry/controller API is a separate service on port 3031; Nginx does not
+proxy registry or firewall API calls. Registry access uses one
+operator-configured administrator password and an eight-hour in-memory bearer
+session. Device names and addresses are stored in SQLite on the `registry-data`
+volume. Device keys are encrypted at rest using `REGISTRY_ENCRYPTION_KEY`, never
+returned to the browser, and decrypted server-side only while proxying an
+authenticated request to the selected firewall. Back up the encryption key
+separately from the database; without it, stored keys cannot be recovered. Keep
+both the database and encryption key private.
 
-The browser calls each selected firewall API directly using its saved origin
-(for example `https://192.0.2.1:8080`) and key. The device API must allow CORS
-from the website origin, including `Authorization`, `Content-Type`, `GET`,
-`POST`, and preflight `OPTIONS`. This project’s firewall backend responds with
-`Access-Control-Allow-Origin: *`; do not enable cookie-based CORS. The registry
-also allows all origins and does not use cookies.
+The browser sends firewall API requests to the registry/controller service,
+which attaches the saved device key and relays requests to the firewall. The
+controller must be able to reach the saved firewall address over the network.
+Firewall CORS is not required because browsers never call firewalls directly.
+The registry allows all origins and does not use cookies; restrict access to
+the controller and use strong administrator credentials.
 
-Use HTTPS for both the website and registry in a network deployment, and use
-HTTPS device APIs when the site is served over HTTPS; browsers block mixed
-content. To enable registry TLS, place certificate files in the ignored
+Use HTTPS for both the website and registry in a network deployment. The
+controller verifies certificates when connecting to HTTPS firewall APIs.
+To enable registry TLS, place certificate files in the ignored
 `registry-certs` directory and set `REGISTRY_TLS_CERT=/certs/fullchain.pem` and
 `REGISTRY_TLS_KEY=/certs/private-key.pem`. Set
 `VITE_REGISTRY_API_URL` at frontend build time if the registry is not reachable
-at the website hostname on port 3031. The container CSP permits direct
+at the website hostname on port 3031. The container CSP permits registry
 `connect-src` connections to `http:` and `https:` origins.
 
 Nginx returns SPA fallback for browser routes. Hashed assets are

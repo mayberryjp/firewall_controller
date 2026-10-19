@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
 import {
-  createRegistryDevice, deleteRegistryDevice, getRegistryCredential, listRegistryDevices,
+  createRegistryDevice, deleteRegistryDevice, getRegistrySessionToken, listRegistryDevices,
   loginRegistry, logoutRegistry, updateRegistryDevice, type RegistryDevice,
 } from "@/services/registry";
 
 const store = useControllerStore(), router = useRouter();
 const route = useRoute();
 const registryPassword = ref("");
-const registryReady = ref(false);
+const registryReady = computed(() => Boolean(getRegistrySessionToken()));
 const registryBusy = ref(false);
 const registryError = ref<string | null>(null);
 const devices = ref<RegistryDevice[]>([]);
@@ -34,7 +34,6 @@ async function signIn(): Promise<void> {
   try {
     await loginRegistry(registryPassword.value);
     registryPassword.value = "";
-    registryReady.value = true;
     await refreshDevices();
   } catch (error) {
     registryError.value = error instanceof Error ? error.message : "Unable to sign in to the device registry";
@@ -90,9 +89,8 @@ async function connectDevice(device: RegistryDevice): Promise<void> {
   registryBusy.value = true;
   registryError.value = null;
   try {
-    const credential = await getRegistryCredential(device.id);
     const redirect = route.query.redirect;
-    if (await store.connect(credential, device.address)) {
+    if (await store.connect(device.id)) {
       await router.replace(typeof redirect === "string" && redirect.startsWith("/") && !redirect.startsWith("//")
         ? redirect : "/overview");
     } else {
@@ -108,7 +106,6 @@ async function connectDevice(device: RegistryDevice): Promise<void> {
 function signOut(): void {
   logoutRegistry();
   store.disconnect();
-  registryReady.value = false;
   devices.value = [];
   registryError.value = null;
   resetDeviceForm();
@@ -135,7 +132,8 @@ function signOut(): void {
         Sign in to the central device registry to access saved firewall addresses and keys.
       </p>
       <p class="text-body-2 text-medium-emphasis mb-6">
-        Device records persist on the registry server across browser reloads. Firewall keys are encrypted at rest.
+        Device records and encrypted firewall keys persist on the controller. When connecting, the controller relays
+        firewall API traffic without returning saved keys to the browser.
       </p>
       <v-card
         border
@@ -263,7 +261,7 @@ function signOut(): void {
             label="Device API address"
             placeholder="https://192.0.2.1:8080"
             autocomplete="url"
-            hint="Origin only. The firewall API must allow CORS from this website."
+            hint="Origin only. The controller must be able to reach this address."
             persistent-hint
             :disabled="registryBusy"
           />
@@ -300,8 +298,8 @@ function signOut(): void {
       </v-card>
 
       <p class="text-caption text-medium-emphasis mt-5">
-        Device addresses and keys persist on the registry server. Keys are encrypted at rest and held in browser memory
-        only while connecting to the selected firewall. The browser sends API requests directly to that firewall.
+        Device addresses and encrypted keys persist on the controller. After saving a key, firewall API calls are
+        relayed by the controller; the browser uses only the registry session token to connect.
       </p>
     </template>
   </section>

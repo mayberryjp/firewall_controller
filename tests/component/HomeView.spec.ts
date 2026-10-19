@@ -7,14 +7,14 @@ import { useControllerStore } from "@/stores/controller";
 vi.mock("vue-router", () => ({ useRouter: () => ({ replace: vi.fn() }), useRoute: () => ({ query: {} }) }));
 beforeEach(() => setActivePinia(createPinia()));
 describe("connection and editor contracts", () => {
-  it("explains registry sign-in and server-persisted device credentials", () => {
+  it("explains registry sign-in and controller-proxied firewall access", () => {
     const wrapper = mount(ConnectView, { global: {
       stubs: { VAlert: true, VCard: { template: "<div><slot /></div>" }, VForm: { template: "<form><slot /></form>" }, VTextField: true, VBtn: true },
     } });
     expect(wrapper.get("h1").text()).toBe("Connect to a firewall");
     expect(wrapper.text()).toContain("central device registry");
-    expect(wrapper.text()).toContain("Device records persist on the registry server across browser reloads");
-    expect(wrapper.text()).toContain("Firewall keys are encrypted at rest");
+    expect(wrapper.text()).toContain("Device records and encrypted firewall keys persist on the controller");
+    expect(wrapper.text()).toContain("without returning saved keys to the browser");
     expect(useControllerStore().connected).toBe(false);
   });
   it("splits address lines into separate values without rewriting host bits", async () => {

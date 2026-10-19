@@ -13,16 +13,21 @@ async function connect(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
 }
-test("invalid device credentials do not start a polling loop or persist tokens", async ({ page }) => {
+test("invalid stored firewall keys are proxied once and never sent to the browser", async ({ page }) => {
   await mockBackend(page, { invalidCredential: true });
-  const requests: string[] = [];
-  page.on("request", request => { if (new URL(request.url()).port === "8080") requests.push(request.url()); });
+  const proxyRequests: string[] = [], directRequests: string[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.port === "3031" && url.pathname.includes("/proxy/transactions")) proxyRequests.push(url.href);
+    if (url.port === "8080") directRequests.push(url.href);
+  });
   await page.goto("/connect");
   await signInToRegistry(page);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "401" }).first()).toBeVisible();
   await page.waitForTimeout(1500);
-  expect(requests).toHaveLength(1);
+  expect(proxyRequests).toHaveLength(1);
+  expect(directRequests).toHaveLength(0);
   expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
 });
 

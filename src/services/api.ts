@@ -1,33 +1,25 @@
-import axios from "axios";
+import axios, { AxiosHeaders } from "axios";
 import type { z } from "zod";
 import { decodeJson, encodeJson, utf8Size } from "@/services/json";
+import { getRegistrySessionToken, registryApiBaseUrl } from "@/services/registry";
 import { transactionSchema, type Transaction } from "@/types/domain";
 
-let token = "";
+let selectedDeviceId = "";
 let unauthorized: () => void = () => {};
-export function setCredential(value: string): void { token = value; }
 export function onUnauthorized(callback: () => void): void { unauthorized = callback; }
 
-const base = import.meta.env.VITE_API_BASE_URL || "/api/v1";
-const resolved = new URL(base, window.location.origin);
-if (resolved.search || resolved.hash) {
-  throw new Error("API base must not include a query or fragment");
-}
-const apiPath = resolved.pathname.replace(/\/+$/, "");
-const defaultBase = resolved.origin === window.location.origin ? apiPath : resolved.origin + apiPath;
-
-/** Points the client at a remote device (e.g. https://192.0.2.1:8080); blank restores the default base. */
-export function setApiTarget(address: string): void {
-  const value = address.trim();
-  if (!value) { api.defaults.baseURL = defaultBase; return; }
-  let url: URL;
-  try { url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`); }
-  catch { throw new Error("Enter a valid device address, e.g. https://192.0.2.1:8080"); }
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash ||
-    !["", "/"].includes(url.pathname)) {
-    throw new Error("Device address must be an http(s) origin without credentials, path, query or fragment");
+export function setApiDevice(deviceId: string): void {
+  const value = deviceId.trim();
+  if (!value) {
+    selectedDeviceId = "";
+    api.defaults.baseURL = registryApiBaseUrl;
+    return;
   }
-  api.defaults.baseURL = url.origin + apiPath;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    throw new Error("Select a valid saved firewall");
+  }
+  selectedDeviceId = value;
+  api.defaults.baseURL = `${registryApiBaseUrl}/devices/${encodeURIComponent(value)}/proxy`;
 }
 
 export class ApiFailure extends Error {
@@ -41,7 +33,7 @@ export class ApiFailure extends Error {
 }
 
 const api = axios.create({
-  baseURL: defaultBase,
+  baseURL: registryApiBaseUrl,
   timeout: 80_000,
   adapter: "fetch",
   fetchOptions: { redirect: "error", credentials: "omit", cache: "no-store" },
@@ -49,12 +41,14 @@ const api = axios.create({
   headers: { Accept: "application/json" },
 });
 api.interceptors.request.use((request) => {
-  if (!token) throw new ApiFailure("Enter a bearer credential to connect", 401);
+  const token = getRegistrySessionToken();
+  if (!token) throw new ApiFailure("Sign in to the device registry first", 401);
+  if (!selectedDeviceId) throw new ApiFailure("Select a saved firewall first", 400);
   request.headers.Authorization = `Bearer ${token}`;
   return request;
 });
 
-function diagnostic(text: string, credential = token): string {
+function diagnostic(text: string, credential = getRegistrySessionToken()): string {
   return [...text.replace(/<[^>]*>/g, " ")].map(char => char.charCodeAt(0) < 32 ? " " : char)
     .join("").split(credential || "\u0000").join("[redacted]").slice(0, 4096);
 }
@@ -67,7 +61,7 @@ export async function request<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const writing = method === "POST";
-  const requestCredential = token;
+  const requestCredential = getRegistrySessionToken();
   const serialized = body === undefined ? undefined : encodeJson(body);
   if (serialized !== undefined && utf8Size(serialized) > 1_048_576) {
     throw new ApiFailure("Complete UTF-8 request exceeds the 1 MiB limit", 422);
@@ -85,12 +79,15 @@ export async function request<T>(
     throw new ApiFailure(
       axios.isAxiosError(error) && (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT")
         ? "Request timed out. Server outcome may still be pending."
-        : "Connection failed or API redirected. Check the device address, that it is reachable, and that it allows CORS from this site.",
+        : "Connection to the controller failed or redirected. Check that the controller is reachable.",
       undefined, undefined, writing,
     );
   }
   const raw = typeof response.data === "string" ? response.data : "";
-  if (response.status === 401) unauthorized();
+  const registryAuthError = response.headers instanceof AxiosHeaders
+    ? response.headers.get("X-Registry-Auth-Error")
+    : response.headers["x-registry-auth-error"];
+  if (response.status === 401 && registryAuthError === "true") unauthorized();
   let data: unknown;
   try { data = decodeJson(raw); }
   catch {

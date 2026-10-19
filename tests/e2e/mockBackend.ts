@@ -26,10 +26,12 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     };
   };
   await page.route("**/api/v1/**", async route => {
-    const request = route.request(), url = new URL(request.url()), path = url.pathname.replace("/api/v1", "");
-    const reply = (value: unknown, status = 200) => route.fulfill({
+    const request = route.request(), url = new URL(request.url());
+    let path = url.pathname.replace("/api/v1", "");
+    const reply = (value: unknown, status = 200, extraHeaders: Record<string, string> = {}) => route.fulfill({
       status, contentType: "application/json", headers: {
         "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*",
+        ...extraHeaders,
       }, body: encodeJson(value),
     });
     if (request.method() === "OPTIONS") {
@@ -44,22 +46,22 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         return reply({ token: "registry-test-session", expires_in: 28800 });
       }
       if (request.headers().authorization !== "Bearer registry-test-session") {
-        return reply({ error: "Registry login required" }, 401);
+        return reply({ error: "Registry login required" }, 401, { "X-Registry-Auth-Error": "true" });
       }
       if (path === "/devices" && request.method() === "GET") {
         return reply({ devices: [{
           id: "11111111-1111-4111-8111-111111111111", name: "Test firewall",
-          address: `http://${url.hostname}:8080`, created_at: new Date().toISOString(),
+          address: "http://192.0.2.1:8080", created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         }] });
       }
-      if (path.endsWith("/credential") && request.method() === "POST") {
-        return reply({ credential: "browser-test-key" });
-      }
-      return reply({ error: "Unexpected registry endpoint" }, 404);
+      const proxy = path.match(/^\/devices\/[0-9a-f-]{36}\/proxy(\/.*)$/);
+      if (!proxy) return reply({ error: "Unexpected registry endpoint" }, 404);
+      path = proxy[1]!;
+    } else {
+      return reply({ error: "Firewall requests must be proxied through the controller" }, 404);
     }
-    if (options.invalidCredential) return reply({ error: "Invalid credential", transaction: null }, 401);
-    if (request.headers().authorization !== "Bearer browser-test-key") return reply({ error: "Invalid credential", transaction: null }, 401);
+    if (options.invalidCredential) return reply({ error: "Invalid device key", transaction: null }, 401);
     if (request.method() === "GET") {
       if (path === "/state") {
         if (options.observationFailed) return reply({ error: "Observation unavailable", transaction: null }, 503);
