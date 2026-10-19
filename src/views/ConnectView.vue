@@ -129,7 +129,7 @@ function signOut(): void {
 
     <template v-if="!registryReady">
       <p class="mb-6">
-        Sign in to the central device registry to access saved firewall addresses and keys.
+        Sign in to the central device registry to access saved firewall addresses and API keys.
       </p>
       <p class="text-body-2 text-medium-emphasis mb-6">
         Device records and encrypted firewall keys persist on the controller. When connecting, the controller relays
@@ -268,10 +268,10 @@ function signOut(): void {
           <v-text-field
             v-model="deviceForm.credential"
             type="password"
-            label="Firewall bearer key"
+            label="Firewall API key"
             autocomplete="new-password"
             :placeholder="editingId ? 'Leave blank to keep the stored key' : ''"
-            hint="Encrypted on the registry server. Returned to this browser only when connecting."
+            hint="Encrypted at rest. The controller uses the saved key for proxied firewall API requests and does not return it to the browser."
             persistent-hint
             :disabled="registryBusy"
           />

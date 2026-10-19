@@ -32,7 +32,7 @@ npm run dev
 ```
 
 Open http://localhost:3030, sign in with the registry password, then add a
-firewall's name, API address and networking bearer key. The registry runs on
+firewall's name, API address and networking API key. The registry runs on
 port 3031 and persists entries in a Docker volume. Stop other listeners on
 ports 3030 and 3031 before starting. Keep the ignored `.env` file and back up
 its encryption key securely; never regenerate the key for an existing registry
@@ -47,7 +47,7 @@ go run .\cmd\netcontrold -backend simulator -listen 127.0.0.1:8080 -state lab-st
 ```
 
 Complete initial account/key onboarding on the daemon's embedded website at
-http://127.0.0.1:8080, then add its networking bearer key to the registry.
+http://127.0.0.1:8080, then add its networking API key to the registry.
 Device-account cookies do not authorize networking requests. When the registry
 runs in Compose, the simulator must listen on an address reachable from its
 container; `127.0.0.1` inside that container refers to the registry itself.
@@ -360,8 +360,8 @@ text redacts the registry session token.
 
 The registry/controller API is a separate service on port 3031; Nginx does not
 proxy registry or firewall API calls. Registry access uses one
-operator-configured administrator password and an eight-hour in-memory bearer
-session. Device names and addresses are stored in SQLite on the `registry-data`
+operator-configured administrator password and an eight-hour in-memory registry
+session token. Device names and addresses are stored in SQLite on the `registry-data`
 volume. Device keys are encrypted at rest using `REGISTRY_ENCRYPTION_KEY`, never
 returned to the browser, and decrypted server-side only while proxying an
 authenticated request to the selected firewall. Back up the encryption key

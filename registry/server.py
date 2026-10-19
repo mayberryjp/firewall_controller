@@ -78,10 +78,10 @@ def normalize_name(value: object) -> str:
 
 def normalize_credential(value: object) -> str:
     if not isinstance(value, str):
-        raise ValueError("A device bearer key is required")
+        raise ValueError("A firewall API key is required")
     credential = value.strip()
     if not credential or len(credential) > CREDENTIAL_LIMIT or "\r" in credential or "\n" in credential:
-        raise ValueError(f"Device bearer key must be 1 to {CREDENTIAL_LIMIT} characters without newlines")
+        raise ValueError(f"Firewall API key must be 1 to {CREDENTIAL_LIMIT} characters without newlines")
     return credential
 
 
