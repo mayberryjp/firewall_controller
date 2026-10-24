@@ -52,8 +52,20 @@ export const softflowdSchema = z.object({
   timeouts: z.record(z.enum(timeoutNames), integer).nullable().transform((value) => value ?? {}),
 }).strict();
 const hostPolicyRuleSchema = z.object({
+  out_interface: optionalText,
   destination_host: optionalText, destination: optionalText, protocol: z.enum(["", "tcp", "udp"]).optional(),
   destination_ports: list(integer).optional(), action: z.enum(["accept", "drop"]),
+}).strict();
+export const inputFirewallSchema = z.object({
+  policy: z.enum(["accept", "drop"]),
+  interfaces: z.array(z.object({
+    interface: z.string(),
+    rules: z.array(z.object({
+      destination: z.string().optional(), protocol: z.enum(["", "tcp", "udp"]).optional(),
+      destination_ports: z.array(integer).optional(), action: z.enum(["accept", "drop"]),
+      out_interface: z.literal("").optional(), destination_host: z.literal("").optional(),
+    }).strict()).default([]),
+  }).strict()).default([]),
 }).strict();
 export const firewallPoliciesSchema = z.object({
   hosts: list(z.object({
@@ -96,6 +108,7 @@ export const configSchema = z.object({
     policy: z.enum(["accept", "drop"]), rules: list(filterSchema),
     nat: z.object({ masquerade: list(masqueradeSchema) }).strict(),
     policies: firewallPoliciesSchema.nullable().optional(),
+    input: inputFirewallSchema.nullable().optional(),
   }).strict(),
   softflowd: list(softflowdSchema),
   gateway_monitors: list(gatewayMonitorSchema).default([]),

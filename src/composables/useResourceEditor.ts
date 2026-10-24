@@ -30,7 +30,7 @@ export function useResourceEditor(section: Section, wireguard = false) {
     }
     return true;
   }).map(link => link.name) ?? []);
-  const familyInterfaces = computed(() => editingConfig.value?.interfaces.filter(link => link.addresses.some(address => {
+  const familyInterfaces = computed(() => editingConfig.value?.interfaces.filter(link => (form.value.family === "ipv4" && editingConfig.value?.dhcp_clients?.[link.name]) || link.addresses.some(address => {
     try { return prefix(address, false).family === form.value.family; } catch { return false; }
   })).map(link => link.name) ?? []);
   const immutable = computed(() => Boolean(original.value && store.state.data?.desired.interfaces.some(link => link.name === record(original.value).name)));
@@ -49,6 +49,7 @@ export function useResourceEditor(section: Section, wireguard = false) {
       ...config.interfaces.filter(link => link.kind === "vlan" && link.vlan.parent === name).map(link => `Child VLAN ${link.name}`),
       ...config.routes.filter(item => item.interface === name).map(item => `Route ${item.destination}`),
       ...config.firewall.nat.masquerade.filter(item => item.out_interface === name).map((_, index) => `Masquerade reference ${index + 1}`),
+      ...(config.firewall.input?.interfaces.filter(item => item.interface === name).map(item => `Host input policy ${item.interface}`) ?? []),
       ...config.softflowd.filter(item => item.interface === name).map(item => `Capture instance ${item.name}`),
       ...config.gateway_monitors.filter(item => item.interface === name).map(item => `Gateway monitor ${item.name}`),
     ];

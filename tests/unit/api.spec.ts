@@ -4,7 +4,7 @@ import api, { ApiFailure, onUnauthorized, request, setApiDevice } from "@/servic
 import { registryApiBaseUrl, setRegistrySessionToken } from "@/services/registry";
 import * as net from "@/services/netcontrol";
 import { z } from "zod";
-import { encodeJson } from "@/services/json";
+import { decodeJson, encodeJson } from "@/services/json";
 import { config, state, runtime, transaction, statistics, gatewayStatistics } from "../fixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
@@ -18,6 +18,25 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("reads backend input policies in transaction maps and full state", async () => {
+    const pending = transaction(), current = state();
+    pending.candidate.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ action: "accept" }] }] };
+    body = encodeJson({ [pending.id]: pending });
+    expect((await net.getTransactions())[pending.id]?.candidate.firewall.input).toEqual(pending.candidate.firewall.input);
+    current.desired.firewall.input = pending.candidate.firewall.input;
+    current.active_transaction = pending;
+    body = encodeJson(current);
+    expect((await net.getState()).active_transaction?.candidate.firewall.input).toEqual(pending.candidate.firewall.input);
+  });
+  it("preserves host-input and forwarding policies in full-package submissions", async () => {
+    const candidate = config(); candidate.firewall.rules = [];
+    candidate.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ protocol: "udp", destination_ports: [68], action: "accept" }] }] };
+    candidate.firewall.policies = { hosts: [], interfaces: [{ interface: "lab0", rules: [{ out_interface: "lab0", action: "accept" }] }] };
+    const pending = transaction(); pending.candidate = candidate; body = encodeJson(pending);
+    const result = await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 });
+    expect(decodeJson(String(captured?.data))).toMatchObject({ config: { firewall: candidate.firewall } });
+    expect(result.candidate.firewall).toEqual(candidate.firewall);
+  });
   it("reads discovered NICs without converting null simulator identity or hiding errors", async () => {
     const inventory = [{ name: "eth0", kind: "ethernet", index: null, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged" }];
     body = encodeJson(inventory);

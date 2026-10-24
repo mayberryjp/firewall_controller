@@ -46,10 +46,12 @@ async function refresh(): Promise<void> {
       :aria-label="revisionLabel"
       :title="revisionLabel"
       :disabled="!store.state.data || store.editorDirty"
-      icon="mdi-source-commit"
-      size="x-small"
+      prepend-icon="mdi-file-cog-outline"
+      size="small"
       variant="text"
-    />
+    >
+      Config r{{ store.state.data?.revision ?? "?" }}
+    </v-btn>
     <v-btn
       v-if="store.connected"
       v-tooltip:bottom="refreshLabel"
@@ -67,13 +69,15 @@ async function refresh(): Promise<void> {
       v-tooltip:bottom="changesLabel"
       :title="changesLabel"
       aria-label="Save configuration"
-      icon="mdi-alert"
+      prepend-icon="mdi-content-save-outline"
       color="warning"
-      size="x-small"
+      size="small"
       variant="text"
       :disabled="store.busy"
       @click="saveDialog = true"
-    />
+    >
+      Save
+    </v-btn>
   </div>
   <ApplyConfigurationDialog
     v-model="saveDialog"

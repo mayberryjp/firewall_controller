@@ -379,6 +379,82 @@ test("ICMP false is staged explicitly and preserved with host/interface policy m
   expect(backend.writes).toHaveLength(1);
 });
 
+test("host input stays separate and survives DHCP WAN full-package edits", async ({ page }, testInfo) => {
+  const initial = config(), lan = initial.interfaces[0]!;
+  initial.interfaces = [
+    { name: "wan0", kind: "ethernet", role: "wan", mtu: 1500, up: true, addresses: [], dhcp_relay: { enabled: false, servers: [] } },
+    { name: lan.name, kind: "ethernet", role: "lan", mtu: lan.mtu, up: true, addresses: lan.addresses, dhcp_relay: lan.dhcp_relay },
+  ];
+  initial.dhcp_clients = { wan0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+  initial.firewall.allow_all_icmp = false;
+  initial.firewall.rules = [];
+  initial.firewall.policies = { hosts: [], interfaces: [{ interface: "lab0", rules: [{ action: "accept" }] }] };
+  initial.firewall.nat.masquerade[0]!.out_interface = "wan0";
+  initial.firewall.input = { policy: "drop", interfaces: [
+    { interface: "wan0", rules: [{ destination: "0.0.0.0/0", protocol: "udp", destination_ports: [68], action: "accept" }] },
+    { interface: "lab0", rules: [{ action: "accept" }] },
+  ] };
+  const backend = await mockBackend(page, { initialConfig: initial });
+  await connect(page);
+  await navigate(page, "Host input");
+  const input = page.getByRole("region", { name: "Host input", exact: true });
+  await expect(input).toContainText("established/related");
+  await expect(input).toContainText("DHCP client");
+  await expect(input).not.toContainText("IPv4 ICMP is accepted first");
+  await navigate(page, "Routes");
+  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await page.getByLabel("Metric", { exact: true }).fill("42");
+  await page.getByRole("button", { name: "Stage changes", exact: true }).click();
+  await navigate(page, "Host input");
+  await page.getByRole("button", { name: "Edit input policy", exact: true }).click();
+  await page.getByLabel("Destination ports", { exact: true }).first().fill("68\n67");
+  await page.getByRole("button", { name: "Stage changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  await expect(input).toContainText("68, 67");
+  expect(backend.writes).toHaveLength(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("host-input.png"), fullPage: true, animations: "disabled" });
+  await navigate(page, "NAT masquerading");
+  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await page.getByLabel("Managed egress with family address", { exact: true }).press("Enter");
+  await expect(page.getByRole("option", { name: "wan0", exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "wan0", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await navigate(page, "Review changes");
+  await expect(page.getByRole("main")).toContainText("Host input changes can block management access or DHCP renewal");
+  await page.getByRole("button", { name: "Review provisional apply", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("firewall.write");
+  const apply = page.getByRole("button", { name: "Apply provisionally", exact: true });
+  await page.getByLabel("I reviewed the complete package, deletion impact, disruption risk, deadline, and recovery prerequisites.").check();
+  await expect(apply).toBeDisabled();
+  await page.getByLabel("I explicitly acknowledge default drop / catch-all drop and potentially unreachable later rules.").check();
+  await apply.click();
+  await expect(page.getByRole("main")).toContainText("pending_confirmation");
+  const expected = structuredClone(initial);
+  expected.routes[0]!.metric = 42;
+  expected.firewall.input!.interfaces[0]!.rules[0]!.destination_ports = [68, 67];
+  expect(backend.writes).toHaveLength(1);
+  expect(backend.writes[0]?.body).toMatchObject({ config: expected });
+  await page.getByRole("button", { name: "Confirm configuration", exact: true }).click();
+  await page.getByLabel("I have checked connectivity and want to commit this candidate.").check();
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm configuration", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("committed");
+});
+
+test("removing host input requires visible protection review and no immediate write", async ({ page }) => {
+  const initial = config(); initial.firewall.input = { policy: "drop", interfaces: [] };
+  const backend = await mockBackend(page, { initialConfig: initial });
+  await connect(page); await navigate(page, "Host input");
+  await page.getByRole("button", { name: "Edit input policy", exact: true }).click();
+  await page.getByLabel("Input filtering", { exact: true }).uncheck();
+  await expect(page.getByRole("dialog")).toContainText("Removing input filtering removes host protection, including WAN protection");
+  await page.getByRole("button", { name: "Stage changes", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("No host input filter configured");
+  await navigate(page, "Review changes");
+  await expect(page.getByRole("main")).toContainText("Removing input filtering removes host protection, including WAN protection");
+  expect(backend.writes).toHaveLength(0);
+});
+
 test("WAN role and multi-server relay stage together without auto-configuring networking", async ({ page }) => {
   const backend = await mockBackend(page); await connect(page);
   await navigate(page, "Interfaces");

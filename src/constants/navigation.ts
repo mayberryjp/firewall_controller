@@ -23,6 +23,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "Routes", name: "routes", path: "/routes", icon: "mdi-routes" },
     { title: "Source-policy rules", name: "policy-rules", path: "/policy-rules", icon: "mdi-source-branch" },
     { title: "Firewall forwarding", name: "firewall", path: "/firewall", icon: "mdi-shield-outline" },
+    { title: "Host input", name: "firewall-input", path: "/firewall/input", icon: "mdi-shield-lock-outline" },
     { title: "NAT masquerading", name: "nat", path: "/nat", icon: "mdi-swap-horizontal" },
     { title: "WireGuard", name: "wireguard", path: "/wireguard", icon: "mdi-vpn" },
     { title: "Gateway monitors", name: "gateway-monitors", path: "/gateway-monitors", icon: "mdi-access-point-network" },

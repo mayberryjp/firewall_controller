@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import InterfacesView from "@/views/InterfacesView.vue";
 import RoutesView from "@/views/RoutesView.vue";
 import FirewallView from "@/views/FirewallView.vue";
+import FirewallInputView from "@/views/FirewallInputView.vue";
 import DHCPRelayView from "@/views/DHCPRelayView.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
 import ServiceRepair from "@/components/feature/ServiceRepair.vue";
@@ -47,6 +48,41 @@ async function render(component: Component, path: string) {
   return mount(component, { global: { plugins: [router], stubs } });
 }
 describe("October 17 frontend workflows", () => {
+  it("stages host-input rules separately while preserving forwarding and other settings", async () => {
+    const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
+    store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ protocol: "udp", destination_ports: [68], action: "accept" }] }] };
+    const wrapper = await render(FirewallInputView, "/firewall/input");
+    expect(wrapper.text()).toContain("established/related");
+    expect(wrapper.find("tbody").text()).toContain("68");
+    await wrapper.findAll("button").find(button => button.text() === "Edit input policy")!.trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "interfaces")!.vm.$emit("update:modelValue", [
+      { interface: "lab0", rules: [{ protocol: "tcp", destination_ports: ["443", "80"], action: "accept" }, { action: "drop" }] },
+    ]);
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Stage changes")!.trigger("click");
+    expect(store.draft?.firewall.input?.interfaces[0]!.rules).toEqual([
+      { protocol: "tcp", destination_ports: [443, 80], action: "accept" }, { action: "drop" },
+    ]);
+    expect(store.draft?.firewall.rules).toEqual(config().firewall.rules);
+    expect(store.draft?.routes).toEqual(config().routes);
+    expect(store.editorDirty).toBe(false); expect(submit).not.toHaveBeenCalled();
+  });
+  it("blocks unmanaged ingress input rules before staging", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [] };
+    const wrapper = await render(FirewallInputView, "/firewall/input");
+    await wrapper.findAll("button").find(button => button.text() === "Edit input policy")!.trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "interfaces")!.vm.$emit("update:modelValue", [{ interface: "missing0", rules: [] }]);
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Stage changes")!.trigger("click");
+    expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("unique managed ingress interface");
+    expect(store.editorDirty).toBe(true);
+  });
+  it("warns when removing host-input protection from a package", () => {
+    const before = config(), after = config(); before.firewall.input = { policy: "drop", interfaces: [] };
+    const wrapper = mount(ConfigDiff, { props: { before, after }, global: { stubs } });
+    expect(wrapper.text()).toContain("Removing input filtering removes host protection, including WAN protection");
+  });
   it("keeps healthy dataset reads quiet while preserving errors", async () => {
     const store = useControllerStore(); store.state.stale = false; store.state.lastSuccess = Date.now();
     const wrapper = mount(DatasetStatus, { props: { query: store.state, label: "Configuration" }, global: { stubs } });

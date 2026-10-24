@@ -84,7 +84,7 @@ export function resourceFields(section: Section, managed: string[], parents: str
     case "firewall": return [text("source", "Source network (blank = Any)"), text("destination", "Destination network (blank = Any)"), select("action", "Action", ["accept", "drop"])];
     case "nat": return [
       select("family", "Family", ["ipv4", "ipv6"]), text("source", "Source network (blank = Any)", `Must match ${String(family)}.`),
-      select("out_interface", "Managed egress with family address", familyInterfaces, "Missing options? Stage a matching address under Interfaces."),
+      select("out_interface", "Managed egress with family address", familyInterfaces, "IPv4 supports a static address or DHCP client; IPv6 requires a static address."),
     ];
     case "softflowd": return [
       text("name", "Instance name", "1..32 letters, digits, underscore or hyphen; maximum 16 instances including disabled."),

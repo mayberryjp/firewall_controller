@@ -26,9 +26,10 @@ beforeEach(() => {
   store.connected = true; store.state.data = state(); store.state.stale = false; store.state.lastSuccess = Date.now();
   store.transactions.data = {}; store.transactions.stale = false;
 });
-function stageDraft(drop = false): void {
+function stageDraft(drop = false, inputDrop = false): void {
   const draft = config(); draft.routes[0]!.metric = 42;
   if (drop) draft.firewall.policy = "drop";
+  if (inputDrop) draft.firewall.input = { policy: "drop", interfaces: [] };
   useControllerStore().stage(draft);
 }
 function status() {
@@ -43,6 +44,7 @@ describe("navbar firewall status", () => {
     const wrapper = status();
     expect(wrapper.get('[aria-label="Connected"]').attributes("color")).toBe("success");
     expect(wrapper.get('[aria-label="Committed revision 0"]').attributes("data-to")).toBe("/history/0");
+    expect(wrapper.get('[aria-label="Committed revision 0"]').text()).toBe("Config r0");
     await wrapper.get('[aria-label="Refresh firewall state"]').trigger("click");
     expect(refresh).toHaveBeenCalledOnce();
     expect(wrapper.find('[aria-label="Save configuration"]').exists()).toBe(false);
@@ -63,6 +65,8 @@ describe("navbar firewall status", () => {
   it("opens save review for a changed draft without immediately applying it", async () => {
     stageDraft();
     const apply = vi.spyOn(useControllerStore(), "apply"), wrapper = status();
+    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("Save");
+    expect(wrapper.get('[aria-label="Save configuration"]').attributes("prepend-icon")).toBe("mdi-content-save-outline");
     await wrapper.get('[aria-label="Save configuration"]').trigger("click");
     expect(wrapper.getComponent(ApplyConfigurationDialog).props("modelValue")).toBe(true);
     expect(apply).not.toHaveBeenCalled();
@@ -92,8 +96,8 @@ describe("navbar save safety", () => {
     await action.trigger("click");
     expect(apply).not.toHaveBeenCalled();
   });
-  it("requires a separate acknowledgement for default-drop changes", async () => {
-    stageDraft(true);
+  it.each(["forwarding", "input"])("requires a separate acknowledgement for %s default-drop changes", async scope => {
+    stageDraft(scope === "forwarding", scope === "input");
     const wrapper = saveDialog(), checkboxes = wrapper.findAll('input[type="checkbox"]');
     const action = wrapper.findAll("button").find(button => button.text() === "Apply provisionally")!;
     await checkboxes[0]!.setValue(true);

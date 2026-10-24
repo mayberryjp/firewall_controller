@@ -41,6 +41,15 @@ const relayChanged = computed(() => changes.value.some(item => item.area === "in
   >
     The IPv4 ICMP exception precedes legacy/host/interface drops across input, output and forwarding on all namespace interfaces. ICMPv6 is unchanged; disabling removes exceptions, not a blanket block. An omitted flag means enabled; null is invalid.
   </v-alert>
+  <v-alert
+    v-if="changes.some(item => item.area === 'firewall-input')"
+    type="warning"
+    variant="tonal"
+    class="mb-4"
+  >
+    <template v-if="before.firewall.input && !after.firewall.input">Removing input filtering removes host protection, including WAN protection.</template>
+    <template v-else>Host input changes can block management access or DHCP renewal. Verify LAN access and WAN UDP port 68 allowances. Loopback and established/related acceptance remain implicit.</template>
+  </v-alert>
   <p
     v-if="!changes.length"
     class="my-4"

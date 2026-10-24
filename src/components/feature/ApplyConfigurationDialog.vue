@@ -12,7 +12,8 @@ const props = withDefaults(defineProps<{ seconds?: number | string; description?
 const store = useControllerStore(), router = useRouter();
 const acknowledged = ref(false), dropAcknowledged = ref(false), error = ref("");
 const confirmationSeconds = ref<number | string>(120), saveDescription = ref("");
-const dropRisk = computed(() => store.draft?.firewall.policy === "drop" || store.draft?.firewall.rules.some(rule => rule.action === "drop" && !rule.source && !rule.destination));
+const dropRisk = computed(() => store.draft?.firewall.policy === "drop" || store.draft?.firewall.rules.some(rule => rule.action === "drop" && !rule.source && !rule.destination) ||
+  store.draft?.firewall.input?.policy === "drop" || store.draft?.firewall.input?.interfaces.some(ingress => ingress.rules.some(rule => rule.action === "drop" && !rule.destination && !rule.protocol && !rule.destination_ports?.length)));
 watch(open, value => {
   if (!value) return;
   acknowledged.value = false; dropAcknowledged.value = false; error.value = "";

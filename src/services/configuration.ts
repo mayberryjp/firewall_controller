@@ -55,11 +55,21 @@ export function normalize(config: Config): Config {
     for (const item of [...result.firewall.policies.hosts, ...result.firewall.policies.interfaces]) {
       for (const rule of item.rules) {
         rule.destination_ports?.sort((a, b) => a - b);
-        for (const key of ["destination", "destination_host", "protocol"] as const) if (!rule[key]) delete rule[key];
+        for (const key of ["out_interface", "destination", "destination_host", "protocol"] as const) if (!rule[key]) delete rule[key];
         if (!rule.destination_ports?.length) delete rule.destination_ports;
       }
     }
   } else delete result.firewall.policies;
+  if (result.firewall.input) {
+    result.firewall.input.interfaces.sort((first, second) => first.interface.localeCompare(second.interface));
+    for (const ingress of result.firewall.input.interfaces) {
+      for (const rule of ingress.rules) {
+        rule.destination_ports?.sort((first, second) => first - second);
+        for (const key of ["destination", "protocol", "out_interface", "destination_host"] as const) if (!rule[key]) delete rule[key];
+        if (!rule.destination_ports?.length) delete rule.destination_ports;
+      }
+    }
+  } else delete result.firewall.input;
   return result;
 }
 export const equalConfig = (a: Config, b: Config): boolean => stableJson(normalize(a)) === stableJson(normalize(b));
@@ -124,6 +134,10 @@ export function differences(before: Config, after: Config): Difference[] {
     before: old.firewall.policies, after: next.firewall.policies,
   });
   ordered("firewall", old.firewall.rules, next.firewall.rules);
+  if (stableJson(old.firewall.input) !== stableJson(next.firewall.input)) result.push({
+    area: "firewall-input", identity: "host input policy", kind: !old.firewall.input ? "added" : !next.firewall.input ? "deleted" : "modified",
+    before: old.firewall.input, after: next.firewall.input,
+  });
   ordered("nat", old.firewall.nat.masquerade, next.firewall.nat.masquerade);
   if (stableJson(old.kernel) !== stableJson(next.kernel)) result.push({
     area: "kernel", identity: "preserved settings", kind: "modified", before: old.kernel, after: next.kernel,
@@ -400,8 +414,34 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   config.firewall.nat.masquerade.forEach((rule, index) => check(`firewall.nat.masquerade.${index}`, "/nat", () => {
     if (rule.source && prefix(rule.source, true).family !== rule.family) throw new Error("Source must match selected family");
     const link = interfaces.get(rule.out_interface);
-    if (!link || !link.addresses.some((address) => prefix(address, false).family === rule.family)) throw new Error("Egress requires a managed interface address of the selected family");
+    if (!link || !(rule.family === "ipv4" && config.dhcp_clients?.[rule.out_interface]) && !link.addresses.some((address) => prefix(address, false).family === rule.family)) throw new Error("Egress requires a managed interface address of the selected family or an IPv4 DHCP client");
   }));
+  const input = config.firewall.input;
+  if (input) {
+    const page = "/firewall/input", seen = new Set<string>();
+    let expanded = 1;
+    if (input.interfaces.length > 32) issue("firewall.input.interfaces", "At most 32 ingress interfaces", page);
+    input.interfaces.forEach((ingress, index) => {
+      const path = `firewall.input.interfaces.${index}`;
+      if (!validName(ingress.interface) || !interfaces.has(ingress.interface) || seen.has(ingress.interface)) {
+        issue(`${path}.interface`, "Select a unique managed ingress interface", page);
+      }
+      seen.add(ingress.interface);
+      if (ingress.rules.length > 64) issue(`${path}.rules`, "At most 64 ordered rules per interface", page);
+      ingress.rules.forEach((rule, ruleIndex) => {
+        const rulePath = `${path}.rules.${ruleIndex}`, ports = rule.destination_ports ?? [];
+        expanded += Math.max(1, ports.length);
+        if (rule.destination) check(`${rulePath}.destination`, page, () => { prefix(rule.destination!, true); });
+        if (ports.length > 32 || new Set(ports).size !== ports.length) issue(`${rulePath}.destination_ports`, "Use at most 32 unique destination ports", page);
+        if (ports.length && !["tcp", "udp"].includes(rule.protocol ?? "")) issue(`${rulePath}.protocol`, "Destination ports require TCP or UDP", page);
+        ports.forEach((port, portIndex) => bound(port, 1, 65535, `${rulePath}.destination_ports.${portIndex}`, page));
+      });
+    });
+    if (expanded > 4096) issue("firewall.input", "Input policies expand beyond 4096 entries", page);
+    if (utf8Size(JSON.stringify({ hosts: [], interfaces: normalize(config).firewall.input!.interfaces })) > 65536) {
+      issue("firewall.input", "Input policy metadata exceeds 65536 bytes", page);
+    }
+  }
   if (config.softflowd.length > 16) issue("softflowd", "At most 16 instances including disabled entries", "/services/softflowd");
   const serviceNames = new Set<string>();
   config.softflowd.forEach((service, index) => {
@@ -436,7 +476,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     interfaces: "interfaces.write", routes: "routes.write", "policy-rules": "policy.write",
     dhcp_clients: "interfaces.write", dns: "interfaces.write",
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
-    "firewall-policies": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
+    "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write",
   };
   for (const change of diff) {

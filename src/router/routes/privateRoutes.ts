@@ -13,6 +13,7 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/routes", name: "routes", component: () => import("@/views/RoutesView.vue") },
     { path: "/policy-rules", name: "policy-rules", component: () => import("@/views/PolicyRulesView.vue") },
     { path: "/firewall", name: "firewall", component: () => import("@/views/FirewallView.vue") },
+    { path: "/firewall/input", name: "firewall-input", component: () => import("@/views/FirewallInputView.vue") },
     { path: "/nat", name: "nat", component: () => import("@/views/NATView.vue") },
     { path: "/wireguard", name: "wireguard", component: () => import("@/views/WireGuardView.vue") },
     { path: "/gateway-monitors", name: "gateway-monitors", component: () => import("@/views/GatewayMonitorsView.vue") },

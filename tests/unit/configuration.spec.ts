@@ -1,10 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { configSchema, revisionSchema, statisticsSchema } from "@/types/domain";
+import { configSchema, revisionSchema, statisticsSchema, transactionSchema } from "@/types/domain";
 import { decodeJson, encodeJson, utf8Size } from "@/services/json";
-import { differences, endpoint, equalConfig, importConfig, prefix, validateConfig } from "@/services/configuration";
-import { config, statistics } from "../fixtures";
+import { differences, endpoint, equalConfig, importConfig, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
+import { config, statistics, transaction } from "../fixtures";
 
 describe("lossless boundary and import", () => {
+  it("reads and preserves backend host-input policies in transaction candidates", () => {
+    const record = transaction();
+    record.candidate.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [
+      { protocol: "udp", destination_ports: [68], action: "accept" },
+      { action: "accept" },
+    ] }] };
+    expect(transactionSchema.parse(record).candidate.firewall.input).toEqual(record.candidate.firewall.input);
+    expect(importConfig(JSON.stringify(record.candidate)).firewall.input).toEqual(record.candidate.firewall.input);
+  });
+  it("accepts omitted input collections but rejects null collections and unknown input fields", () => {
+    const candidate = config();
+    expect(configSchema.parse({ ...candidate, firewall: { ...candidate.firewall, input: { policy: "drop" } } }).firewall.input).toEqual({ policy: "drop", interfaces: [] });
+    for (const input of [{ policy: "drop", interfaces: null }, { policy: "drop", unknown: true }]) {
+      expect(configSchema.safeParse({ ...candidate, firewall: { ...candidate.firewall, input } }).success).toBe(false);
+    }
+  });
   it.each(["0", "9007199254740993", "18446744073709551615"])("round trips revision %s exactly", revision => {
     const wire = encodeJson({ base_revision: revision, restored_from_revision: revision });
     expect(wire).toBe(`{"base_revision":${revision},"restored_from_revision":${revision}}`);
@@ -32,6 +48,25 @@ describe("lossless boundary and import", () => {
   });
 });
 describe("semantic configuration comparison", () => {
+  it("normalizes host-input entries and ports without reordering rules", () => {
+    const before = config();
+    before.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [
+      { protocol: "tcp", destination_ports: [443, 80], action: "accept" }, { action: "drop" },
+    ] }] };
+    const after = structuredClone(before);
+    after.firewall.input!.interfaces[0]!.rules[0]!.destination_ports!.reverse();
+    expect(equalConfig(before, after)).toBe(true);
+    after.firewall.input!.interfaces[0]!.rules.reverse();
+    expect(differences(before, after).map(change => change.area)).toEqual(["firewall-input"]);
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "firewall.write"]);
+    expect(before.firewall.input.interfaces[0]!.rules[0]!.destination_ports).toEqual([443, 80]);
+  });
+  it("treats null and omitted host-input as equivalent and detects removal", () => {
+    const before = config(), after = config(); after.firewall.input = null;
+    expect(equalConfig(before, after)).toBe(true);
+    before.firewall.input = { policy: "drop", interfaces: [] };
+    expect(differences(before, after)).toContainEqual(expect.objectContaining({ area: "firewall-input", kind: "deleted" }));
+  });
   it("ignores backend-normalized ordering and JSON key order", () => {
     const before = config(), after = config();
     after.interfaces[0]!.addresses.reverse();
@@ -68,6 +103,37 @@ describe("canonical addresses, networks, endpoints", () => {
   });
 });
 describe("inclusive validation limits and dependencies", () => {
+  it("validates host-input references, ports, prefixes and rule limits", () => {
+    const candidate = config();
+    candidate.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ protocol: "udp", destination_ports: [68], action: "accept" }] }] };
+    expect(validateConfig(candidate)).toEqual([]);
+    candidate.interfaces = [];
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.input.interfaces.0.interface", page: "/firewall/input" }));
+    candidate.firewall.input.interfaces[0]!.rules = [{ destination: "192.0.2.1/24", destination_ports: [0, 0, 65536], action: "accept" }];
+    const issues = validateConfig(candidate);
+    for (const suffix of ["destination", "destination_ports", "protocol", "destination_ports.0", "destination_ports.2"]) {
+      expect(issues.some(issue => issue.path === `firewall.input.interfaces.0.rules.0.${suffix}`)).toBe(true);
+    }
+    candidate.firewall.input.interfaces[0]!.rules = Array.from({ length: 65 }, () => ({ action: "accept" as const }));
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.input.interfaces.0.rules" }));
+  });
+  it("allows IPv4 DHCP NAT egress without inventing a static WAN address", () => {
+    const candidate = config(); candidate.interfaces[0]!.addresses = [];
+    candidate.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    expect(validateConfig(candidate).some(issue => issue.path.startsWith("firewall.nat"))).toBe(false);
+    candidate.firewall.nat.masquerade[0]!.family = "ipv6";
+    expect(validateConfig(candidate).some(issue => issue.path.startsWith("firewall.nat"))).toBe(true);
+  });
+  it("matches host-input expansion limits including implicit stateful acceptance", () => {
+    const candidate = config();
+    candidate.interfaces.push({ ...candidate.interfaces[0]!, name: "lan1", addresses: [] });
+    candidate.firewall.input = { policy: "drop", interfaces: ["lab0", "lan1"].map(name => ({
+      interface: name, rules: Array.from({ length: 64 }, () => ({ protocol: "tcp" as const, destination_ports: Array.from({ length: 32 }, (_, index) => index + 1), action: "accept" as const })),
+    })) };
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.input", message: "Input policies expand beyond 4096 entries" }));
+    candidate.firewall.input.interfaces[0]!.rules[0]!.destination_ports.pop();
+    expect(validateConfig(candidate)).toEqual([]);
+  });
   it("accepts a complete valid package including preserved kernel state", () => {
     expect(validateConfig(config(), [], config())).toEqual([]);
   });
