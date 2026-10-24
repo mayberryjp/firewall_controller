@@ -1,15 +1,17 @@
 import { onMounted, onUnmounted, watch } from "vue";
+import { useRoute } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
 
 export function usePolling(): void {
   const store = useControllerStore();
+  const route = useRoute();
   const stops: Array<() => void> = [];
   function schedule(action: () => Promise<void>, interval: () => number, failed: () => boolean, enabled = () => true): void {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false, running = false, failures = 0;
     async function run(): Promise<void> {
       if (stopped || running) return;
-      if (store.connected && document.visibilityState !== "hidden" && enabled()) {
+      if (store.connected && route.path === "/overview" && document.visibilityState !== "hidden" && enabled()) {
         running = true;
         try { await action(); } finally { running = false; }
         failures = failed() ? Math.min(failures + 1, 4) : 0;
@@ -20,9 +22,10 @@ export function usePolling(): void {
     document.addEventListener("visibilitychange", wake);
     window.addEventListener("online", wake);
     const unwatch = watch(() => store.connected, wake);
+    const unwatchRoute = watch(() => route.path, wake);
     void run();
     stops.push(() => {
-      stopped = true; clearTimeout(timer); unwatch();
+      stopped = true; clearTimeout(timer); unwatch(); unwatchRoute();
       document.removeEventListener("visibilitychange", wake); window.removeEventListener("online", wake);
     });
   }

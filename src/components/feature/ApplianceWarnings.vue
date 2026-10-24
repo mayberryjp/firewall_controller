@@ -9,7 +9,7 @@ defineProps<{ service?: ApplianceService }>();
     variant="tonal"
     class="mb-4"
   >
-    NTP changes the whole appliance clock using host networking, slew-only client mode, no NTS. Running is not proof of synchronization; no offsets/sync metrics are exposed. Rollback restores settings, not past clock state.
+    NTP changes the whole appliance clock. Running does not confirm synchronization. Rollback restores settings, not past clock state.
   </v-alert>
   <v-alert
     v-if="!service || service === 'syslog'"
@@ -17,8 +17,7 @@ defineProps<{ service?: ApplianceService }>();
     variant="tonal"
     class="mb-4"
   >
-    Syslog owns whole-appliance system/kernel/internal/backend-file logging using host networking. Disabling or rolling back the managed logger can stop local system logging, not just remote forwarding; arrange an alternative logger.
-    TLS requires trusted certificates. UDP/TCP are unencrypted, UDP is unacknowledged; no durable queue/delivery guarantee. DNS uses IPv4, canonical IPv6 literals select IPv6. Running does not verify capture or delivery.
+    Disabling or rolling back this logger can stop local system logging. TLS requires trusted certificates; UDP/TCP are unencrypted. Running does not confirm log delivery.
   </v-alert>
   <v-alert
     v-if="!service || service === 'vnstat'"
@@ -26,8 +25,6 @@ defineProps<{ service?: ApplianceService }>();
     variant="tonal"
     class="mb-4"
   >
-    vnStat covers all host and managed interfaces, including loopback, unmanaged and dynamic links, with separate PIDs/databases. Inventory/poll/update is 5 seconds; save/rescan 1 minute, so a new manually inserted link may take up to a minute.
-    Never sum overlapping physical/VLAN/veth/loopback interfaces or scopes as device-wide traffic. No HTTP historical metrics exist; database paths are diagnostics, not traffic numbers.
-    Graceful restart/repair preserves history; boot/managed-namespace identity changes select a different database.
+    Host and managed scopes have separate databases. No HTTP historical metrics exist. Repair preserves stored history; namespace identity changes can select a new database.
   </v-alert>
 </template>

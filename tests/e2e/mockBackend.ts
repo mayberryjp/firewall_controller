@@ -1,9 +1,9 @@
 import type { Page } from "@playwright/test";
 import { config, runtime, statistics, transaction, gatewayStatistics } from "../fixtures";
-import type { Config, Transaction, GatewayStatistics } from "../../src/types/domain";
+import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
 
-export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; invalidCredential?: boolean } = {}) {
+export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics } = {}) {
   let committed = options.initialConfig ?? config(), revision = "0";
   const transactions: Record<string, Transaction> = {};
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
@@ -30,20 +30,34 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     let path = url.pathname.replace("/api/v1", "");
     const reply = (value: unknown, status = 200, extraHeaders: Record<string, string> = {}) => route.fulfill({
       status, contentType: "application/json", headers: {
-        "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-store", "Access-Control-Allow-Origin": request.headers().origin ?? "*",
+        "Access-Control-Allow-Credentials": "true",
         ...extraHeaders,
       }, body: encodeJson(value),
     });
     if (request.method() === "OPTIONS") {
       return route.fulfill({ status: 204, headers: {
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": request.headers().origin ?? "*",
+        "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Authorization, Content-Type",
       } });
     }
     if (url.port === "3031") {
       if (path === "/session" && request.method() === "POST") {
-        return reply({ token: "registry-test-session", expires_in: 28800 });
+        return reply({ token: "registry-test-session", expires_in: 28800 }, 200, {
+          "Set-Cookie": "registry_session=registry-test-session; Path=/api/v1/session; HttpOnly; SameSite=Strict; Max-Age=28800",
+        });
+      }
+      if (path === "/session" && request.method() === "GET") {
+        return request.headers().cookie?.includes("registry_session=registry-test-session")
+          ? reply({ token: "registry-test-session", expires_in: 28000 })
+          : reply({ error: "Registry login required" }, 401);
+      }
+      if (path === "/session/logout" && request.method() === "POST") {
+        return reply({ deleted: true }, 200, {
+          "Set-Cookie": "registry_session=; Path=/api/v1/session; HttpOnly; SameSite=Strict; Max-Age=0",
+        });
       }
       if (request.headers().authorization !== "Bearer registry-test-session") {
         return reply({ error: "Registry login required" }, 401, { "X-Registry-Auth-Error": "true" });
@@ -69,8 +83,9 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
           active_transaction: Object.values(transactions).find(item => !["committed", "rolled_back"].includes(item.status)) });
       }
       if (path === "/runtime") return reply(runtimeState());
+      if (path === "/interfaces/discovered") return reply(options.discoveredInterfaces ?? []);
       if (path === "/services/dhcp-relay/status") return reply({ interfaces: runtimeState().dhcp_relay, error: "" });
-      if (path === "/statistics") return reply(statistics());
+      if (path === "/statistics") return reply(options.statistics ?? statistics());
       if (path === "/statistics/gateways") return reply({ sample: statistics().sample, monitors: gatewayRows() });
       if (path.startsWith("/statistics/gateways/")) {
         const row = gatewayRows().find(item => item.name === decodeURIComponent(path.split("/")[3] ?? ""));

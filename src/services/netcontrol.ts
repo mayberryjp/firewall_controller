@@ -1,6 +1,6 @@
 import { request } from "@/services/api";
 import {
-  stateSchema, runtimeSchema, transactionSchema, revisionPageSchema,
+  stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema,
   revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
   applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema,
@@ -10,6 +10,7 @@ import {
 const id = encodeURIComponent;
 export const getState = (signal?: AbortSignal) => request("GET", "/state", stateSchema, undefined, signal);
 export const getRuntime = (signal?: AbortSignal) => request("GET", "/runtime", runtimeSchema, undefined, signal);
+export const getDiscoveredInterfaces = (signal?: AbortSignal) => request("GET", "/interfaces/discovered", discoveredInterfacesSchema, undefined, signal);
 export const getTransactions = (signal?: AbortSignal) => request("GET", "/transactions",
   transactionsSchema, undefined, signal);
 export const getTransaction = (value: string) => request("GET", `/transactions/${id(value)}`, transactionSchema);

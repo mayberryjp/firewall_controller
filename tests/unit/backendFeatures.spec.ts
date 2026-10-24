@@ -5,14 +5,85 @@ import { preset, resourceFields } from "@/services/resourceForms";
 import { decodeJson, encodeJson } from "@/services/json";
 import { config, runtime, transaction } from "../fixtures";
 
+describe("native runtime parent diagnostics", () => {
+  const parent = { name: "eth0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:01", mtu: 1500, up: true, available: true };
+  it.each([[], [parent], null])("accepts the native parents field %j", parents => {
+    const { parent_interfaces: omitted, ...data } = runtime();
+    expect(omitted).toEqual([]);
+    expect(runtimeSchema.parse({ ...data, parents }).parent_interfaces).toEqual(parents ?? []);
+  });
+  it("keeps the documented parent_interfaces field authoritative", () => {
+    expect(runtimeSchema.parse({ ...runtime(), parents: [parent] }).parent_interfaces).toEqual([]);
+    expect(runtimeSchema.safeParse({ ...runtime(), parent_interfaces: "invalid", parents: [] }).success).toBe(false);
+  });
+  it("retains sparse disappeared parents without inventing link details", () => {
+    const { parent_interfaces: omitted, ...data } = runtime();
+    expect(omitted).toEqual([]);
+    const disappeared = { name: "eth0", available: false, error: "adopted parent disappeared" };
+    expect(runtimeSchema.parse({ ...data, parents: [disappeared] }).parent_interfaces).toEqual([disappeared]);
+    expect(runtimeSchema.safeParse({ ...data, parents: [{ ...disappeared, available: true }] }).success).toBe(false);
+  });
+  it("rejects missing or malformed parent diagnostics instead of hiding failures", () => {
+    const { parent_interfaces: omitted, ...data } = runtime();
+    expect(omitted).toEqual([]);
+    expect(runtimeSchema.safeParse(data).success).toBe(false);
+    expect(runtimeSchema.safeParse({ ...data, parents: {} }).success).toBe(false);
+    expect(runtimeSchema.safeParse({ ...data, parents: [{ ...parent, index: "2" }] }).success).toBe(false);
+  });
+});
+
+describe("host Ethernet configuration", () => {
+  it("round-trips inherited unassigned NICs and DHCP/DNS maps", () => {
+    const candidate = config();
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet", role: "unassigned", addresses: ["2001:db8::10/64"] };
+    candidate.dhcp_clients = { lab0: { client_id: "01525400123456", hostname: "appliance", route_metric: 100, use_mtu: false, use_domains: "route" } };
+    candidate.dns = { lab0: { servers: ["192.0.2.53"], domains: [{ name: "example.test", route_only: true }] } };
+    expect(importConfig(encodeJson(candidate))).toEqual(candidate);
+    expect(transactionSchema.parse({ ...transaction(), candidate }).candidate).toEqual(candidate);
+    expect(configSchema.safeParse({ ...candidate, dhcp_clients: null }).success).toBe(false);
+    expect(configSchema.safeParse({ ...candidate, dns: { lab0: { domains: [{ name: "example.test" }] } } }).success).toBe(false);
+  });
+  it("preserves Ethernet settings and supports main-table routes and relay", () => {
+    const candidate = config();
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet" };
+    candidate.interfaces[0].dhcp_relay = { enabled: true, servers: ["198.51.100.10"] };
+    candidate.routes[0]!.table = 254;
+    candidate.policy_rules[0]!.table = 254;
+    expect(configSchema.parse(candidate)).toEqual(candidate);
+    expect(importConfig(encodeJson(candidate))).toEqual(candidate);
+    expect(validateConfig(candidate)).toEqual([]);
+    candidate.policy_rules[0]!.priority = 254;
+    expect(validateConfig(candidate).some(issue => issue.path.endsWith("priority"))).toBe(true);
+  });
+  it("reviews map-only changes and rejects DHCP/static/relay conflicts", () => {
+    const before = config(), candidate = config();
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet" };
+    candidate.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    expect(validateConfig(candidate).some(issue => issue.message.includes("static IPv4"))).toBe(true);
+    candidate.interfaces[0].addresses = ["2001:db8::10/64"];
+    candidate.firewall.nat.masquerade = [];
+    expect(validateConfig(candidate)).toEqual([]);
+    expect(requiredPermissions(differences(before, candidate))).toContain("interfaces.write");
+    expect(serviceRepairPermissions(candidate, "ntp")).toContain("interfaces.write");
+    expect(equalConfig(before, { ...before, dhcp_clients: {}, dns: {} })).toBe(true);
+    const same = structuredClone(candidate);
+    same.dns = { lab0: { servers: ["192.0.2.53"], domains: [{ name: ".", route_only: true }] } };
+    expect(differences(candidate, same).map(change => change.area)).toEqual(["dns"]);
+    expect(requiredPermissions(differences(candidate, same))).toEqual(["transactions.write", "interfaces.write"]);
+    expect(validateConfig(same)).toEqual([]);
+    same.dns.lab0!.domains[0]!.route_only = false;
+    expect(validateConfig(same).some(issue => issue.path.startsWith("dns"))).toBe(true);
+  });
+});
+
 describe("global IPv4 ICMP exception", () => {
-  it.each([undefined, null, true, false])("uses the documented nullish default for %s", value => {
+  it.each([undefined, true, false])("uses the documented omission default for %s", value => {
     const candidate = config();
     const parsed = configSchema.parse({ ...candidate, firewall: { ...candidate.firewall, allow_all_icmp: value } });
     expect(parsed.firewall.allow_all_icmp).toBe(value ?? true);
     expect(importConfig(encodeJson(parsed)).firewall.allow_all_icmp).toBe(value ?? true);
   });
-  it.each(["false", 0, 1, {}, []])("rejects a nonboolean flag %j", value => {
+  it.each([null, "false", 0, 1, {}, []])("rejects a nonboolean flag %j", value => {
     const candidate = config();
     expect(configSchema.safeParse({ ...candidate, firewall: { ...candidate.firewall, allow_all_icmp: value } }).success).toBe(false);
   });
@@ -48,7 +119,7 @@ describe("required explicit WAN/LAN role", () => {
       kind === "wireguard" ? { ...common, wireguard: { key_ref: "key", listen_port: 51820, peers: [] } } : common;
     for (const role of ["wan", "lan"]) expect(interfaceSchema.parse({ ...link, role }).role).toBe(role);
     const field = resourceFields("interfaces", [], [], false, kind, undefined, []).find(item => item.key === "role");
-    expect(field?.choices).toEqual([{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }]);
+    expect(field?.choices).toEqual([{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }, { title: "Unassigned", value: "unassigned" }]);
   });
   it("changes role independently of name and only needs interface permission", () => {
     const before = config(), after = config(); after.interfaces[0]!.role = "wan";

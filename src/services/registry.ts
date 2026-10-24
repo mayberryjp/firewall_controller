@@ -34,6 +34,25 @@ export interface RegistryDeviceInput {
 }
 
 const sessionToken = ref("");
+export const registryDeviceStorageKey = `firewall-controller:${registryApiBaseUrl}:device`;
+
+export function getRememberedRegistryDevice(): string {
+  try {
+    const value = localStorage.getItem(registryDeviceStorageKey);
+    return z.string().uuid().safeParse(value).success ? value! : "";
+  } catch { return ""; }
+}
+
+export function rememberRegistryDevice(value: string): void {
+  try {
+    if (value) localStorage.setItem(registryDeviceStorageKey, value);
+    else localStorage.removeItem(registryDeviceStorageKey);
+  } catch { return; }
+}
+
+class RegistryFailure extends Error {
+  constructor(message: string, public status?: number) { super(message); }
+}
 
 const registry = axios.create({
   baseURL: registryApiBaseUrl,
@@ -56,13 +75,14 @@ export function setRegistrySessionToken(value: string): void {
   sessionToken.value = value;
 }
 
-async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T>, body?: unknown, authenticated = true): Promise<T> {
+async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T>, body?: unknown, authenticated = true, durableSession = false): Promise<T> {
   try {
     const response = await registry.request<unknown>({
       method,
       url: path,
       data: body,
       headers: authenticated ? requestHeaders() : {},
+      withCredentials: durableSession,
     });
     const parsed = schema.safeParse(response.data);
     if (!parsed.success) throw new Error(`Incompatible device registry response: ${parsed.error.message}`);
@@ -70,24 +90,38 @@ async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T
   } catch (error) {
     if (error instanceof Error && !axios.isAxiosError(error)) throw error;
     if (axios.isAxiosError(error)) {
-      if (error.response?.status === 401) logoutRegistry();
+      if (error.response?.status === 401) setRegistrySessionToken("");
       const message = error.response?.data && typeof error.response.data === "object" &&
         "error" in error.response.data && typeof error.response.data.error === "string"
         ? error.response.data.error
         : "Device registry request failed. Check the registry address, availability, and CORS settings.";
-      throw new Error(message);
+      throw new RegistryFailure(message, error.response?.status);
     }
     throw error;
   }
 }
 
 export async function loginRegistry(password: string): Promise<void> {
-  const response = await call("POST", "/session", tokenSchema, { password }, false);
+  const response = await call("POST", "/session", tokenSchema, { password }, false, true);
   setRegistrySessionToken(response.token);
 }
 
-export function logoutRegistry(): void {
+export async function restoreRegistrySession(): Promise<boolean> {
+  if (sessionToken.value) return true;
+  try {
+    const response = await call("GET", "/session", tokenSchema, undefined, false, true);
+    setRegistrySessionToken(response.token);
+    return true;
+  } catch (error) {
+    if (error instanceof RegistryFailure && error.status === 401) return false;
+    throw error;
+  }
+}
+
+export async function logoutRegistry(): Promise<void> {
+  await call("POST", "/session/logout", deletedSchema, {}, false, true);
   setRegistrySessionToken("");
+  rememberRegistryDevice("");
 }
 
 export async function listRegistryDevices(): Promise<RegistryDevice[]> {

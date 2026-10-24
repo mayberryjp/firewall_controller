@@ -1,21 +1,31 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
 import {
   createRegistryDevice, deleteRegistryDevice, getRegistrySessionToken, listRegistryDevices,
-  loginRegistry, logoutRegistry, updateRegistryDevice, type RegistryDevice,
+  loginRegistry, logoutRegistry, restoreRegistrySession, updateRegistryDevice, type RegistryDevice,
 } from "@/services/registry";
 
 const store = useControllerStore(), router = useRouter();
 const route = useRoute();
 const registryPassword = ref("");
+const registryPasswordVisible = ref(false);
 const registryReady = computed(() => Boolean(getRegistrySessionToken()));
 const registryBusy = ref(false);
 const registryError = ref<string | null>(null);
 const devices = ref<RegistryDevice[]>([]);
 const editingId = ref<string | null>(null);
 const deviceForm = reactive({ name: "", address: "", credential: "" });
+
+onMounted(async () => {
+  registryBusy.value = true;
+  try {
+    if (await restoreRegistrySession()) await refreshDevices();
+  } catch (error) {
+    registryError.value = error instanceof Error ? error.message : "Unable to restore registry session";
+  } finally { registryBusy.value = false; }
+});
 
 function resetDeviceForm(): void {
   editingId.value = null;
@@ -34,6 +44,7 @@ async function signIn(): Promise<void> {
   try {
     await loginRegistry(registryPassword.value);
     registryPassword.value = "";
+    registryPasswordVisible.value = false;
     await refreshDevices();
   } catch (error) {
     registryError.value = error instanceof Error ? error.message : "Unable to sign in to the device registry";
@@ -103,12 +114,16 @@ async function connectDevice(device: RegistryDevice): Promise<void> {
   }
 }
 
-function signOut(): void {
-  logoutRegistry();
-  store.disconnect();
-  devices.value = [];
-  registryError.value = null;
-  resetDeviceForm();
+async function signOut(): Promise<void> {
+  registryBusy.value = true; registryError.value = null;
+  try {
+    await logoutRegistry();
+    store.disconnect();
+    devices.value = [];
+    resetDeviceForm();
+  } catch (error) {
+    registryError.value = error instanceof Error ? error.message : "Unable to sign out";
+  } finally { registryBusy.value = false; }
 }
 </script>
 
@@ -117,9 +132,6 @@ function signOut(): void {
     class="connect-panel"
     aria-labelledby="connect-title"
   >
-    <p class="text-overline text-primary mb-2">
-      Isolated lab control plane
-    </p>
     <h1
       id="connect-title"
       class="text-h4 mb-4"
@@ -128,27 +140,28 @@ function signOut(): void {
     </h1>
 
     <template v-if="!registryReady">
-      <p class="mb-6">
-        Sign in to the central device registry to access saved firewall addresses and API keys.
-      </p>
-      <p class="text-body-2 text-medium-emphasis mb-6">
-        Device records and encrypted firewall keys persist on the controller. When connecting, the controller relays
-        firewall API traffic without returning saved keys to the browser.
-      </p>
-      <v-card
-        border
-        class="pa-6"
-      >
+      <div>
         <v-form @submit.prevent="signIn">
           <v-text-field
             v-model="registryPassword"
-            type="password"
+            :type="registryPasswordVisible ? 'text' : 'password'"
             label="Registry admin password"
             autocomplete="current-password"
             :disabled="registryBusy"
-            hint="Device records are stored on the registry server. This login is not saved in the browser."
-            persistent-hint
-          />
+          >
+            <template #append-inner>
+              <v-btn
+                :icon="registryPasswordVisible ? 'mdi-eye-off' : 'mdi-eye'"
+                :aria-label="registryPasswordVisible ? 'Hide password' : 'Show password'"
+                :title="registryPasswordVisible ? 'Hide password' : 'Show password'"
+                :disabled="registryBusy"
+                type="button"
+                variant="text"
+                size="small"
+                @click="registryPasswordVisible = !registryPasswordVisible"
+              />
+            </template>
+          </v-text-field>
           <v-alert
             v-if="registryError"
             role="alert"
@@ -166,7 +179,7 @@ function signOut(): void {
             Sign in
           </v-btn>
         </v-form>
-      </v-card>
+      </div>
     </template>
 
     <template v-else>
@@ -242,13 +255,13 @@ function signOut(): void {
         No firewalls are registered yet.
       </p>
 
-      <v-card
-        border
-        class="pa-6 mt-6"
+      <details
+        :open="Boolean(editingId) || !devices.length"
+        class="mt-6"
       >
-        <h2 class="text-h6 mb-4">
+        <summary class="text-subtitle-2 mb-4">
           {{ editingId ? "Edit firewall" : "Add firewall" }}
-        </h2>
+        </summary>
         <v-form @submit.prevent="saveDevice">
           <v-text-field
             v-model="deviceForm.name"
@@ -261,8 +274,7 @@ function signOut(): void {
             label="Device API address"
             placeholder="https://192.0.2.1:8080"
             autocomplete="url"
-            hint="Origin only. The controller must be able to reach this address."
-            persistent-hint
+            hint="Origin only, reachable from the controller."
             :disabled="registryBusy"
           />
           <v-text-field
@@ -271,8 +283,6 @@ function signOut(): void {
             label="Firewall API key"
             autocomplete="new-password"
             :placeholder="editingId ? 'Leave blank to keep the stored key' : ''"
-            hint="Encrypted at rest. The controller uses the saved key for proxied firewall API requests and does not return it to the browser."
-            persistent-hint
             :disabled="registryBusy"
           />
           <div class="d-flex flex-wrap ga-2 mt-2">
@@ -295,12 +305,7 @@ function signOut(): void {
             </v-btn>
           </div>
         </v-form>
-      </v-card>
-
-      <p class="text-caption text-medium-emphasis mt-5">
-        Device addresses and encrypted keys persist on the controller. After saving a key, firewall API calls are
-        relayed by the controller; the browser uses only the registry session token to connect.
-      </p>
+      </details>
     </template>
   </section>
 </template>

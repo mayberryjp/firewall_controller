@@ -11,10 +11,13 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "vue-tsc -b --pretty false",
+    "typecheck:watch": "vue-tsc -b --watch --pretty false",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test:unit": "vitest run",
-    "test:watch": "vitest",
+    "test:changed": "vitest run --changed",
+    "test:related": "vitest related --run",
+    "test:watch": "vitest --changed",
     "test:e2e": "playwright test"
   },
   "dependencies": {

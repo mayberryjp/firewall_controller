@@ -1,17 +1,22 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { differences } from "@/services/configuration";
-import type { Config } from "@/types/domain";
+import type { ApplianceService, Config } from "@/types/domain";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 import { record } from "@/types/forms";
 import ApplianceWarnings from "@/components/feature/ApplianceWarnings.vue";
 const props = defineProps<{ before: Config; after: Config }>();
 const changes = computed(() => differences(props.before, props.after));
+const changedServices = computed(() => (["ntp", "syslog", "vnstat"] as ApplianceService[]).filter(service => changes.value.some(item => item.area === service)));
 const relayChanged = computed(() => changes.value.some(item => item.area === "interfaces" &&
   (record(record(item.before).dhcp_relay).enabled === true || record(record(item.after).dhcp_relay).enabled === true)));
 </script>
 <template>
-  <ApplianceWarnings v-if="changes.some(item => ['ntp', 'syslog', 'vnstat'].includes(item.area))" />
+  <ApplianceWarnings
+    v-for="service in changedServices"
+    :key="service"
+    :service="service"
+  />
   <v-alert
     v-if="changes.some(item => item.area === 'gateway_monitors')"
     type="info"
@@ -34,7 +39,7 @@ const relayChanged = computed(() => changes.value.some(item => item.area === "in
     variant="tonal"
     class="mb-4"
   >
-    The IPv4 ICMP exception precedes legacy/host/interface drops across input, output and forwarding on all namespace interfaces. ICMPv6 is unchanged; disabling removes exceptions, not a blanket block. Omitted/null flags, including historical snapshots, mean enabled.
+    The IPv4 ICMP exception precedes legacy/host/interface drops across input, output and forwarding on all namespace interfaces. ICMPv6 is unchanged; disabling removes exceptions, not a blanket block. An omitted flag means enabled; null is invalid.
   </v-alert>
   <p
     v-if="!changes.length"
@@ -46,8 +51,7 @@ const relayChanged = computed(() => changes.value.some(item => item.area === "in
     v-else
     class="my-4"
   >
-    {{ changes.length }} changed entities · {{ changes.filter(item => item.kind === "deleted").length }} deletions.
-    Counts are UI entities, not kernel operation counts.
+    {{ changes.length }} changes · {{ changes.filter(item => item.kind === "deleted").length }} removed.
   </p>
   <v-expansion-panels
     variant="accordion"
@@ -66,11 +70,11 @@ const relayChanged = computed(() => changes.value.some(item => item.area === "in
       <v-expansion-panel-text>
         <JsonPanel
           :value="item.before"
-          label="Exact previous value"
+          label="Before"
         />
         <JsonPanel
           :value="item.after"
-          label="Exact next value"
+          label="After"
         />
       </v-expansion-panel-text>
     </v-expansion-panel>

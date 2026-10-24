@@ -4,13 +4,7 @@ import DatasetStatus from "@/components/base/DatasetStatus.vue";
 const store = useControllerStore();
 </script>
 <template>
-  <section>
-    <h1 class="text-h4 mb-4">
-      Adopted parents
-    </h1>
-    <p class="mb-4">
-      Read-only protected inventory. Provisioning/adoption and identity replacement require operator attention outside this UI. Parent MTU/up changes are not owned drift.
-    </p>
+  <section aria-label="Adopted parents">
     <DatasetStatus
       :query="store.runtime"
       label="Runtime / adopted parents"
@@ -31,10 +25,10 @@ const store = useControllerStore();
         >
           <td class="mono">
             {{ parent.name }}
-          </td><td>{{ parent.kind }} / {{ parent.index }}</td><td class="mono">
-            {{ parent.mac }}
+          </td><td>{{ parent.kind ?? "Unknown" }} / {{ parent.index ?? "Unknown" }}</td><td class="mono">
+            {{ parent.mac ?? "Unknown" }}
           </td>
-          <td>{{ parent.mtu }}</td><td>{{ parent.up ? "Admin up" : "Admin down" }}</td><td>{{ parent.available ? "Available" : "Unavailable" }}<p>{{ parent.error }}</p></td>
+          <td>{{ parent.mtu ?? "Unknown" }}</td><td>{{ parent.up === undefined ? "Unknown" : parent.up ? "Admin up" : "Admin down" }}</td><td>{{ parent.available ? "Available" : "Unavailable" }}<p>{{ parent.error }}</p></td>
         </tr><tr v-if="!store.runtime.data.parent_interfaces.length">
           <td colspan="6">
             No adopted parent records.
@@ -44,11 +38,12 @@ const store = useControllerStore();
     </v-table>
     <v-btn
       variant="text"
+      icon="mdi-refresh"
+      aria-label="Refresh parent inventory"
+      title="Refresh parent inventory"
       class="mt-4"
       :loading="store.runtime.loading"
       @click="store.refreshRuntime"
-    >
-      Refresh parent/runtime inventory
-    </v-btn>
+    />
   </section>
 </template>

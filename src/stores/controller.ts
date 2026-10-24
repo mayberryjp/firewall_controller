@@ -9,7 +9,7 @@ import {
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
-import { logoutRegistry } from "@/services/registry";
+import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
 
 export interface Dataset<T> {
   data: T | null;
@@ -126,7 +126,7 @@ export const useControllerStore = defineStore("controller", () => {
   }
   onUnauthorized(() => {
     connected.value = false; connecting.value = false;
-    setApiDevice(""); logoutRegistry(); invalidateReads();
+    setApiDevice(""); setRegistrySessionToken(""); invalidateReads();
     authError.value = "Registry session expired (401). Sign in again; your in-memory draft is preserved.";
   });
   async function connect(deviceId: string): Promise<boolean> {
@@ -141,10 +141,12 @@ export const useControllerStore = defineStore("controller", () => {
       return false;
     }
     connected.value = true; connecting.value = false;
+    rememberRegistryDevice(deviceId);
     void Promise.all([refreshState(), refreshRuntime(), refreshRevisions()]).then(settleSubmitted);
     return connected.value;
   }
   function disconnect(): void {
+    rememberRegistryDevice("");
     setApiDevice(""); connected.value = false; invalidateReads();
     allDatasets.forEach((query) => { query.data = null; query.error = null; query.lastSuccess = null; query.incompatible = false; });
     draft.value = null; baseline.value = null; baseRevision.value = null; submitted.value = null;

@@ -18,6 +18,15 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("reads discovered NICs without converting null simulator identity or hiding errors", async () => {
+    const inventory = [{ name: "eth0", kind: "ethernet", index: null, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged" }];
+    body = encodeJson(inventory);
+    expect(await net.getDiscoveredInterfaces()).toEqual(inventory);
+    expect(captured?.url).toBe("/interfaces/discovered");
+    expect(captured?.method).toBe("get");
+    body = "null";
+    await expect(net.getDiscoveredInterfaces()).rejects.toThrow(/Incompatible API response/);
+  });
   it("targets the selected device through the registry with no cache/cookies or redirects", () => {
     expect(api.defaults.baseURL).toBe(`${registryApiBaseUrl}/devices/${deviceId}/proxy`);
     expect(api.defaults.timeout).toBe(80_000);

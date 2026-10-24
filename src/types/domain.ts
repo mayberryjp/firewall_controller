@@ -17,16 +17,22 @@ export const dhcpRelaySchema = z.object({
   enabled: z.boolean().default(false), servers: list(z.string()).default([]),
 }).strict().default({ enabled: false, servers: [] });
 const interfaceFields = {
-  name: z.string(), role: z.enum(["wan", "lan"]), mtu: integer, up: z.boolean(), addresses: list(z.string()),
+  name: z.string(), role: z.enum(["wan", "lan", "unassigned"]), mtu: integer, up: z.boolean(), addresses: list(z.string()),
   dhcp_relay: dhcpRelaySchema,
 };
 export const interfaceSchema = z.discriminatedUnion("kind", [
+  z.object({ ...interfaceFields, kind: z.literal("ethernet") }).strict(),
   z.object({ ...interfaceFields, kind: z.literal("dummy") }).strict(),
   z.object({ ...interfaceFields, kind: z.literal("vlan"),
     vlan: z.object({ parent: z.string(), id: integer }).strict() }).strict(),
   z.object({ ...interfaceFields, kind: z.literal("wireguard"),
     wireguard: z.object({ key_ref: z.string(), listen_port: integer, peers: list(peerSchema) }).strict() }).strict(),
 ]);
+export const discoveredInterfacesSchema = z.array(z.object({
+  name: z.string(), kind: z.string(), index: integer.nullable(), mac: z.string().nullable(),
+  mtu: integer, up: z.boolean(), addresses: z.array(z.string()), ownership: z.enum(["managed", "unmanaged", "loopback"]),
+}));
+export type DiscoveredInterface = z.infer<typeof discoveredInterfacesSchema>[number];
 export const routeSchema = z.object({
   destination: z.string(), gateway: optionalText, interface: z.string(), table: integer, metric: integer,
 }).strict();
@@ -74,10 +80,19 @@ export const syslogSchema = z.object({
   enabled: z.boolean().default(false), servers: list(syslogServerSchema).default([]),
 }).strict().default({ enabled: false, servers: [] });
 export const vnstatSchema = z.object({ enabled: z.boolean().default(false) }).strict().default({ enabled: false });
+export const dhcpClientSchema = z.object({
+  client_id: z.string().default(""), hostname: z.string().default(""),
+  route_metric: integer.min(0).max(4294967295).default(0), use_mtu: z.boolean().default(false),
+  use_domains: z.enum(["no", "route", "yes"]).default("no"),
+}).strict();
+export const dnsConfigSchema = z.object({
+  servers: z.array(z.string()).default([]),
+  domains: z.array(z.object({ name: z.string(), route_only: z.boolean() }).strict()).default([]),
+}).strict();
 export const configSchema = z.object({
   interfaces: list(interfaceSchema), routes: list(routeSchema), policy_rules: list(policySchema),
   firewall: z.object({
-    allow_all_icmp: z.boolean().nullish().transform(value => value ?? true),
+    allow_all_icmp: z.boolean().default(true),
     policy: z.enum(["accept", "drop"]), rules: list(filterSchema),
     nat: z.object({ masquerade: list(masqueradeSchema) }).strict(),
     policies: firewallPoliciesSchema.nullable().optional(),
@@ -85,6 +100,7 @@ export const configSchema = z.object({
   softflowd: list(softflowdSchema),
   gateway_monitors: list(gatewayMonitorSchema).default([]),
   ntp: ntpSchema, syslog: syslogSchema, vnstat: vnstatSchema,
+  dhcp_clients: z.record(dhcpClientSchema).optional(), dns: z.record(dnsConfigSchema).optional(),
   // The backend added kernel settings after FRONTEND_SPEC; preserve, but do not edit them.
   kernel: kernelSchema.optional(),
 }).strict();
@@ -108,8 +124,14 @@ export const stateSchema = z.object({
   if (value.observed === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ["observed"], message: "Observed diagnostics must be present" });
 });
 export const parentSchema = z.object({
-  name: z.string(), kind: z.string(), index: integer, mac: z.string(),
-  mtu: integer, up: z.boolean(), available: z.boolean(), error: optionalText,
+  name: z.string(), kind: optionalText, index: integer.optional(), mac: optionalText,
+  mtu: integer.optional(), up: z.boolean().optional(), available: z.boolean(), error: optionalText,
+}).superRefine((value, context) => {
+  if (value.available) {
+    for (const field of ["kind", "index", "mac", "mtu", "up"] as const) {
+      if (value[field] === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "Required for an available parent" });
+    }
+  }
 });
 export const serviceStatusSchema = z.object({
   name: z.string(), state: z.string(), pid: integer.optional(),
@@ -145,11 +167,26 @@ export const applianceStatusSchema = z.object({
   database_directory: optionalText, error: optionalText,
 });
 export const applianceStatusPageSchema = z.object({ instances: list(applianceStatusSchema), error: optionalText });
-export const runtimeSchema = z.object({
+export const runtimeSchema = z.preprocess(value => {
+  if (value && typeof value === "object" && !Array.isArray(value) &&
+      !("parent_interfaces" in value) && "parents" in value) {
+    return { ...value, parent_interfaces: value.parents };
+  }
+  return value;
+}, z.object({
   parent_interfaces: list(parentSchema), softflowd: list(serviceStatusSchema), error: optionalText,
   dhcp_relay: list(dhcpRelayStatusSchema),
   gateway_monitors: list(gatewayStatisticsSchema), appliance_services: list(applianceStatusSchema),
-});
+  dhcp_clients: z.object({
+    leases: z.record(z.object({
+      client: dhcpClientSchema, address: z.string(), server: z.string(),
+      acquired_at: z.number().finite().nonnegative(), lifetime: z.number().finite().nonnegative(),
+      renewal: z.number().finite().nonnegative(), rebinding: z.number().finite().nonnegative(),
+      routes: z.array(routeSchema), dns: z.array(z.string()), domain: z.string(),
+      mtu: integer.min(1280).max(65535).nullable(),
+    })), errors: z.record(z.string()),
+  }).optional(),
+}));
 const metadata = {
   revision: revisionSchema, current: z.boolean(), transaction_id: optionalText,
   submitted_at: timestamp.nullable(), committed_at: timestamp.nullable(),

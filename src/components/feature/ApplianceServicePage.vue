@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onUnmounted, ref, watch, toRef } from "vue";
 import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
 import { ntpSchema, syslogSchema, vnstatSchema, type ApplianceService } from "@/types/domain";
@@ -8,14 +7,13 @@ import { record, type Field } from "@/types/forms";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import FieldInput from "@/components/base/FieldInput.vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
-import JsonPanel from "@/components/base/JsonPanel.vue";
 import ServiceRepair from "@/components/feature/ServiceRepair.vue";
-import ApplianceWarnings from "@/components/feature/ApplianceWarnings.vue";
-const route = useRoute(), store = useControllerStore();
-const service = computed<ApplianceService>(() => route.path.endsWith("/ntp") ? "ntp" : route.path.endsWith("/syslog") ? "syslog" : "vnstat");
+const props = defineProps<{ service: ApplianceService }>();
+const store = useControllerStore();
+const service = toRef(props, "service");
 const titles = { ntp: "Appliance NTP", syslog: "Appliance syslog", vnstat: "Dual-scope vnStat" };
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
-const editing = computed(() => store.draft ?? store.state.data?.desired);
+const editing = computed(() => store.draft ?? stored.value);
 const form = ref<Record<string, unknown>>({}), initial = ref(""), error = ref(""), errors = ref<Record<string, string[]>>({});
 const fields = computed<Field[]>(() => [
   { key: "enabled", label: "Desired enabled", kind: "switch" },
@@ -63,16 +61,13 @@ const statusRows = computed(() => statusNames.value.map(name => ({
   name, status: store.runtime.data?.appliance_services.find(item => item.name === name),
 })));
 const statusLabels: Record<string, string> = {
-  disabled: "Disabled", simulated: "Simulated; no real clock/logging/history activity", unavailable: "Unavailable", not_running: "Not running",
-  running: "Running; local readiness only", unhealthy: "Unhealthy", exited: "Exited",
+  disabled: "Disabled", simulated: "Simulated", unavailable: "Unavailable", not_running: "Not running",
+  running: "Running", unhealthy: "Unhealthy", exited: "Exited",
 };
+const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?.error));
 </script>
 <template>
-  <section>
-    <h1 class="text-h4 mb-4">
-      {{ titles[service] }}
-    </h1>
-    <ApplianceWarnings :service="service" />
+  <section :aria-label="titles[service]">
     <DatasetStatus
       :query="store.state"
       label="Committed desired configuration"
@@ -95,11 +90,16 @@ const statusLabels: Record<string, string> = {
     >
       {{ store.readOnlyReason }}
     </v-alert>
-    <p class="mb-4">
-      Stored committed/pending enabled: {{ stored?.[service].enabled ?? "Unknown" }}. Form shows shared draft settings when a draft exists. Failed processes never overwrite desired enabled or create drift by themselves.
-    </p>
     <v-table class="mb-5">
-      <thead><tr><th>Instance</th><th>Scope</th><th>State</th><th>PID / started</th><th>Database diagnostics</th><th>Error</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Instance</th><th>Scope</th><th>Status</th><th>PID</th><th v-if="service === 'vnstat'">
+            Database
+          </th><th v-if="hasRuntimeErrors">
+            Error
+          </th>
+        </tr>
+      </thead>
       <tbody>
         <tr
           v-for="{ name, status } in statusRows"
@@ -107,21 +107,26 @@ const statusLabels: Record<string, string> = {
         >
           <td>{{ name }}</td>
           <td>{{ status?.scope ?? "Unknown" }}</td>
-          <td>{{ status ? statusLabels[status.state] ?? `Unknown (${status.state})` : "Unknown (no runtime data)" }}</td>
-          <td>{{ status?.pid ?? "Unavailable" }} / {{ status?.started_at ?? "Unknown" }}</td>
-          <td class="mono">
+          <td>{{ status ? statusLabels[status.state] ?? `Unknown (${status.state})` : "Unknown" }}</td>
+          <td :title="status?.started_at ?? undefined">
+            {{ status?.pid ?? "—" }}
+          </td>
+          <td
+            v-if="service === 'vnstat'"
+            class="mono"
+          >
             {{ status?.database_directory ?? "Unavailable" }}
           </td>
-          <td role="status">
-            {{ status?.error ?? "None reported" }}
+          <td
+            v-if="hasRuntimeErrors"
+            role="status"
+          >
+            {{ status?.error ?? "—" }}
           </td>
         </tr>
       </tbody>
     </v-table>
     <ServiceRepair :service="service" />
-    <h2 class="text-h5 my-4">
-      Stage settings into complete shared draft
-    </h2>
     <v-alert
       v-if="error"
       type="error"
@@ -160,21 +165,5 @@ const statusLabels: Record<string, string> = {
         Review changes
       </v-btn>
     </div>
-    <p class="mb-4">
-      Requires transactions.write and {{ service }}.write. Editing/staging sends no write. Disabled lists stay retained and validated. Apply/confirm/rollback/restore use the complete package and server-authorized lifecycle.
-    </p>
-    <JsonPanel
-      :value="store.state.data?.desired[service]"
-      label="Committed desired service settings"
-    />
-    <JsonPanel
-      v-if="store.draft"
-      :value="store.draft[service]"
-      label="Shared draft service settings"
-    />
-    <h2 class="text-h6 mt-6 mb-3">
-      Operator prerequisites
-    </h2>
-    <p>Trusted chronyd/syslog-ng/vnstatd/vnstat packages and explicit binary paths, -allow-host-services, exclusive host ownership, namespace/clock/kernel-log privileges, backend log source, trust bundle and host DNS/routes are operator responsibilities. Stop competing clock/logging daemons before use. No arbitrary host commands, package installation or OpenRC management are exposed here. Simulation never changes time or creates real history.</p>
   </section>
 </template>

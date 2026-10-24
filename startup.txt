@@ -1,0 +1,86 @@
+LOCAL DEVELOPMENT STARTUP (NO DOCKER)
+=====================================
+Run all commands from the firewall_controller project folder in PowerShell.
+Requires Node.js 22+ and Python. Keep two terminals open.
+
+ONE-TIME DEPENDENCY INSTALLATION
+------------------------------
+npm ci
+python -m pip install -r registry/requirements.txt
+
+FIRST-TIME CREDENTIAL SETUP
+--------------------------
+Run this only if .env does not already exist:
+
+if (-not (Test-Path .env)) {
+  $securePassword = Read-Host "Registry password (at least 16 characters)" -AsSecureString
+  $adminPassword = [System.Net.NetworkCredential]::new("", $securePassword).Password
+  $encryptionKey = python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+  @(
+    "REGISTRY_ADMIN_PASSWORD=$adminPassword"
+    "REGISTRY_ENCRYPTION_KEY=$encryptionKey"
+  ) | Set-Content .env
+}
+
+If .env already exists, ensure it contains REGISTRY_ADMIN_PASSWORD and
+REGISTRY_ENCRYPTION_KEY. Never replace an encryption key used by an existing
+registry database. Keep .env private and back up its encryption key securely.
+
+TERMINAL 1: START THE REGISTRY (EACH SESSION)
+------------------------------------------
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^(REGISTRY_ADMIN_PASSWORD|REGISTRY_ENCRYPTION_KEY|REGISTRY_UI_ORIGINS)=(.*)$') {
+    $name = $Matches[1]
+    $value = $Matches[2]
+    if ($value.Length -ge 2 -and (
+      ($value.StartsWith("'") -and $value.EndsWith("'")) -or
+      ($value.StartsWith('"') -and $value.EndsWith('"'))
+    )) {
+      $value = $value.Substring(1, $value.Length - 2)
+    }
+    Set-Item "Env:$name" $value
+  }
+}
+
+$env:REGISTRY_PORT = "3031"
+$env:REGISTRY_DB_PATH = "$PWD\registry-local.sqlite3"
+
+python registry/server.py
+
+After changing .env or the loader above, stop the registry with Ctrl+C and
+rerun all Terminal 1 commands. Matching outer quotes in .env are not part of
+the password. Enter only the password itself on the sign-in page.
+
+TERMINAL 2: START THE FRONTEND (EACH SESSION)
+------------------------------------------
+npm run dev
+
+OPEN AND CONNECT
+----------------
+Open http://localhost:3030/connect and sign in with your registry password.
+Add the firewall's name, API origin (scheme, hostname/IP and port, no path),
+and networking API key. Save, then click Connect.
+
+Your Netcontrol firewall backend must run separately. If it runs on this
+Windows machine at port 8080, use http://localhost:8080 as its API address.
+For a remote dev firewall, use its reachable IP/hostname and API port.
+Device-account login cookies are not networking API keys.
+
+DAILY NOTES
+-----------
+- Frontend edits hot-reload automatically.
+- Restart the Python process after registry code edits.
+- Press Ctrl+C in each terminal to stop the services.
+- Saved firewall connections persist in registry-local.sqlite3.
+- Registry login survives refresh for up to eight hours; sign out to end it.
+- Only the selected firewall ID is saved in browser storage; drafts remain in memory.
+- For another frontend address, set REGISTRY_UI_ORIGINS to its exact origin
+  (for example https://controller.example). Restart the registry after changing it.
+- Keep the database and its related SQLite files private and out of Git.
+- A new local database does not automatically contain Docker registry entries.
+- The registry binds to all network interfaces; restrict port 3031 with
+  Windows Firewall. Use HTTPS before exposing services beyond a trusted lab.
+- If Docker services already occupy these ports, stop them first:
+  docker compose stop frontend registry
+- Review staged changes before applying. Verify connectivity before confirming
+  a provisional firewall change; keep console/out-of-band access available.

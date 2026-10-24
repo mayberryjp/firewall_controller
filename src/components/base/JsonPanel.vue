@@ -1,9 +1,57 @@
 <script setup lang="ts">
-defineProps<{ value: unknown; label?: string }>();
+import { computed } from "vue";
+const props = defineProps<{ value: unknown; label?: string }>();
+function fields(value: unknown, path = ""): Array<{ label: string; value: string }> {
+  if (Array.isArray(value) && value.some(item => item !== null && typeof item === "object")) {
+    return value.flatMap((item, index) => fields(item, `${path} ${index + 1}`.trim()));
+  }
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const entries = Object.entries(value);
+    if (entries.length) return entries.flatMap(([key, item]) => fields(item, [path, key.replaceAll("_", " ")].filter(Boolean).join(" / ")));
+  }
+  const display = value === null || value === undefined ? "Unavailable" : Array.isArray(value) ? value.map(String).join(", ") || "None" : typeof value === "boolean" ? value ? "Yes" : "No" : String(value) || "None";
+  return [{ label: (path || "Value").replace(/^./, letter => letter.toUpperCase()), value: display }];
+}
+const rows = computed(() => fields(props.value));
 </script>
 <template>
-  <details class="json-panel">
-    <summary>{{ label || "Read-only JSON" }}</summary>
-    <pre>{{ JSON.stringify(value, null, 2) }}</pre>
+  <details class="data-details">
+    <summary>{{ label || "Details" }}</summary>
+    <dl>
+      <template
+        v-for="row in rows"
+        :key="row.label"
+      >
+        <dt>{{ row.label }}</dt>
+        <dd>{{ row.value }}</dd>
+      </template>
+    </dl>
   </details>
 </template>
+
+<style scoped>
+.data-details {
+  margin-block: 8px;
+  min-width: 0;
+}
+summary {
+  cursor: pointer;
+  padding-block: 8px;
+}
+dl {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr);
+  gap: 8px 16px;
+  padding-block: 8px;
+  font-size: 13px;
+}
+dt {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>

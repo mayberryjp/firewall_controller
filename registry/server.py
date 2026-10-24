@@ -17,6 +17,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from contextlib import contextmanager
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -24,6 +25,7 @@ from urllib.parse import urlsplit
 from cryptography.fernet import Fernet, InvalidToken
 
 SESSION_LIFETIME_SECONDS = 8 * 60 * 60
+SESSION_COOKIE_NAME = "registry_session"
 MAX_BODY_BYTES = 64 * 1024
 MAX_PROXY_BODY_BYTES = 1024 * 1024
 PROXY_TIMEOUT_SECONDS = 95
@@ -258,6 +260,36 @@ def make_server(
     class Handler(BaseHTTPRequestHandler):
         server_version = "DeviceRegistry"
 
+        def _session_origin_allowed(self) -> bool:
+            origin = self.headers.get("Origin")
+            allowed = {
+                value.strip() for value in os.environ.get(
+                    "REGISTRY_UI_ORIGINS", "http://localhost:3030,http://127.0.0.1:3030"
+                ).split(",") if value.strip()
+            }
+            scheme = "https" if isinstance(self.connection, ssl.SSLSocket) else "http"
+            allowed.add(f"{scheme}://{self.headers.get('Host', '')}")
+            return origin in allowed if origin else self.headers.get("Sec-Fetch-Site") != "cross-site"
+
+        def _session_cookie(self, token: str, lifetime: int) -> str:
+            cookie = SimpleCookie()
+            cookie[SESSION_COOKIE_NAME] = token
+            cookie[SESSION_COOKIE_NAME]["httponly"] = True
+            cookie[SESSION_COOKIE_NAME]["samesite"] = "Strict"
+            cookie[SESSION_COOKIE_NAME]["path"] = "/api/v1/session"
+            cookie[SESSION_COOKIE_NAME]["max-age"] = lifetime
+            if isinstance(self.connection, ssl.SSLSocket) or self.headers.get("Origin", "").startswith("https://"):
+                cookie[SESSION_COOKIE_NAME]["secure"] = True
+            return cookie.output(header="").strip()
+
+        def _cookie_token(self) -> str:
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except CookieError:
+                return ""
+            return cookie[SESSION_COOKIE_NAME].value if SESSION_COOKIE_NAME in cookie else ""
+
         def _send_raw(
             self,
             status: int,
@@ -269,7 +301,13 @@ def make_server(
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             if self.path.startswith("/api/v1/"):
-                self.send_header("Access-Control-Allow-Origin", "*")
+                if urlsplit(self.path).path.startswith("/api/v1/session"):
+                    if self._session_origin_allowed():
+                        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "null"))
+                        self.send_header("Access-Control-Allow-Credentials", "true")
+                    self.send_header("Vary", "Origin")
+                else:
+                    self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Access-Control-Expose-Headers", "WWW-Authenticate, X-Registry-Auth-Error")
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
@@ -418,6 +456,21 @@ def make_server(
                 self._send(200, {"status": "ok"})
                 return
             path = urlsplit(self.path).path
+            if path == "/api/v1/session":
+                if not self._session_origin_allowed():
+                    self._send(403, {"error": "Registry session origin is not allowed"})
+                    return
+                token = self._cookie_token()
+                if not self.registry.verify_session(token):
+                    self._send(401, {"error": "Registry login required"}, {
+                        "X-Registry-Auth-Error": "true",
+                        "Set-Cookie": self._session_cookie("", 0),
+                    })
+                    return
+                payload = json.loads(decode_token(token.split(".", 1)[0]))
+                remaining = max(1, int(payload["exp"] - time.time()))
+                self._send(200, {"token": token, "expires_in": remaining})
+                return
             proxy_match = re.fullmatch(r"/api/v1/devices/([0-9a-fA-F-]{36})/proxy(/.*)", path)
             if proxy_match is not None:
                 self._proxy("GET", proxy_match.group(1), proxy_match.group(2))
@@ -439,6 +492,10 @@ def make_server(
         def do_POST(self) -> None:
             try:
                 path = urlsplit(self.path).path
+                if path.startswith("/api/v1/session") and not self._session_origin_allowed():
+                    self.close_connection = True
+                    self._send(403, {"error": "Registry session origin is not allowed"}, {"Connection": "close"})
+                    return
                 proxy_match = re.fullmatch(r"/api/v1/devices/([0-9a-fA-F-]{36})/proxy(/.*)", path)
                 if proxy_match is not None:
                     self._proxy("POST", proxy_match.group(1), proxy_match.group(2))
@@ -446,7 +503,12 @@ def make_server(
                 body = self._body()
                 if path == "/api/v1/session":
                     token = self.registry.authenticate_password(body.get("password"), self.client_address[0])
-                    self._send(200, {"token": token, "expires_in": SESSION_LIFETIME_SECONDS})
+                    self._send(200, {"token": token, "expires_in": SESSION_LIFETIME_SECONDS}, {
+                        "Set-Cookie": self._session_cookie(token, SESSION_LIFETIME_SECONDS),
+                    })
+                    return
+                if path == "/api/v1/session/logout":
+                    self._send(200, {"deleted": True}, {"Set-Cookie": self._session_cookie("", 0)})
                     return
                 if not self._authorized():
                     self._send(401, {"error": "Registry login required"}, {"X-Registry-Auth-Error": "true"})

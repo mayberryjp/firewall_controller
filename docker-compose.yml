@@ -1,11 +1,10 @@
 services:
   frontend:
-    image: firewall-controller:dev
+    image: mayberry4477/firewall-controller:latest
     ports:
       - "3030:80"
   registry:
-    build: ./registry
-    image: firewall-controller-registry:dev
+    image: mayberry4477/firewall-controller-registry:latest
     ports:
       - "3031:8080"
     environment:
@@ -14,6 +13,7 @@ services:
       REGISTRY_DB_PATH: /data/registry.sqlite3
       REGISTRY_TLS_CERT: ${REGISTRY_TLS_CERT:-}
       REGISTRY_TLS_KEY: ${REGISTRY_TLS_KEY:-}
+      REGISTRY_UI_ORIGINS: ${REGISTRY_UI_ORIGINS:-http://localhost:3030,http://127.0.0.1:3030}
     volumes:
       - registry-data:/data
       - ./registry-certs:/certs:ro

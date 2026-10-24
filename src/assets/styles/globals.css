@@ -5,7 +5,126 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--app-font-family);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.v-application {
+  font-family: var(--app-font-family);
+  letter-spacing: 0;
+}
+
+.app-header {
+  border-bottom: 0 !important;
+  box-shadow: none !important;
+}
+
+.product-branding {
+  margin-top: 5px;
+  height: 48px;
+  min-width: 0;
+}
+
+.product-name {
+  color: #53cdba;
+  font-weight: 700;
+  text-align: start;
+  line-height: 1.4;
+  letter-spacing: 0 !important;
+  white-space: nowrap;
+}
+
+.product-bar,
+.tagline-text {
+  color: #f5a623;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.product-bar {
+  margin-inline: 8px;
+}
+
+.tagline {
+  display: none;
+}
+
+.navigation-trigger {
+  text-transform: capitalize;
+  color: #b1b8c0;
+  font-size: 16px !important;
+  font-weight: 400;
+  letter-spacing: 0 !important;
+}
+
+.mobile-navigation {
+  width: 340px;
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+}
+
+.mobile-navigation .v-list-group__items .v-list-item {
+  padding-inline-start: 24px !important;
+}
+
+.navigation-menu {
+  min-width: 228px;
+  max-width: calc(100vw - 24px);
+  border: var(--app-border);
+  border-radius: 8px !important;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%) !important;
+}
+
+.navigation-menu .v-list-item-title {
+  font-size: 14px;
+  white-space: normal;
+}
+
+.v-card,
+.v-table {
+  border-color: var(--border);
+}
+
+.v-application .text-h4 {
+  font-size: 24px !important;
+  font-weight: 700;
+  letter-spacing: 0 !important;
+}
+
+.v-application .text-h5 {
+  font-size: 20px !important;
+  font-weight: 600;
+  letter-spacing: 0 !important;
+}
+
+@media (min-width: 1500px) {
+  .tagline {
+    display: inline;
+  }
+}
+
+@media (max-width: 599px) {
+  .product-branding {
+    flex: 1;
+  }
+
+  .product-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .product-branding .v-icon {
+    flex-shrink: 0;
+  }
+
+  .compact-branding .product-name {
+    display: none;
+  }
 }
 
 .app-content {
@@ -63,6 +182,23 @@ body {
 .connect-panel {
   max-width: 680px;
   margin: 48px auto;
+}
+
+.record-metadata {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.record-metadata dt {
+  color: var(--text-secondary);
+}
+
+.record-metadata dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .transaction-actions .v-btn,

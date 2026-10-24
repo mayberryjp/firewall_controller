@@ -38,8 +38,8 @@ function move(index: number, delta: number): void {
     :label="field.label"
     :type="field.kind === 'number' ? 'number' : 'text'"
     :disabled="field.disabled"
-    :hint="field.hint"
-    :persistent-hint="Boolean(field.hint)"
+    :title="field.hint"
+    hide-details="auto"
     :error-messages="errors?.[path]"
     @update:model-value="emit('update:modelValue', field.kind === 'number' && $event !== '' && $event !== null ? Number($event) : ($event ?? ''))"
   />
@@ -49,8 +49,8 @@ function move(index: number, delta: number): void {
     :model-value="modelValue === true"
     :label="field.label"
     :disabled="field.disabled"
-    :hint="field.hint"
-    :persistent-hint="Boolean(field.hint)"
+    :title="field.hint"
+    hide-details="auto"
     :error-messages="errors?.[path]"
     @update:model-value="emit('update:modelValue', Boolean($event))"
   />
@@ -61,8 +61,8 @@ function move(index: number, delta: number): void {
     :label="field.label"
     :items="field.choices"
     :disabled="field.disabled"
-    :hint="field.hint"
-    :persistent-hint="Boolean(field.hint)"
+    :title="field.hint"
+    hide-details="auto"
     :error-messages="errors?.[path]"
     @update:model-value="emit('update:modelValue', $event)"
   />
@@ -73,8 +73,8 @@ function move(index: number, delta: number): void {
     :label="field.label"
     rows="3"
     auto-grow
-    :hint="field.hint || 'One value per line. Values are validated, never silently canonicalized.'"
-    persistent-hint
+    :title="field.hint"
+    hide-details="auto"
     :error-messages="errors?.[path]"
     :disabled="field.disabled"
     @update:model-value="updateLines(String($event))"
@@ -101,15 +101,11 @@ function move(index: number, delta: number): void {
     class="field-group"
   >
     <legend>{{ field.label }}</legend>
-    <v-card
+    <div
       v-for="(row, index) in rows"
       :key="rowIDs[index]"
-      border
-      class="pa-4 mb-4"
+      class="field-row mb-4"
     >
-      <p class="text-subtitle-2 mb-3">
-        {{ field.label }} · {{ index + 1 }}
-      </p>
       <FieldInput
         v-for="child in field.fields"
         :key="child.key"
@@ -121,32 +117,35 @@ function move(index: number, delta: number): void {
       />
       <div class="d-flex flex-wrap ga-2">
         <v-btn
+          icon="mdi-arrow-up"
+          variant="text"
           size="small"
+          :title="`Move ${field.label} ${index + 1} up`"
           :aria-label="`Move ${field.label} ${index + 1} up`"
           :disabled="field.disabled || index === 0"
           @click="move(index, -1)"
-        >
-          Move up
-        </v-btn>
+        />
         <v-btn
+          icon="mdi-arrow-down"
+          variant="text"
           size="small"
+          :title="`Move ${field.label} ${index + 1} down`"
           :aria-label="`Move ${field.label} ${index + 1} down`"
           :disabled="field.disabled || index === rows.length - 1"
           @click="move(index, 1)"
-        >
-          Move down
-        </v-btn>
+        />
         <v-btn
+          icon="mdi-delete-outline"
+          variant="text"
           size="small"
           color="error"
+          :title="`Remove ${field.label} ${index + 1}`"
           :disabled="field.disabled"
           :aria-label="`Remove ${field.label} ${index + 1}`"
           @click="remove(index)"
-        >
-          Remove
-        </v-btn>
+        />
       </div>
-    </v-card>
+    </div>
     <p
       v-if="!rows.length"
       class="mb-3"
@@ -154,6 +153,7 @@ function move(index: number, delta: number): void {
       No {{ field.label.toLowerCase() }}.
     </p>
     <v-btn
+      prepend-icon="mdi-plus"
       size="small"
       :disabled="field.disabled"
       @click="emit('update:modelValue', [...rows, field.create?.()])"
@@ -162,3 +162,10 @@ function move(index: number, delta: number): void {
     </v-btn>
   </fieldset>
 </template>
+
+<style scoped>
+.field-row {
+  padding-bottom: 12px;
+  border-bottom: var(--app-border);
+}
+</style>

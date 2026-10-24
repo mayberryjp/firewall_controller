@@ -14,6 +14,13 @@ export function stableJson(value: unknown): string {
 
 export function normalize(config: Config): Config {
   const result = cloneConfig(config);
+  for (const area of ["dhcp_clients", "dns"] as const) {
+    if (!Object.keys(result[area] ?? {}).length) delete result[area];
+  }
+  for (const settings of Object.values(result.dns ?? {})) {
+    settings.servers.sort();
+    settings.domains.sort((first, second) => first.name.localeCompare(second.name));
+  }
   result.interfaces.sort((a, b) => a.name.localeCompare(b.name));
   for (const link of result.interfaces) {
     link.addresses.sort();
@@ -92,6 +99,9 @@ export function differences(before: Config, after: Config): Difference[] {
     });
   }
   named("interfaces", old.interfaces, next.interfaces, (item) => item.name);
+  for (const area of ["dhcp_clients", "dns"] as const) {
+    named(area, Object.entries(old[area] ?? {}), Object.entries(next[area] ?? {}), item => item[0]);
+  }
   named("routes", old.routes, next.routes, (item) => `${item.table}/${item.destination}/${item.metric}`);
   named("policy-rules", old.policy_rules, next.policy_rules, (item) => String(item.priority));
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
@@ -167,7 +177,8 @@ export function selectedRelayPrefix(link: Pick<ManagedInterface, "addresses">): 
 }
 export function serviceRepairPermissions(config: Config, service: RepairService): string[] {
   const permissions = ["state.read", "transactions.write"];
-  if (service === "dhcp-relay" || config.interfaces.some(link => link.dhcp_relay.enabled)) permissions.push("interfaces.write");
+  if (service === "dhcp-relay" || config.interfaces.some(link => link.dhcp_relay.enabled) ||
+      Object.keys(config.dhcp_clients ?? {}).length || Object.keys(config.dns ?? {}).length) permissions.push("interfaces.write");
   if (service === "softflowd" || config.softflowd.some(item => item.enabled)) permissions.push("softflowd.write");
   if (service === "gateway-monitoring" || config.gateway_monitors.some(item => item.enabled)) permissions.push("gateway_monitors.write");
   for (const name of ["ntp", "syslog", "vnstat"] as const) {
@@ -214,7 +225,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     if (!/^[a-zA-Z0-9_-]{1,32}$/.test(monitor.name) || monitorNames.has(monitor.name)) issue(`${path}.name`, "Use a unique case-sensitive name, 1..32 letters, digits, underscore or hyphen", page);
     monitorNames.add(monitor.name);
     if (!validName(monitor.interface)) issue(`${path}.interface`, "Use a valid explicit interface name", page);
-    bound(monitor.routing_table, 10000, 19999, `${path}.routing_table`, page);
+    if (monitor.routing_table !== 254) bound(monitor.routing_table, 10000, 19999, `${path}.routing_table`, page);
     for (const [key, min, max] of [
       ["probe_interval_ms", 100, 60000], ["loss_timeout_ms", 100, 60000], ["window_ms", 1000, 300000],
       ["latency_threshold_ms", 1, 60000], ["loss_threshold_percent", 1, 100],
@@ -262,11 +273,38 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       }
     }));
   }
+  for (const [name, client] of Object.entries(config.dhcp_clients ?? {})) {
+    const path = `dhcp_clients.${name}`, page = `/interfaces/${encodeURIComponent(name)}`;
+    const link = config.interfaces.find(item => item.name === name);
+    if (!link || link.kind !== "ethernet") issue(path, "DHCPv4 requires a configured Ethernet interface", page);
+    if (link?.dhcp_relay.enabled) issue(path, "DHCPv4 client and relay cannot be enabled together", page);
+    if (link?.addresses.some(address => { try { return prefix(address, false).family === "ipv4"; } catch { return false; } })) {
+      issue(path, "DHCPv4 cannot coexist with static IPv4 addresses; static IPv6 is allowed", page);
+    }
+    if (client.client_id && !/^(?:[a-fA-F0-9]{2}){2,255}$/.test(client.client_id)) issue(`${path}.client_id`, "Client ID must encode 2..255 bytes as hexadecimal", page);
+    if (client.hostname) check(`${path}.hostname`, page, () => {
+      if (client.hostname.length > 253 || !client.hostname.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) throw new Error("Use a canonical hostname up to 253 characters");
+    });
+    bound(client.route_metric, 0, 4294967295, `${path}.route_metric`, page);
+  }
+  for (const [name, settings] of Object.entries(config.dns ?? {})) {
+    const path = `dns.${name}`, page = `/interfaces/${encodeURIComponent(name)}`;
+    if (!config.interfaces.some(link => link.name === name)) issue(path, "Resolver settings require a configured interface", page);
+    if (settings.servers.length > 8 || new Set(settings.servers).size !== settings.servers.length) issue(`${path}.servers`, "Use at most 8 unique DNS servers", page);
+    settings.servers.forEach((server, index) => check(`${path}.servers.${index}`, page, () => {
+      if (!globalUnicast(numericAddress(server), true)) throw new Error("Use a canonical unicast or loopback IP literal");
+    }));
+    if (settings.domains.length > 32 || new Set(settings.domains.map(domain => domain.name)).size !== settings.domains.length) issue(`${path}.domains`, "Use at most 32 unique domains", page);
+    settings.domains.forEach((domain, index) => check(`${path}.domains.${index}`, page, () => {
+      if (domain.name === "." && domain.route_only) return;
+      if (domain.name.length > 253 || !domain.name.split(".").every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) throw new Error("Use a canonical domain; root '.' must be routing-only");
+    }));
+  }
   for (const [index, link] of config.interfaces.entries()) {
     const path = `interfaces.${index}`, page = `/interfaces/${encodeURIComponent(link.name)}`;
     if (!validName(link.name) || names.has(link.name)) issue(`${path}.name`, "Invalid or duplicate interface name", page);
     names.add(link.name);
-    if (!["wan", "lan"].includes(link.role)) issue(`${path}.role`, "Explicitly select WAN or LAN; no role is inferred", page);
+    if (!["wan", "lan", "unassigned"].includes(link.role)) issue(`${path}.role`, "Explicitly select WAN, LAN or Unassigned; no role is inferred", page);
     if (parents.some((parent) => parent.name === link.name)) issue(`${path}.name`, "Name collides with a protected parent", page);
     bound(link.mtu, 1280, 65535, `${path}.mtu`, page);
     const seenAddresses = new Set<string>();
@@ -285,7 +323,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     }));
     if (relay.enabled) {
       if (!relay.servers.length) issue(`${path}.dhcp_relay.servers`, "Enabled relay requires at least one server", page);
-      if (!link.up || link.kind === "wireguard") issue(`${path}.dhcp_relay.enabled`, "Enabled relay requires an administratively up dummy or VLAN interface", page);
+      if (!link.up || link.kind === "wireguard") issue(`${path}.dhcp_relay.enabled`, "Enabled relay requires an administratively up Ethernet, dummy or VLAN interface", page);
       check(`${path}.dhcp_relay.enabled`, page, () => {
         const selected = selectedRelayPrefix(link)?.split("/")[0];
         if (!selected) throw new Error("Enabled relay requires a configured unicast IPv4 address");
@@ -303,7 +341,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       vlanIDs.add(identity);
       const parent = interfaces.get(link.vlan.parent) ?? parents.find((item) => item.name === link.vlan.parent && item.available);
       if (!parent || parent.kind === "wireguard") issue(`${path}.vlan.parent`, "Select a known eligible managed or available adopted parent", page);
-      else if (link.mtu > parent.mtu) issue(`${path}.mtu`, "Child MTU exceeds parent MTU", page);
+      else if (parent.mtu !== undefined && link.mtu > parent.mtu) issue(`${path}.mtu`, "Child MTU exceeds parent MTU", page);
       const visited = new Set([link.name]);
       let ancestor = interfaces.get(link.vlan.parent);
       while (ancestor) {
@@ -340,7 +378,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       if (route.gateway && numericAddress(route.gateway).kind() !== destination.family) throw new Error("Gateway family must match destination");
     });
     if (!interfaces.has(route.interface)) issue(`${path}.interface`, "Select a managed draft interface", page);
-    bound(route.table, 10000, 19999, `${path}.table`, page);
+    if (route.table !== 254) bound(route.table, 10000, 19999, `${path}.table`, page);
     bound(route.metric, 1, 2147483647, `${path}.metric`, page);
     const key = `${route.table}/${route.destination}/${route.metric}`;
     if (routeIDs.has(key)) issue(path, "Duplicate table/destination/metric", page);
@@ -350,7 +388,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     const path = `policy_rules.${index}`, page = "/policy-rules";
     check(`${path}.source`, page, () => { prefix(rule.source, true); });
     bound(rule.priority, 10000, 19999, `${path}.priority`, page);
-    bound(rule.table, 10000, 19999, `${path}.table`, page);
+    if (rule.table !== 254) bound(rule.table, 10000, 19999, `${path}.table`, page);
     if (priorities.has(rule.priority)) issue(`${path}.priority`, "Priority must be unique", page);
     priorities.add(rule.priority);
   });
@@ -396,6 +434,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
   const permissions = new Set(["transactions.write"]);
   const map: Record<string, string> = {
     interfaces: "interfaces.write", routes: "routes.write", "policy-rules": "policy.write",
+    dhcp_clients: "interfaces.write", dns: "interfaces.write",
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write",

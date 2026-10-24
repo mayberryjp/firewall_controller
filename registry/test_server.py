@@ -104,6 +104,40 @@ class RegistryHTTPTests(unittest.TestCase):
         self.assertEqual(response.getheader("Access-Control-Allow-Headers"), "Authorization, Content-Type")
         self.assertIsNone(response.getheader("Access-Control-Allow-Credentials"))
 
+    def test_durable_session_restores_from_httponly_cookie_and_signs_out(self):
+        origin = {"Origin": "http://localhost:3030"}
+        response, payload = self.request("POST", "/api/v1/session", {"password": "a-secure-test-password-123"}, headers=origin)
+        cookie = response.getheader("Set-Cookie")
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertIn("Path=/api/v1/session", cookie)
+        self.assertIn("Max-Age=28800", cookie)
+        self.assertEqual(response.getheader("Access-Control-Allow-Origin"), origin["Origin"])
+        self.assertEqual(response.getheader("Access-Control-Allow-Credentials"), "true")
+        response, restored = self.request("GET", "/api/v1/session", headers={**origin, "Cookie": cookie.split(";", 1)[0]})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(restored["token"], payload["token"])
+        self.assertLessEqual(restored["expires_in"], 28800)
+        response, _ = self.request("POST", "/api/v1/session/logout", {}, headers=origin)
+        self.assertEqual(response.status, 200)
+        self.assertIn("Max-Age=0", response.getheader("Set-Cookie"))
+
+    def test_durable_session_rejects_untrusted_origins(self):
+        token = self.login()
+        response, _ = self.request("GET", "/api/v1/session", headers={
+            "Origin": "https://untrusted.example", "Cookie": f"registry_session={token}",
+        })
+        self.assertEqual(response.status, 403)
+        self.assertIsNone(response.getheader("Access-Control-Allow-Credentials"))
+        response, _ = self.request("POST", "/api/v1/session/logout", {}, headers={"Origin": "https://untrusted.example"})
+        self.assertEqual(response.status, 403)
+
+    def test_durable_session_rejects_missing_or_invalid_cookies(self):
+        for cookie in ("", "registry_session=invalid"):
+            response, _ = self.request("GET", "/api/v1/session", headers={"Cookie": cookie})
+            self.assertEqual(response.status, 401)
+            self.assertIn("Max-Age=0", response.getheader("Set-Cookie"))
+
     def test_device_secrets_stay_server_side_and_proxy_uses_the_saved_key(self):
         token = self.login()
         address = f"http://127.0.0.1:{self.firewall.server_port}"

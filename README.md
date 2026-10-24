@@ -1,14 +1,13 @@
 # Firewall Controller / Netcontrol
 
-Vue 3 + TypeScript + Vuetify administrative frontend for the **isolated lab
-control plane**, following the
+Vue 3 + TypeScript + Vuetify administrative frontend for the **Netcontrol
+firewall control plane**, following the
 [frontend coding standards](https://github.com/mayberryjp/coding_standards/blob/main/FRONTEND_CODING_STANDARDS.md)
 and [Netcontrol frontend specification](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md).
 
 Backend contracts were checked against commit
-`4d416a2f318b1bce29de7149ccac138db4d9c41f`, including the
-[October 17 journal](https://github.com/mayberryjp/firewall_backend/blob/main/docs/journal/2026-10-17.md)
-and [frontend handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-17.md).
+`e13cd21` (October 23), including the
+[host-NIC/DHCP/DNS handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-23.md).
 The spec's React suggestion is optional;
 this project retains the existing Vue/Vuetify stack.
 
@@ -27,7 +26,8 @@ if (-not (Test-Path .env)) {
     "REGISTRY_ENCRYPTION_KEY=$encryptionKey"
   ) | Set-Content .env
 }
-docker compose up -d --build registry
+docker compose pull registry
+docker compose up -d --no-build registry
 npm run dev
 ```
 
@@ -43,7 +43,7 @@ For simulator testing, run the firewall backend separately using its documented
 setup, for example from its checkout:
 
 ```powershell
-go run .\cmd\netcontrold -backend simulator -listen 127.0.0.1:8080 -state lab-state.json
+cargo run -p netcontrold -- --backend simulator --listen 127.0.0.1:8080 --state lab-state.json --credential-db credentials.json
 ```
 
 Complete initial account/key onboarding on the daemon's embedded website at
@@ -59,7 +59,9 @@ Simulator success does **not** verify Linux networking, WireGuard key-file
 availability, kernel permissions, softflowd collector delivery or DHCP lease delivery. Native tests
 require an explicitly disposable Linux namespace and operator provisioning.
 Simulator results also do not verify gateway reachability, clock synchronization,
-whole-appliance log capture/delivery or real vnStat history.
+whole-appliance log capture/delivery or real vnStat history. Native host mode
+can take ownership of physical NICs on first start; keep console access and
+review the backend's networkd/resolved and persistent-state prerequisites.
 
 ## Screens
 
@@ -82,16 +84,32 @@ whole-appliance log capture/delivery or real vnStat history.
 | `/transactions`, `/transactions/:id` | Independent recovery discovery and explicit lifecycle actions |
 | `/history`, `/history/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
 
-Deep links fall back to the SPA; reload requires registry password re-entry.
+Deep links fall back to the SPA; reload restores an unexpired registry session
+and reconnects the remembered firewall.
 Unknown routes show an application 404.
+
+The top navbar selects Overview, Networking, Services, or Changes & history.
+Each section exposes its own routed page tabs: a left rail on desktop and a
+horizontal scrollable strip below 1280px. `/networking`, `/services`, and
+`/activity` open the first page in their section. Existing page URLs remain
+unchanged; detail links retain their section and selected parent tab, and browser
+back/forward navigates between pages.
+
+Operational pages show settings, records, and current status without repeated
+read timestamps or deployment instructions. Errors and stale-data notices remain
+visible. Detailed values use expandable labeled fields rather than JSON dumps;
+small resource lists omit filter bars. Service-impact warnings appear in change
+review and explicit repair/apply confirmations.
 
 ## Safety model
 
 - Resource forms edit local values. **Stage changes** updates one complete
   in-memory draft cloned from committed desired configuration, never observation.
   Stage, reorder, delete, import, and discard make no mutation requests.
-- Lists default to committed desired; use staged preview to inspect the shared
-  draft. Cancel discards only unstaged form values. Route/reload warnings protect
+- Configuration lists and service forms show the shared draft automatically,
+  otherwise the active candidate or committed desired settings. Runtime health
+  continues to reflect active settings, not unsaved edits. Cancel discards only
+  unstaged form values. Route/reload warnings protect
   unsaved input. Device API keys are never returned to the browser or written to
   browser storage or service-worker caches. Device addresses and encrypted keys
   are persisted in the central registry; the controller attaches the selected
@@ -122,6 +140,51 @@ Unknown routes show an application 404.
   ordinary package submission. It requires no local draft, shows full impact,
   and follows the same provisional lifecycle.
 
+### Backend/spec difference: native parent runtime
+
+The Rust native backend inspected at `582458e` returns adopted-parent runtime
+under `parents`, while the simulator and frontend spec use `parent_interfaces`.
+The controller accepts either name and validates the rows; the documented field
+takes precedence if both are present. Disappeared native parents may contain only
+name, availability and error; missing link details display as Unknown. Missing
+parent datasets and malformed rows still fail validation rather than appearing
+as an empty inventory.
+
+### October 23 host networking, DHCP and DNS
+
+- The Interfaces screen shows read-only discovered NICs independently of managed
+  configuration. Eligible unmanaged Ethernet/veth NICs have an explicit Manage
+  action; loopback, unsupported kinds and protected parents cannot be adopted
+  through it. Live addresses are never copied into the static draft.
+- Managed Ethernet supports WAN, LAN and Unassigned roles without inference,
+  static IPv4 or DHCPv4, optional static IPv6, DHCP client ID/hostname/metric,
+  dynamic-MTU/domain policy and per-interface DNS servers/routing domains.
+  DHCPv4 cannot coexist with static IPv4 or an enabled relay on that NIC.
+- DHCP and DNS maps are preserved in complete packages, imports, exports,
+  transaction snapshots and historical restores. Map-only changes appear in
+  review and require interfaces.write, as do shared repairs when either map is
+  configured. Empty-map omission is semantically equivalent to an empty map.
+- Native leases, errors, expiry (Unix seconds), dynamic routes and resolver data
+  are separate from static configuration. Missing runtime support is shown as
+  unsupported/simulated, never fabricated as a successful lease.
+- Routes, source-policy lookup tables and monitors accept main table 254 or
+  10000..19999. Policy priorities remain 10000..19999. Ethernet is eligible for
+  VLAN parenting and DHCP relay. NAT still requires an address of its family
+  in the configured static egress, matching the current backend validator.
+- Interfaces and WireGuard use manual configuration/runtime refresh when idle;
+  discovery loads once and has its own Refresh inventory action. Pending or
+  uncertain transactions retain safety polling. Monitoring elsewhere is unchanged.
+- Physical-NIC changes can disconnect management. Releasing management does not
+  delete hardware, restart OS DHCP or remove persistent networkd exclusions.
+  Native forwarding remains an operator prerequisite; no forwarding toggle or
+  automatic NAT/firewall setup is supplied. Resolver publication requires native
+  host mode and systemd-resolved. Deploy a matching backend and retain console
+  access; real Linux handover, leases and rollback need operator acceptance.
+
+These changes supersede the earlier role-only and isolated-lab restrictions.
+The current Rust contract defaults an omitted allow_all_icmp to true but rejects
+null; the older nullish behavior described in prior handoffs is not supported.
+
 ### Backend/spec difference: kernel settings
 
 The inspected backend adds `Config.kernel` with `namespace` and `host` string
@@ -135,13 +198,13 @@ fields are rejected as incompatible rather than silently stripped.
 
 ### October 17 backend features
 
-- Every managed dummy/VLAN/WireGuard interface must explicitly select `role: "wan"`
-  or `"lan"`. There is no default, name-based inference, inheritance or migration.
+- Every managed interface supports explicit `role: "wan"`, `"lan"` or
+  `"unassigned"`. There is no name-based WAN/LAN inference.
   Labels, filters and review summaries expose role changes. Roles are descriptive
   metadata, not independently observed link attributes, and do not configure
   firewall/NAT/routes. Protected adopted parents do not have editable roles.
-- `firewall.allow_all_icmp` uses the backend's documented **nullish true default**:
-  omitted/null values, including historical snapshots, enable it. Explicit false
+- `firewall.allow_all_icmp` uses the current backend's **omitted true default**:
+  omitted values, including historical snapshots, enable it; null is invalid. Explicit false
   survives unrelated edits/import/export/transactions. When enabled, protocol 1
   (all IPv4 ICMP types/codes) is accepted across every namespace interface for
   input/output/forwarding, before legacy or host/interface drops. ICMPv6 protocol
@@ -314,15 +377,26 @@ trailing values, partial configs, invalid references, and oversized input are
 rejected. Preview shows deletion impact before replacing the local draft. Exports
 are config-only, operator initiated, and require a sensitivity acknowledgement.
 
+Resource lists automatically show the shared unsaved configuration when present,
+otherwise the active candidate or committed configuration. There is no draft-preview
+toggle. Interface lists combine configured interfaces and eligible unmanaged hardware
+in one table, without filters or duplicate lease/discovery panels. Values are formatted
+as readable fields rather than JSON; apply review and safety confirmations are unchanged.
+
 ## Refresh and error handling
 
 State/runtime are independent single-flight datasets with loading, delayed-read,
-error, last-success and stale indicators. Visible normal state/runtime refreshes
-every 5 seconds; transaction discovery every 10 seconds. Active/uncertain
-transactions increase state/discovery polling to 1 second **after completion**.
-Visible overview/interface statistics refresh every 3 seconds in separate
-ephemeral monitoring state. Background polling pauses in hidden tabs and wakes
-on visibility/online events. Transport failures back off 1/2/5/10 seconds.
+error, last-success and stale indicators. Automatic network refresh runs only on
+Overview: state/runtime every 5 seconds, transaction discovery every 10 seconds,
+and interface/gateway statistics every 3 seconds. Active/uncertain transactions
+increase Overview state/discovery polling to 1 second after each read completes.
+Other pages, including transaction details, do not poll, even during pending
+transactions. Use the navbar refresh button or a page's refresh control to update
+them. Reads performed on entry and fresh-state checks required by explicit writes
+remain enabled. Deadline countdowns do not make network requests.
+Overview polling pauses in hidden tabs and wakes on visibility/online events;
+those events do not trigger background reads on other pages. Transport failures
+back off 1/2/5/10 seconds.
 
 Reads time out after 80 seconds, writes after 90. Reads delayed over 3 seconds are
 labelled; no overlapping request storm or invented progress is shown. Old read
@@ -348,20 +422,26 @@ simulated states. There is no offline mutation queue.
 | `BUILD_SOURCEMAP` | `false` | Explicit opt-in build sourcemaps |
 | `REGISTRY_ADMIN_PASSWORD` | Required | Registry administrator password (at least 16 characters) |
 | `REGISTRY_ENCRYPTION_KEY` | Required | Fernet key used to encrypt stored device credentials |
+| `REGISTRY_UI_ORIGINS` | `http://localhost:3030,http://127.0.0.1:3030` | Comma-separated trusted frontend origins for session cookies; use the exact public UI origin in network deployments |
 | `REGISTRY_TLS_CERT` | Empty | Optional in-container TLS certificate path for the registry |
 | `REGISTRY_TLS_KEY` | Empty | Optional in-container TLS private-key path for the registry |
 
 `VITE_*` settings are public build-time settings. Do not put secrets in them.
 The fetch adapter refuses controller redirects rather than forwarding
-Authorization elsewhere; it omits cookies and sets `cache: no-store`. Error
+Authorization elsewhere; normal API calls omit cookies and set `cache: no-store`. Session login, restore, and sign-out include the registry cookie. Error
 text redacts the registry session token.
 
 ### Central registry, remote devices and CORS
 
 The registry/controller API is a separate service on port 3031; Nginx does not
 proxy registry or firewall API calls. Registry access uses one
-operator-configured administrator password and an eight-hour in-memory registry
-session token. Device names and addresses are stored in SQLite on the `registry-data`
+operator-configured administrator password and an eight-hour registry session.
+An HttpOnly, SameSite=Strict cookie restores the session after a reload without saving
+the password or bearer token in web storage. HTTPS cookies are Secure. The browser
+remembers only the selected device ID and reconnects it when reloading a protected
+page. Explicit sign-out clears the cookie and remembered device. Drafts and unstaged
+input remain in memory only; pending transactions are rediscovered from the server.
+Device names and addresses are stored in SQLite on the `registry-data`
 volume. Device keys are encrypted at rest using `REGISTRY_ENCRYPTION_KEY`, never
 returned to the browser, and decrypted server-side only while proxying an
 authenticated request to the selected firewall. Back up the encryption key
@@ -372,8 +452,11 @@ The browser sends firewall API requests to the registry/controller service,
 which attaches the saved device key and relays requests to the firewall. The
 controller must be able to reach the saved firewall address over the network.
 Firewall CORS is not required because browsers never call firewalls directly.
-The registry allows all origins and does not use cookies; restrict access to
-the controller and use strong administrator credentials.
+Bearer-authenticated registry/proxy calls allow all origins. Cookie-based session
+endpoints allow credentials only from `REGISTRY_UI_ORIGINS` or the registry's own
+origin. Configure the exact frontend origin before using a different hostname,
+port, or HTTPS. Keep the UI and registry on the same site for SameSite cookies;
+restrict controller access and use strong administrator credentials.
 
 Use HTTPS for both the website and registry in a network deployment. The
 controller verifies certificates when connecting to HTTPS firewall APIs.
@@ -391,11 +474,14 @@ Apply additional HTTPS/HSTS policy at ingress. No third-party analytics/CDNs are
 used.
 
 ```powershell
-docker build -t firewall-controller:dev .
-docker compose up -d --build
+docker compose pull
+docker compose up -d --no-build
 ```
 
-Compose starts the static frontend and the central registry. Set
+Compose uses the published Docker Hub images to start the static frontend and
+the central registry without local builds or npm downloads. Node.js and npm are
+not required for this Docker-only setup. Stop `npm run dev` before starting the
+Compose frontend because both use port 3030. Set
 `REGISTRY_ADMIN_PASSWORD` and generate `REGISTRY_ENCRYPTION_KEY` before starting,
 as shown in the local setup commands above. The registry database persists in a
 named Docker volume. Stop the stack with `docker compose down`; the named volume
@@ -403,6 +489,38 @@ is retained. There are no container healthchecks; orchestrator readiness is
 external.
 
 ## Tests and delivery
+
+### Fast local iteration
+
+Keep `npm run dev` running for hot reload. Routine edits do not require a
+production build or the full test suite. Use a file-related test run for the
+smallest relevant check:
+
+```powershell
+npm run test:related -- src/views/ConnectView.vue
+```
+
+For affected-test selection based on uncommitted Git changes, or a persistent
+watch session:
+
+```powershell
+npm run test:changed
+npm run test:watch
+```
+
+Changed mode includes staged and unstaged tracked changes, plus untracked files.
+If the worktree contains many accumulated edits or shared dependencies changed,
+it can legitimately select most tests. Use `test:related` with explicit source
+files or `npm run test:unit -- tests/component/HomeView.spec.ts` to stay focused.
+Changes to configuration, assets, or dynamically resolved dependencies may need
+an explicit check because dependency-based selection is not complete coverage.
+Optional continuous type checking runs separately with `npm run typecheck:watch`.
+Lint individual edited files with `npx eslint src/views/ConnectView.vue`.
+
+### Full validation
+
+Use the complete checks before delivery, for broad shared-behavior changes, or
+when explicitly needed, rather than after every small edit:
 
 ```powershell
 npm run lint
@@ -477,7 +595,7 @@ docker pull mayberry4477/firewall-controller-registry:latest
 
 Use the commit-SHA tag to select a specific build. Pulling an image does not
 update running containers; recreate them using the selected image in your
-deployment. The local Compose setup above continues to use `firewall-controller:dev`.
+deployment. The Compose setup above uses the published `latest` tags.
 
 ## Layout
 
@@ -486,6 +604,14 @@ server/draft/lifecycle state; `src/views` contains route pages;
 `src/components/base` and `src/components/feature` contain reusable fields,
 status, comparison, and lifecycle UI; `src/components/layout` contains the shell
 and safety banners. `src/composables` owns bounded polling and explicit exports.
+Navigation categories and page destinations live in `src/constants/navigation.ts`.
+`SectionLayout.vue` renders the section tabs and a nested router outlet. Every
+subpage and detail route has its own lazy-loaded Vue view; views configure shared
+components explicitly rather than inspecting URL prefixes to choose a page.
+Resource pages compose filters, runtime, table, firewall controls, and edit/delete
+dialogs. Draft editing and collection filtering live in `useResourceEditor` and
+`useResourceCollection`; the app shell composes separate header, session,
+connection-status, and disconnect components.
 Theme colors are centralized in `src/plugins/vuetify.ts`. Global CSS enters only
 through `src/main.ts`.
 

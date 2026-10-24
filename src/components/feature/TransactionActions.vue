@@ -22,9 +22,11 @@ async function execute(): Promise<void> {
       v-if="transaction.status === 'pending_confirmation'"
       class="my-2"
     >
-      Deadline: <time :datetime="transaction.confirmation_deadline">{{ new Date(transaction.confirmation_deadline).toLocaleString() }}</time>
-      <br><span class="mono">{{ transaction.confirmation_deadline }}</span><br>
-      {{ remaining ? `${remaining}s remaining (approximate browser clock)` : "Deadline reached; awaiting server outcome" }}
+      Deadline: <time
+        :datetime="transaction.confirmation_deadline"
+        :title="transaction.confirmation_deadline"
+      >{{ new Date(transaction.confirmation_deadline).toLocaleString() }}</time>
+      · {{ remaining ? `${remaining}s remaining` : "Deadline reached; awaiting server outcome" }}
     </p>
     <div class="d-flex flex-wrap ga-2">
       <v-btn

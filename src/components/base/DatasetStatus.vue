@@ -5,7 +5,7 @@ defineProps<{ query: Dataset<unknown>; label: string }>();
 
 <template>
   <v-progress-linear
-    v-if="query.loading"
+    v-if="query.loading && !query.data"
     indeterminate
     color="primary"
     class="mb-3"
@@ -15,7 +15,7 @@ defineProps<{ query: Dataset<unknown>; label: string }>();
     role="status"
     class="text-warning mb-3"
   >
-    Read delayed; the engine may be busy. No duplicate request is queued.
+    Loading {{ label.toLowerCase() }} is taking longer than usual.
   </p>
   <v-alert
     v-if="query.error"
@@ -25,19 +25,14 @@ defineProps<{ query: Dataset<unknown>; label: string }>();
   >
     {{ label }}: {{ query.error }}
     <div v-if="query.lastSuccess">
-      Last known result is stale, from {{ new Date(query.lastSuccess).toLocaleString() }}.
+      Showing previously loaded data.
     </div>
   </v-alert>
   <p
-    v-else-if="query.lastSuccess"
+    v-else-if="query.stale && query.lastSuccess"
     class="text-caption text-medium-emphasis mb-3"
+    :title="`Last read ${new Date(query.lastSuccess).toLocaleString()}`"
   >
-    {{ label }} · {{ query.stale ? "Stale" : "Last successful read" }} {{ new Date(query.lastSuccess).toLocaleString() }}
-  </p>
-  <p
-    v-else-if="!query.loading && !query.error"
-    class="text-medium-emphasis mb-3"
-  >
-    {{ label }} not loaded.
+    {{ label }}: stale data
   </p>
 </template>
