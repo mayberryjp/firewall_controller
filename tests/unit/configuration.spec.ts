@@ -131,7 +131,7 @@ describe("inclusive validation limits and dependencies", () => {
       interface: name, rules: Array.from({ length: 64 }, () => ({ protocol: "tcp" as const, destination_ports: Array.from({ length: 32 }, (_, index) => index + 1), action: "accept" as const })),
     })) };
     expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.input", message: "Input policies expand beyond 4096 entries" }));
-    candidate.firewall.input.interfaces[0]!.rules[0]!.destination_ports.pop();
+    candidate.firewall.input.interfaces[0]!.rules[0]!.destination_ports!.pop();
     expect(validateConfig(candidate)).toEqual([]);
   });
   it("accepts a complete valid package including preserved kernel state", () => {
