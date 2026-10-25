@@ -2,10 +2,41 @@ import { describe, expect, it } from "vitest";
 import { configSchema, gatewayMonitorSchema, gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, statisticsSchema, runtimeSchema } from "@/types/domain";
 import { decodeJson, encodeJson } from "@/services/json";
 import { differences, equalConfig, requiredPermissions, serviceRepairPermissions, validateConfig, validateServerHost } from "@/services/configuration";
-import { gatewayHealth, gatewaySampleState, formatMetric } from "@/services/gatewayHealth";
+import { gatewayHealth, gatewayMetricIndicator, gatewaySampleState, formatMetric } from "@/services/gatewayHealth";
 import { config, gatewayStatistics, monitor, runtime, statistics } from "../fixtures";
 
 describe("gateway numeric and configuration contracts", () => {
+  it.each([
+    { metric: "Loss", thresholds: [1, 3, 5] },
+    { metric: "Mean RTT", thresholds: [100, 150, 300] },
+    { metric: "Stddev", thresholds: [10, 20, 30] },
+    { metric: "RTT variation", thresholds: [10, 20, 30] },
+  ] as const)("colors $metric at exact raw-value boundaries and leaves missing/stale values neutral", ({ metric, thresholds: [low, medium, high] }) => {
+    for (const [value, color] of [
+      [0, "green"], [low - 0.0001, "green"], [low, "yellow"],
+      [medium - 0.0001, "yellow"], [medium, "orange"],
+      [high - 0.0001, "orange"], [high, "red"], [high * 2, "red"],
+    ] as const) {
+      const indicator = gatewayMetricIndicator(metric, value, true);
+      expect(indicator.color).toBe(color);
+      expect(indicator.tooltip).toContain("Green <");
+      expect(indicator.tooltip).toContain("red >=");
+    }
+    for (const value of [null, 0, high]) {
+      expect(gatewayMetricIndicator(metric, value, false).color).toBe("default");
+      expect(gatewayMetricIndicator(metric, value, false).rating).toBe("Unrated");
+    }
+    expect(gatewayMetricIndicator(metric, null, true).color).toBe("default");
+    if (metric === "Stddev" || metric === "RTT variation") expect(gatewayMetricIndicator(metric, low, true).tooltip).toContain("not");
+  });
+  it.each([
+    [101.7203643, "ms", "101.72 ms"], [4.390802409838049, "ms", "4.39 ms"],
+    [33.333333333333336, "%", "33.33 %"], [0.125, "ms", "0.13 ms"],
+    [1.005, "ms", "1.01 ms"], [1.25, "ms", "1.25 ms"],
+    [0, "%", "0 %"], [null, "ms", "Unavailable"],
+  ] as const)("formats gateway metric %s %s to at most two decimal places", (value, unit, expected) => {
+    expect(formatMetric(value, unit)).toBe(expected);
+  });
   it("decodes DHCP capabilities and nullable resolved paths while keeping waiting health unknown", () => {
     const capabilities = { gateway_monitor_modes: ["explicit", "dhcp"], dhcp_gateway_monitor_address_families: ["ipv4"] };
     expect(runtimeSchema.parse({ ...runtime(), capabilities }).capabilities).toEqual(capabilities);
@@ -93,9 +124,18 @@ describe("gateway numeric and configuration contracts", () => {
     candidate.gateway_monitors[0]!.enabled = true; candidate.routes = config().routes;
     expect(validateConfig(candidate)).toEqual([]);
   });
+  it("requires an enabled matching route for explicit monitors and permits a shared route/monitor disable draft", () => {
+    const candidate = config(); candidate.gateway_monitors = [monitor()];
+    candidate.routes[0]!.enabled = false;
+    expect(validateConfig(candidate).some(issue => issue.path.startsWith("gateway_monitors") && issue.message.includes("matching route"))).toBe(true);
+    candidate.gateway_monitors[0]!.enabled = false;
+    expect(validateConfig(candidate)).toEqual([]);
+    const before = config(); before.gateway_monitors = [monitor()];
+    expect(requiredPermissions(differences(before, candidate))).toEqual(["transactions.write", "routes.write", "gateway_monitors.write"]);
+  });
   it("accepts explicit IPv6 link-local next hop and target scoped by interface", () => {
     const candidate = config(); candidate.gateway_monitors = [{ ...monitor(), source_address: "2001:db8::10", gateway: "fe80::1", target: "fe80::1" }];
-    candidate.routes = [{ destination: "fe80::/64", interface: "lab0", table: 10000, metric: 1 }];
+    candidate.routes = [{ enabled: true, destination: "fe80::/64", interface: "lab0", table: 10000, metric: 1 }];
     expect(validateConfig(candidate)).toEqual([]);
   });
   it.each(["127.0.0.1", "0.0.0.0", "host.example", "fe80::1%lab0", "::ffff:192.0.2.1"])("rejects invalid source %s", source => {

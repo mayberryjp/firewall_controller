@@ -1,6 +1,7 @@
 import axios from "axios";
 import { ref } from "vue";
 import { z } from "zod";
+import { overviewLayoutSchema, type OverviewLayout } from "./overviewLayout";
 
 const configuredBase = import.meta.env.VITE_REGISTRY_API_URL;
 const baseUrl = configuredBase ? new URL(configuredBase) : new URL(window.location.origin);
@@ -138,4 +139,12 @@ export async function updateRegistryDevice(id: string, device: RegistryDeviceInp
 
 export async function deleteRegistryDevice(id: string): Promise<void> {
   await call("POST", `/devices/${encodeURIComponent(id)}/delete`, deletedSchema, {});
+}
+
+export async function getOverviewLayout(): Promise<OverviewLayout> {
+  return call("GET", "/preferences/overview", overviewLayoutSchema);
+}
+
+export async function saveOverviewLayout(layout: OverviewLayout): Promise<OverviewLayout> {
+  return call("POST", "/preferences/overview", overviewLayoutSchema, overviewLayoutSchema.parse(layout));
 }

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
-import { config, gatewayStatistics, monitor, statistics, connections } from "../fixtures";
+import { config, gatewayStatistics, monitor, statistics, connections, healthSnapshot } from "../fixtures";
 import { navigationSections } from "../../src/constants/navigation";
 
 async function signInToRegistry(page: Page): Promise<void> {
@@ -21,6 +21,144 @@ async function openNavigation(page: Page): Promise<void> {
   }
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
 }
+
+test("overview packet counters abbreviate totals and show exact poll changes", async ({ page }, testInfo) => {
+  await page.clock.install();
+  await mockBackend(page);
+  let tick = 0;
+  await page.route("**/proxy/statistics", route => {
+    const sample = statistics();
+    sample.sample.status = "available";
+    sample.sample.collected_at = new Date(Date.UTC(2026, 9, 25, 12, 0, tick * 3)).toISOString();
+    sample.interfaces[0] = {
+      ...sample.interfaces[0]!, status: "available",
+      counters: { rx_packets: String(99999 + tick * 50), tx_packets: String(1234567 + tick * 100000) },
+    };
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(sample) });
+  });
+  await connect(page);
+  const counters = page.getByRole("region", { name: "Interface counters", exact: true });
+  const cells = counters.locator("tbody tr").first().locator("td");
+  await expect(cells.nth(0)).toHaveText("99,999");
+  await expect(cells.nth(1)).toHaveText("1.23M");
+  await expect(counters.locator(".v-chip")).toHaveCount(0);
+  tick++;
+  await page.clock.fastForward(3500);
+  await expect(cells.nth(0).locator(".counter-value > span:first-child")).toHaveText("100.05K");
+  await expect(cells.nth(0)).toHaveAttribute("title", "100049");
+  await expect(cells.nth(0).locator(".v-chip")).toHaveText("+50");
+  await expect(cells.nth(1).locator(".v-chip")).toHaveText("+100.00K");
+  await expect(cells.nth(1).locator(".v-chip")).toHaveAttribute("title", "+100,000 packets since previous poll");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("packet-poll-changes.png"), fullPage: true, animations: "disabled" });
+});
+
+test("overview layout supports moving, hiding, restoring and registry persistence", async ({ page, isMobile }, testInfo) => {
+  const backend = await mockBackend(page);
+  await connect(page);
+  const customize = page.getByRole("button", { name: "Customize layout", exact: true });
+  await customize.click();
+  await page.getByRole("button", { name: "Move Gateways up", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-column="0"] [data-widget]').first()).toHaveAttribute("data-widget", "gateways");
+  if (!isMobile) {
+    await page.getByRole("button", { name: "Drag System stats", exact: true }).dragTo(page.locator('[data-widget="gateways"]'));
+  } else {
+    await page.getByRole("button", { name: "Move System stats to left column", exact: true }).click();
+    await page.getByRole("button", { name: "Move System stats up", exact: true }).click();
+    await page.getByRole("button", { name: "Move System stats up", exact: true }).click();
+    await page.getByRole("button", { name: "Move System stats up", exact: true }).click();
+  }
+  await expect(page.locator('[data-column="0"] [data-widget]').first()).toHaveAttribute("data-widget", "system");
+  await page.getByRole("button", { name: "Hide WireGuard", exact: true }).click();
+  await expect(page.locator('[data-widget="wireguard"]')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("customize-overview.png"), fullPage: true, animations: "disabled" });
+  let failSave = true;
+  await page.route("**/api/v1/preferences/overview", route => {
+    if (route.request().method() === "POST" && failSave) {
+      return route.fulfill({ status: 503, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ error: "Registry storage is unavailable" }) });
+    }
+    return route.fallback();
+  });
+  await page.getByRole("button", { name: "Save layout", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Could not save the overview layout.");
+  await expect(page.getByRole("button", { name: "Show WireGuard", exact: true })).toBeVisible();
+  failSave = false;
+  await page.getByRole("button", { name: "Save layout", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Overview layout saved to the registry.");
+  await page.reload();
+  await expect(customize).toBeEnabled();
+  await expect(page.locator('[data-column="0"] [data-widget]').first()).toHaveAttribute("data-widget", "system");
+  await expect(page.locator('[data-widget="wireguard"]')).toHaveCount(0);
+  await customize.click();
+  await page.getByRole("button", { name: "Show WireGuard", exact: true }).click();
+  await expect(page.locator('[data-widget="wireguard"]')).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator('[data-widget="wireguard"]')).toHaveCount(0);
+  await customize.click();
+  await page.getByRole("button", { name: "Reset layout", exact: true }).click();
+  await page.getByRole("button", { name: "Save layout", exact: true }).click();
+  await expect(customize).toBeEnabled();
+  await page.reload();
+  await expect(page.locator("[data-widget]")).toHaveCount(5);
+  await expect(page.locator('[data-column="0"] [data-widget]').first()).toHaveAttribute("data-widget", "interfaces");
+  expect(backend.writes).toHaveLength(0);
+});
+
+test("Home Assistant MQTT configuration and system stats use the staged confirmed workflow", async ({ page }, testInfo) => {
+  await page.clock.install();
+  const backend = await mockBackend(page), errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  let hostReads = 0;
+  await page.route("**/proxy/statistics/host", route => {
+    const index = hostReads++;
+    return route.fulfill({ contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify(healthSnapshot(String(9007199254740993n + BigInt(index) * 25n), String(9007199254740993n + BigInt(index) * 75n), 100 + index * 3)) });
+  });
+  await connect(page);
+  const system = page.getByRole("region", { name: "System stats", exact: true });
+  await expect(system.getByRole("row", { name: /Memory/ })).toContainText("6 GB / 8 GB");
+  await page.clock.fastForward(3500);
+  await expect(system.getByRole("row", { name: /CPU usage/ })).toContainText("25 %");
+  await expect(system.getByRole("row", { name: /Root filesystem/ }).locator(".v-chip")).toHaveClass(/text-error/);
+  expect(await system.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("overview-system-stats.png"), fullPage: true, animations: "disabled" });
+  await navigate(page, "MQTT STREAMING");
+  const reads = hostReads; await page.clock.fastForward(9000); expect(hostReads).toBe(reads);
+  const settings = page.getByRole("region", { name: "MQTT STREAMING settings", exact: true });
+  await settings.getByLabel("Enable MQTT", { exact: true }).check();
+  await settings.getByLabel("Broker URL", { exact: true }).fill("mqtts://broker.example.test:8883");
+  await settings.getByLabel("Source interface", { exact: true }).press("Enter");
+  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await settings.getByLabel("Username", { exact: true }).fill("publisher");
+  const password = settings.getByLabel("Replacement password", { exact: true });
+  await expect(password).toHaveAttribute("type", "password"); await password.fill("synthetic-mqtt-password");
+  await settings.getByLabel("Publish interval (seconds)", { exact: true }).fill("30");
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(password).toHaveValue(""); await expect(settings).toContainText("Stored password configured");
+  expect(backend.writes.map(item => item.path)).toEqual(["/services/mqtt/passwords"]);
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  expect(backend.writes).toHaveLength(1);
+  expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain("synthetic-mqtt-password");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); window.scrollTo(0, 0); });
+  await page.clock.runFor(300);
+  await page.screenshot({ path: testInfo.outputPath("home-assistant-settings.png"), fullPage: true, animations: "disabled" });
+  await navigate(page, "SAVE"); await expect(page.getByRole("main")).toContainText("mqtt");
+  await expect(page.getByRole("main")).not.toContainText("synthetic-mqtt-password");
+  await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+  await page.getByRole("button", { name: "Push changes", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/commits\/tx-test$/);
+  const candidate = backend.writes.find(item => item.path === "/transactions")!.body as { config: ReturnType<typeof config> };
+  expect(candidate.config.mqtt).toEqual({ enabled: true, endpoint: "mqtts://broker.example.test:8883", username: "publisher", source_interface: "lab0", password_ref: "a".repeat(32), interval_seconds: 30 });
+  expect(JSON.stringify(candidate)).not.toContain("synthetic-mqtt-password");
+  await navigate(page, "MQTT STREAMING");
+  await expect(page.getByLabel("Broker URL", { exact: true })).toHaveValue("mqtts://broker.example.test:8883");
+  await expect(page.getByLabel("Replacement password", { exact: true })).toHaveValue("");
+  expect(errors).toEqual([]);
+});
 
 test("refresh discovery stays off the page and failures expand the connection circle", async ({ page }, testInfo) => {
   await page.clock.install();
@@ -68,6 +206,40 @@ test("refresh discovery stays off the page and failures expand the connection ci
   await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
 });
 
+test("masquerading adds and edits inline without popups on desktop and mobile", async ({ page }, testInfo) => {
+  const backend = await mockBackend(page);
+  const dialogs: string[] = [];
+  page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
+  await connect(page); await navigate(page, "NAT masquerading");
+  await page.getByRole("button", { name: "Add rule", exact: true }).click();
+  const editor = page.getByRole("row", { name: "Masquerade editor", exact: true });
+  await expect(editor).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByLabel("Source network (blank = Any)", { exact: true }).fill("not-a-network");
+  await page.getByLabel("Managed egress with family address", { exact: true }).press("Enter");
+  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(editor).toBeVisible();
+  await page.getByLabel("Source network (blank = Any)", { exact: true }).fill("192.0.2.0/24");
+  expect(await page.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("masquerade-inline.png"), fullPage: true, animations: "disabled" });
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  const saved = page.getByRole("row").filter({ hasText: "192.0.2.0/24" });
+  await saved.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await expect(page.getByLabel("Source network (blank = Any)", { exact: true })).toHaveValue("192.0.2.0/24");
+  await page.getByLabel("Source network (blank = Any)", { exact: true }).fill("198.51.100.0/24");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("row").filter({ hasText: "198.51.100.0/24" })).toBeVisible();
+  await page.getByRole("button", { name: "Add rule", exact: true }).click();
+  await page.getByLabel("Source network (blank = Any)", { exact: true }).fill("203.0.113.0/24");
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  expect(dialogs).toEqual([]); expect(backend.writes).toHaveLength(0);
+});
+
 test("global IPv6 setting hides IPv6 UI and persists through commit", async ({ page }, testInfo) => {
   const initial = config(), original = initial.interfaces[0]!;
   initial.ipv6_enabled = true;
@@ -112,8 +284,8 @@ test("global IPv6 setting hides IPv6 UI and persists through commit", async ({ p
   await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   expect(backend.writes[0]?.body).toMatchObject({ config: { ipv6_enabled: false, interfaces: [{ name: original.name, mtu: 1450 }] } });
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("Changes confirmed.");
-  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload(); await navigate(page, "General");
   await expect(ipv6).not.toBeChecked();
   await ipv6.check(); await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -258,19 +430,33 @@ test("top navigation opens routed sections in the black reference theme", async 
 test("compact overview contains four live status widgets without diagnostic clutter", async ({ page, isMobile }, testInfo) => {
   const initial = config(), counters = statistics();
   initial.gateway_monitors = [monitor()];
+  initial.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
   initial.interfaces.push({
     name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: ["10.0.0.1/24"], dhcp_relay: { enabled: false, servers: [] },
     wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [] },
   });
   counters.sample.status = "available";
   counters.interfaces[0]!.status = "available"; counters.interfaces[0]!.oper_state = "UP";
-  counters.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UP", status: "available", counters: { rx_packets: "125", tx_packets: "245", rx_bytes: "42100", tx_bytes: "84200", rx_errors: "0", tx_errors: "0" } });
-  const backend = await mockBackend(page, { initialConfig: initial, statistics: counters });
+  counters.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UP", status: "available", counters: { rx_packets: "1250000", tx_packets: "2450000", rx_bytes: "42100", tx_bytes: "84200", rx_errors: "0", tx_errors: "0" } });
+  const backend = await mockBackend(page, { initialConfig: initial, statistics: counters, discoveredInterfaces: [
+    { name: "lab0", kind: "dummy", index: 1, mac: null, mtu: 1500, up: true, ownership: "managed", addresses: ["192.0.2.99/24", "2001:db8:1234:5678:90ab:cdef:1234:5678/64"] },
+    { name: "wg0", kind: "wireguard", index: 2, mac: null, mtu: 1420, up: true, ownership: "managed", addresses: ["10.0.0.1/24"] },
+  ] });
   await connect(page);
   const dashboard = page.getByRole("region", { name: "Overview", exact: true });
   await expect(dashboard.getByRole("heading", { level: 2 })).toHaveText(["Interfaces", "Gateways", "WireGuard", "Interface counters"]);
   await expect(dashboard.getByRole("region", { name: "Interfaces", exact: true }).getByRole("cell", { name: "Up", exact: true })).toHaveCount(2);
-  await expect(dashboard.getByRole("region", { name: "Interface counters", exact: true }).getByRole("cell", { name: "18446744073709551615", exact: true })).toBeVisible();
+  const interfaceWidget = dashboard.getByRole("region", { name: "Interfaces", exact: true });
+  await expect(interfaceWidget.getByRole("columnheader")).toHaveText(["Name", "Status", "Active IP", "Mode"]);
+  await expect(interfaceWidget.locator(".v-chip.text-success")).toHaveCount(2);
+  await expect(interfaceWidget).toContainText("192.0.2.99/24");
+  await expect(interfaceWidget).toContainText("DHCP"); await expect(interfaceWidget).toContainText("Static");
+  expect(await interfaceWidget.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const counterWidget = dashboard.getByRole("region", { name: "Interface counters", exact: true });
+  await expect(counterWidget.getByRole("cell", { name: "18.45 EB", exact: true })).toBeVisible();
+  await expect(counterWidget.getByRole("cell", { name: "18.45 EB", exact: true })).toHaveAttribute("title", "18446744073709551615");
+  await expect(counterWidget).toContainText("1.25M"); await expect(counterWidget).toContainText("2.45M");
+  await expect(counterWidget).toContainText("42.1 KB"); await expect(counterWidget).toContainText("84.2 KB");
   await expect(dashboard.getByRole("region", { name: "WireGuard", exact: true })).toContainText("51820");
   await expect(dashboard.getByRole("region", { name: "Gateways", exact: true })).toContainText("Simulated");
   await expect(dashboard).not.toContainText("Recent transactions");
@@ -391,9 +577,11 @@ test("section pages support direct detail links and browser history", async ({ p
   await expect(page.getByRole("region", { name: "Static Routes", exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("navigation", { name: "Routing pages" }).getByRole("tab", { name: "Static Routes", exact: true })).toHaveAttribute("aria-current", "page");
-  await navigate(page, "softflowd");
-  await page.locator(".section-content").getByRole("link", { name: "capture", exact: true }).click();
-  await expect(page).toHaveURL(/\/services\/softflowd\/capture$/);
+  await navigate(page, "NetFlow/IPFIX");
+  await expect(page).toHaveURL(/\/services\/netflow$/);
+  await expect(page.locator(".section-content tbody")).toContainText("capture");
+  await expect(page.locator(".section-content").getByRole("link", { name: "capture", exact: true })).toHaveCount(0);
+  await page.goto("/services/netflow/capture");
   await expect(page.getByRole("heading", { name: "capture", exact: true })).toBeVisible();
   await navigate(page, "PUSH REQUESTS");
   await page.locator(".section-content").getByRole("link", { name: "0", exact: true }).click();
@@ -437,7 +625,7 @@ test("signed self-upgrade confirms the canonical version and configured reposito
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: true, repository: "operator/appliance", job: writes.length ? job : null, last_successful_version: null }) });
   });
-  await connect(page); await navigate(page, "Maintenance");
+  await connect(page); await page.goto("/services/maintenance");
   await page.getByLabel("Version", { exact: true }).fill("v1.2.3");
   await expect(page.getByRole("button", { name: "Upgrade", exact: true })).toBeDisabled();
   const longestVersion = `1.2.3-${"a".repeat(74)}`;
@@ -503,9 +691,11 @@ test("connections viewer filters and pages read-only snapshots with exact counte
   await expect(view.locator(".connection-bytes").first()).toHaveText("18.4 EB");
   await expect(view.locator('[data-label="Received packets"]').first()).toHaveText("Unavailable");
   await expect(view.locator('[data-label="Received bytes"]').first()).toHaveText("Unavailable");
-  for (const label of ["Sent packets", "Received packets", "Sent bytes", "Received bytes"]) {
+  for (const label of ["Sent packets", "Received packets", "Sent bytes", "Received bytes", "Delete"]) {
     await expect(view.getByRole("columnheader", { name: label, exact: true })).toHaveCount(1);
   }
+  await expect(view.locator(".connection-row > .connection-actions button")).toHaveCount(5);
+  await expect(view.locator(".connection-state button")).toHaveCount(0);
   await expect(view).toContainText("UDP"); await expect(view).toContainText("ICMPV6"); await expect(view).toContainText("IP 253");
   await expect(view).toContainText("Unavailable"); await expect(view).toContainText("SNAT");
   expect(await view.locator(".connection-state").first().evaluate(element => getComputedStyle(element).whiteSpace)).toBe("nowrap");
@@ -627,6 +817,47 @@ test("loopbacks edits dummy interfaces and keeps lo read-only outside Physical i
   expect(await view.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
+test("tables use compact spacing across resource, overview, and connection pages", async ({ page, isMobile }, testInfo) => {
+  const initial = config(), original = initial.interfaces[0]!;
+  initial.ipv6_enabled = false;
+  initial.interfaces = [
+    { ...original, name: "eth0", kind: "ethernet", addresses: ["192.0.2.10/24"] },
+    { ...original, addresses: ["10.0.0.1/32"] },
+    { ...original, name: "vlan10", kind: "vlan", addresses: ["10.10.0.1/24"], vlan: { parent: "eth0", id: 10 } },
+  ];
+  await mockBackend(page, { initialConfig: initial, discoveredInterfaces: initial.interfaces.map((link, index) => ({
+    name: link.name, kind: link.kind, index: index + 2, mac: null, mtu: link.mtu, up: link.up,
+    addresses: link.addresses, ownership: "managed",
+  })) });
+  await connect(page);
+  await expect(page.locator(".v-table").first()).toBeVisible();
+  for (const table of await page.locator(".v-table").all()) {
+    await expect(table).toHaveClass(/v-table--density-compact/);
+  }
+  for (const label of ["Physical interfaces", "VLANs", "Loopbacks", "Static Routes", "DHCPv4 relay", "Connections"]) {
+    await navigate(page, label);
+    const table = page.getByRole("main").locator(".v-table").first();
+    await expect(table).toHaveClass(/v-table--density-compact/);
+    const row = table.locator("tbody > tr").first();
+    await expect(row).toBeVisible();
+    if (!isMobile) {
+      expect((await row.boundingBox())!.height, `${label} row height`).toBeLessThanOrEqual(44);
+    }
+    if (label !== "DHCPv4 relay") {
+      expect(await table.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth), `${label} table overflow`).toBe(true);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${label} page overflow`).toBe(true);
+    if (label === "Physical interfaces" || label === "VLANs" || label === "Loopbacks") {
+      const button = row.getByRole("button", { name: "Edit / stage", exact: true });
+      await expect(button).toBeVisible();
+      await button.click();
+      await expect(table.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+      await table.getByRole("button", { name: "Cancel", exact: true }).click();
+    }
+  }
+  await page.screenshot({ path: testInfo.outputPath("compact-connections.png"), fullPage: true, animations: "disabled" });
+});
+
 test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ page, isMobile }, testInfo) => {
   const initial = config(), original = initial.interfaces[0]!;
   initial.interfaces = ["eno1", "enp3s0", "wlp1s0"].map((name, index) => ({ ...original, name, kind: "ethernet", role: "unassigned", addresses: index === 0 ? ["172.16.10.2/24"] : [] }));
@@ -647,11 +878,14 @@ test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ p
   await expect(view.getByRole("table")).toHaveCount(1);
   await expect(view.getByRole("row")).toHaveCount(6);
   await expect(view.getByRole("columnheader", { name: "Active Addresses", exact: true })).toHaveCount(0);
-  await expect(view.getByRole("columnheader")).toHaveCount(7);
+  await expect(view.getByRole("columnheader")).toHaveCount(8);
+  await expect(view.getByRole("columnheader", { name: "Mode", exact: true })).toHaveCount(1);
+  await expect(view.getByRole("row").filter({ hasText: "eno1" })).toContainText("Static");
   await expect(view.getByRole("button", { name: /Reload DHCP/ })).toHaveCount(0);
   await expect(view.getByRole("columnheader", { name: "Configured Static Addresses", exact: true })).toHaveCount(0);
   const dhcp = view.getByRole("row").filter({ has: page.getByRole("cell", { name: "enp3s0", exact: true }) });
   await expect(dhcp).toContainText("192.0.2.123/24");
+  await expect(dhcp).toContainText("DHCP");
   await dhcp.getByRole("cell", { name: "enp3s0", exact: true }).click();
   const dhcpEditor = page.getByRole("row", { name: "Configure enp3s0", exact: true });
   await expect(dhcpEditor.getByRole("button", { name: /Reload DHCP/ })).toHaveCount(0);
@@ -697,9 +931,9 @@ test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ p
   }
   const modeBounds = (await settings.getByRole("combobox", { name: "IPv4 configuration", exact: true }).boundingBox())!;
   const addressBounds = (await settings.getByLabel("IPv4 addresses / prefixes", { exact: true }).boundingBox())!;
-  expect(Math.abs(modeBounds.y - addressBounds.y), "IPv4 mode and address align side by side").toBeLessThanOrEqual(1);
-  expect(addressBounds.x).toBeGreaterThanOrEqual(modeBounds.x + modeBounds.width);
   if (!isMobile) {
+    expect(Math.abs(modeBounds.y - addressBounds.y), "Mode and IPv4 address align in one row").toBeLessThanOrEqual(1);
+    expect(addressBounds.x).toBeGreaterThanOrEqual(modeBounds.x + modeBounds.width);
     expect((await view.getByRole("columnheader", { name: "Name", exact: true }).boundingBox())!.width).toBeGreaterThanOrEqual(140);
     expect((await view.getByRole("columnheader", { name: "IPv6", exact: true }).boundingBox())!.width).toBeLessThanOrEqual(200);
   }
@@ -824,6 +1058,48 @@ test("recovery remains accessible when state observation is unavailable", async 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test("static route Status stages only enabled and preserves the path through confirmed push", async ({ page }, testInfo) => {
+  const initial = config();
+  initial.routes[0]!.gateway = "192.0.2.1";
+  initial.routes[0]!.metadata = { display_name: "Management path", description: "Retained while disabled" };
+  const backend = await mockBackend(page, { initialConfig: initial });
+  await connect(page); await navigate(page, "Static Routes");
+  const routes = page.getByRole("region", { name: "Static Routes", exact: true });
+  await expect(routes.getByRole("columnheader")).toHaveText(["Destination", "Interface", "Metric", "Status", "Actions"]);
+  const enabled = routes.getByRole("checkbox", { name: "Route enabled for 198.51.100.0/24", exact: true });
+  await expect(enabled).toBeChecked();
+  const popupMessages: string[] = [];
+  page.on("dialog", async dialog => { popupMessages.push(dialog.message()); await dialog.dismiss(); });
+  await enabled.uncheck(); await expect(enabled).not.toBeChecked();
+  expect(popupMessages).toEqual([]);
+  await expect(routes).toContainText("Management path");
+  expect(backend.writes).toHaveLength(0);
+  expect(await routes.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("route-status.png"), fullPage: true, animations: "disabled" });
+  await navigate(page, "SAVE");
+  await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+  await page.getByLabel("Commit message", { exact: true }).fill("Disable the retained management route");
+  await expect(page.getByRole("dialog")).toContainText("routes.write");
+  await page.getByRole("button", { name: "Push changes", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
+  const expected = structuredClone(initial); expected.routes[0]!.enabled = false;
+  expect(backend.writes).toHaveLength(1);
+  expect(backend.writes[0]?.body).toMatchObject({ config: expected });
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const results = page.getByRole("region", { name: "Commit detail", exact: true });
+  await expect(results).toContainText("committed");
+  const metadata = results.locator(".record-metadata");
+  await expect(metadata.locator("dt")).toHaveText(["Status", "Base revision", "Result revision", "Actor", "Submitted (UTC)", "Committed (UTC)", "Comment"]);
+  await expect(metadata).toContainText("Disable the retained management route");
+  await expect(metadata.locator("dd").filter({ hasText: "operator" })).toHaveCount(1);
+  await expect(results.getByText(/^(Commit details|All commits)$/i)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Done", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("commit-results.png"), fullPage: true, animations: "disabled" });
+  await navigate(page, "Static Routes"); await expect(enabled).not.toBeChecked();
+});
+
 test("routing pages add and edit inline without overflow", async ({ page }, testInfo) => {
   const initial = config(); initial.gateway_monitors = [monitor()];
   initial.routes.push({ ...initial.routes[0]!, table: 254 });
@@ -896,6 +1172,58 @@ test("routing pages add and edit inline without overflow", async ({ page }, test
   await gateway.getByRole("button", { name: "Cancel", exact: true }).click();
 });
 
+test("monitor editor keeps usable fields and compact actions when adding beside live metrics", async ({ page, isMobile }, testInfo) => {
+  const initial = config(); initial.gateway_monitors = [{ ...monitor(), routing_table: 254 }];
+  initial.routes[0]!.table = 254;
+  const backend = await mockBackend(page, { initialConfig: initial });
+  await connect(page); await navigate(page, "Gateway monitors");
+  const monitors = page.getByRole("region", { name: "Gateway monitors", exact: true });
+  const editor = monitors.getByRole("row", { name: "Gateway monitor editor", exact: true });
+  const expectUsableEditor = async () => {
+    const name = editor.getByLabel("Monitor name", { exact: true });
+    const link = editor.getByLabel("Interface", { exact: true });
+    const target = editor.getByLabel("Probe Target", { exact: true });
+    for (const [field, minimumWidth] of [[name, 80], [link, 60], [target, 160]] as const) {
+      await expect(field).toBeVisible();
+      const width = await field.evaluate(element => element.closest(".v-input")!.getBoundingClientRect().width);
+      expect(width).toBeGreaterThanOrEqual(minimumWidth);
+    }
+    for (const label of ["Save", "Cancel"]) {
+      const button = editor.getByRole("button", { name: label, exact: true });
+      await expect(button).toBeVisible();
+      expect((await button.boundingBox())!.width).toBeLessThanOrEqual(100);
+    }
+    if (!isMobile) {
+      const actions = await monitors.getByRole("columnheader", { name: "Actions", exact: true }).boundingBox();
+      const save = await editor.getByRole("button", { name: "Save", exact: true }).boundingBox();
+      expect(save!.x).toBeGreaterThanOrEqual(actions!.x);
+      expect(save!.x + save!.width).toBeLessThanOrEqual(actions!.x + actions!.width);
+    }
+    expect(await monitors.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  };
+  await monitors.getByRole("button", { name: "Add monitor", exact: true }).click();
+  await expectUsableEditor();
+  await editor.getByLabel("Monitor name", { exact: true }).fill("backup");
+  await editor.getByLabel("Interface", { exact: true }).press("Enter");
+  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await editor.getByLabel("Probe Target", { exact: true }).fill("198.51.100.1");
+  await editor.getByRole("button", { name: "Show advanced", exact: true }).click();
+  await expect(page.getByLabel("Probe interval (ms)", { exact: true })).toBeVisible();
+  await expectUsableEditor();
+  await page.screenshot({ path: testInfo.outputPath("monitor-add-layout.png"), fullPage: true, animations: "disabled" });
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  const created = monitors.getByRole("row").filter({ has: page.getByRole("button", { name: "Live statistics for backup", exact: true }) });
+  await created.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await expect(editor.getByLabel("Probe Target", { exact: true })).toHaveValue("198.51.100.1");
+  await expectUsableEditor();
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(created).toBeVisible();
+  expect(backend.writes).toHaveLength(0);
+});
+
 test("shared route draft preserves other subsystems and requires explicit apply and confirmation", async ({ page }, testInfo) => {
   const backend = await mockBackend(page);
   await connect(page);
@@ -938,8 +1266,9 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   });
   expect(backend.writes.some(write => write.path.endsWith("/confirm"))).toBe(false);
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("Changes confirmed.");
-  await page.getByRole("dialog").getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
+  await expect(page.getByRole("region", { name: "Commit detail", exact: true })).toContainText("committed");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Committed revision 1", exact: true })).toBeVisible();
   expect(backend.writes.filter(write => write.path.endsWith("/confirm"))).toHaveLength(1);
   expect(await page.evaluate(() => Object.values(localStorage))).toEqual(["11111111-1111-4111-8111-111111111111"]);
@@ -1112,8 +1441,8 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   expect(backend.writes).toHaveLength(1);
   expect(backend.writes[0]?.body).toMatchObject({ config: expected });
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("Changes confirmed.");
-  await page.getByRole("dialog").getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Committed revision 1", exact: true })).toBeVisible();
 });
 
@@ -1166,7 +1495,7 @@ test("relay repair is explicit, bodyless and keeps forbidden errors visible", as
   await expect(page.getByRole("main")).toContainText("Simulated");
   expect(backend.writes).toHaveLength(0);
   await expect(page.getByRole("button", { name: "Reconcile all managed services", exact: true })).toHaveCount(0);
-  await navigate(page, "Maintenance");
+  await page.goto("/services/maintenance");
   await page.getByRole("button", { name: "Reconcile all managed services", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("softflowd.write");
   await page.getByRole("button", { name: "Reconcile all services", exact: true }).click();
@@ -1253,14 +1582,14 @@ test("DHCP gateway monitor saves before a lease and displays live resolved paths
   for (const key of ["source_address", "gateway", "routing_table"]) expect(sent.config.gateway_monitors[0]).not.toHaveProperty(key);
   expect(sent.config.interfaces).toEqual(initial.interfaces); expect(sent.config.dhcp_clients).toEqual(initial.dhcp_clients); expect(sent.config.routes).toEqual([]);
   await confirm.click(); await expect.poll(() => backend.writes.length).toBe(2);
-  await page.getByRole("dialog").getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await navigate(page, "Gateway monitors");
   const monitors = page.getByRole("region", { name: "Gateway monitors", exact: true });
-  const summary = page.getByRole("region", { name: "wan-health probe statistics", exact: true });
-  await expect(summary).toContainText("Waiting for DHCP"); await expect(summary).toContainText("waiting for DHCP lease");
+  const summary = monitors.getByRole("row").filter({ has: page.getByRole("button", { name: "Live statistics for wan-health", exact: true }) });
+  await expect(summary).not.toContainText("Waiting for DHCP"); await expect(summary).not.toContainText("waiting for DHCP lease");
   await expect(summary.getByText("unknown", { exact: true })).toBeVisible();
-  await expect(summary).toContainText("Mean RTT"); await expect(summary).toContainText("Unavailable");
+  await expect(summary.locator('[data-metric="Mean RTT"]')).toContainText("Unavailable");
   await expect(page.getByRole("region", { name: "wan-health live statistics", exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("dhcp-monitor-waiting-statistics.png"), fullPage: true, animations: "disabled" });
   await monitors.getByRole("button", { name: "Live statistics for wan-health", exact: true }).click();
@@ -1275,22 +1604,52 @@ test("DHCP gateway monitor saves before a lease and displays live resolved paths
   await page.screenshot({ path: testInfo.outputPath("dhcp-monitor-resolved.png"), fullPage: true, animations: "disabled" });
 });
 
+test("failed monitor push preserves long causes, operator prerequisites and the retained draft", async ({ page }, testInfo) => {
+  const initial = config(); initial.routes[0]!.table = 254; initial.gateway_monitors = [{ ...monitor(), routing_table: 254 }];
+  const cause = `apply failed: ${"native apply context: ".repeat(300)}gateway probes require explicit allow_gateway_monitoring opt-in; rollback detail retained`;
+  const backend = await mockBackend(page, { initialConfig: initial, applyError: { message: cause, outcome: "rolled_back" } });
+  await connect(page); await navigate(page, "Gateway monitors");
+  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  const editor = page.getByRole("row", { name: "Gateway monitor editor", exact: true });
+  await editor.getByLabel("Probe Target", { exact: true }).fill("198.51.100.2");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await navigate(page, "SAVE"); await page.getByRole("button", { name: "Commit & push" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator(".monitor-prerequisites")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Push changes", exact: true }).click();
+  const diagnostic = dialog.locator(".push-diagnostic");
+  await expect(diagnostic).toContainText("gateway probes require explicit allow_gateway_monitoring opt-in; rollback detail retained");
+  expect((await diagnostic.textContent())!.length).toBeGreaterThan(4096);
+  await dialog.getByText("Gateway monitoring prerequisites", { exact: true }).click();
+  const help = dialog.locator(".monitor-prerequisites");
+  await expect(help).toHaveAttribute("open", "");
+  await expect(help).toContainText("--allow-host-services"); await expect(help).toContainText("--gateway-monitoring");
+  await expect(help).toContainText("no active transaction or upgrade"); await expect(help).toContainText("refresh committed state and revision");
+  await help.scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await dialog.locator(".v-card-text").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("monitor-failure-prerequisites.png"), fullPage: true, animations: "disabled" });
+  expect(backend.writes).toHaveLength(1);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("main")).toContainText("198.51.100.2");
+  expect(backend.writes).toHaveLength(1);
+});
+
 test("appliance settings share one draft and explain clock and local logger rollback risk", async ({ page }) => {
   const backend = await mockBackend(page); await connect(page);
-  await navigate(page, "Appliance NTP");
+  await navigate(page, "NTP");
   await expect(page.getByRole("main").getByRole("heading")).toHaveCount(0);
-  await page.getByLabel("Desired enabled", { exact: true }).check();
-  await page.getByLabel("NTP server hosts", { exact: true }).fill("clock.example\n::1");
+  await page.getByRole("button", { name: "Add server", exact: true }).click();
+  await page.getByLabel("Host", { exact: true }).fill("clock.example");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Discard unstaged input", exact: true })).toBeDisabled();
-  await navigate(page, "Appliance syslog");
+  await expect(page.getByRole("row", { name: /clock.example/ })).toBeVisible();
+  await navigate(page, "Syslog");
   await expect(page.getByRole("main")).not.toContainText("Operator prerequisites");
-  await page.getByRole("button", { name: "Add syslog destinations", exact: true }).click();
-  await page.getByLabel("Syslog host", { exact: true }).fill("logs.example");
-  await page.getByLabel("Explicit syslog port", { exact: true }).fill("6514");
-  await page.getByLabel("Explicit transport", { exact: true }).press("Enter");
+  await page.getByRole("button", { name: "Add server", exact: true }).click();
+  await page.getByLabel("Host", { exact: true }).fill("logs.example");
+  await page.getByLabel("Port", { exact: true }).fill("6514");
+  await page.getByLabel("Transport", { exact: true }).press("Enter");
   await page.getByRole("option", { name: "TLS", exact: true }).click();
-  await page.getByLabel("Desired enabled", { exact: true }).check();
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await navigate(page, "vnStat");
   await expect(page.getByRole("main")).not.toContainText("Operator prerequisites");
@@ -1306,7 +1665,7 @@ test("appliance settings share one draft and explain clock and local logger roll
   await page.getByRole("button", { name: "Push changes", exact: true }).click();
   await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   expect(backend.writes[0]?.body).toMatchObject({ config: {
-    ntp: { enabled: true, servers: ["clock.example", "::1"] },
+    ntp: { enabled: true, servers: ["clock.example"] },
     syslog: { enabled: true, servers: [{ host: "logs.example", port: 6514, transport: "tls" }] },
     vnstat: { enabled: true }, routes: config().routes, gateway_monitors: [],
   } });
@@ -1324,21 +1683,37 @@ test("gateway fractional metrics, null gaps and stale health remain distinct", a
   await expect(monitors.getByRole("table")).toHaveCount(1);
   const toggle = monitors.getByRole("button", { name: "Live statistics for uplink", exact: true });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  const summary = page.getByRole("region", { name: "uplink probe statistics", exact: true });
-  await expect(summary).toBeVisible(); await expect(summary).toContainText("33.333 %");
+  const monitorRow = monitors.getByRole("row").filter({ has: page.getByRole("button", { name: "Live statistics for uplink", exact: true }) });
+  const summary = monitorRow;
+  await expect(monitorRow).toContainText("uplink");
+  await expect(monitorRow.getByRole("checkbox", { name: "Monitoring enabled for uplink", exact: true })).toBeVisible();
+  const actions = monitorRow.getByRole("cell").filter({ has: page.getByRole("button", { name: "Edit / stage", exact: true }) });
+  await expect(actions.getByRole("checkbox")).toHaveCount(0);
+  await expect(monitorRow.getByRole("cell").nth(2).getByRole("checkbox")).toBeVisible();
+  await expect(monitors.locator("tbody > tr")).toHaveCount(1);
+  await expect(summary).toBeVisible(); await expect(summary).toContainText("33.33 %");
   await expect(summary).not.toContainText("no monitor sample");
-  await expect(summary.locator("dd").filter({ hasText: "33.333 %" })).toHaveAttribute("title", "33.333333333333336 %");
+  await expect(summary.locator('[data-metric="Loss"]')).toHaveAttribute("title", "33.33 %");
   await expect(summary).toContainText("1.25 ms"); await expect(summary).toContainText("RTT variation");
-  await expect(summary).toContainText("Unavailable"); await expect(summary).toContainText("Sent");
-  await expect(summary).toContainText("Received"); await expect(summary).toContainText("stale");
+  await expect(summary).toContainText("Unavailable");
+  await expect(monitors.getByRole("columnheader")).toHaveText(["Name", "Interface", "Status", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Actions"]);
+  await expect(monitorRow.getByRole("cell")).toHaveCount(9);
+  await expect(summary.locator('[data-metric="Health"] .v-chip')).toHaveText("unknown");
+  await expect(summary.locator(".v-chip")).toHaveCount(5);
+  for (const metric of ["Loss", "Mean RTT", "Stddev", "RTT variation"]) {
+    await expect(summary.locator(`[data-metric="${metric}"] .v-chip`)).toHaveAttribute("aria-label", /Unrated/);
+  }
+  await expect(monitorRow).not.toContainText(initial.gateway_monitors[0]!.target);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("monitor-probe-statistics.png"), fullPage: true, animations: "disabled" });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const panel = page.getByRole("region", { name: "uplink live statistics", exact: true });
-  await expect(panel).toContainText("33.333333333333336 %");
+  await expect(panel).toContainText("33.33 %");
   await expect(panel).toContainText("0 ms"); await expect(panel).toContainText("1.25 ms");
   await expect(panel).toContainText("Unavailable"); await expect(panel).toContainText("stale");
+  await expect(panel).toContainText(initial.gateway_monitors[0]!.target);
+  for (const label of ["Sample", "Sent", "Received", "Lost", "Pending"]) await expect(panel.locator("dt").getByText(label, { exact: true })).toBeVisible();
   await expect(panel.getByText("unknown", { exact: true })).toBeVisible();
   await expect(monitors.getByRole("table")).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -1348,6 +1723,47 @@ test("gateway fractional metrics, null gaps and stale health remain distinct", a
   await expect(panel).toHaveCount(0);
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(summary).toBeVisible();
+});
+
+test("gateway metric chips show four quality bands without changing monitor health", async ({ page }, testInfo) => {
+  const bands = [
+    { name: "good", color: "green", loss: 0, latency: 99, spread: 9 },
+    { name: "fair", color: "yellow", loss: 1, latency: 100, spread: 10 },
+    { name: "warning", color: "orange", loss: 3, latency: 150, spread: 20 },
+    { name: "poor", color: "red", loss: 5, latency: 300, spread: 30 },
+  ];
+  const initial = config();
+  initial.gateway_monitors = bands.map(band => ({ ...monitor(), name: band.name, probe_interval_ms: 10000 }));
+  await mockBackend(page, { initialConfig: initial, gatewayRows: bands.map(band => ({
+    ...gatewayStatistics(), name: band.name, loss_percent: band.loss, rtt_avg_ms: band.latency,
+    rtt_stddev_ms: band.spread, rtt_variation_ms: band.spread,
+  })) });
+  await connect(page); await navigate(page, "Gateway monitors");
+  const monitors = page.getByRole("region", { name: "Gateway monitors", exact: true });
+  for (const band of bands) {
+    const row = monitors.getByRole("row").filter({ has: page.getByRole("button", { name: `Live statistics for ${band.name}`, exact: true }) });
+    await expect(row.locator('[data-metric="Health"] .v-chip')).toHaveText("up");
+    for (const metric of ["Loss", "Mean RTT", "Stddev", "RTT variation"]) {
+      const chip = row.locator(`[data-metric="${metric}"] .v-chip`);
+      await expect(chip).toHaveClass(new RegExp(`text-${band.color}\\b`));
+      await expect(chip).toHaveAttribute("title", /Green <.*red >=/);
+    }
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await monitors.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("monitor-metric-colors.png"), fullPage: true, animations: "disabled" });
+  await navigate(page, "Overview");
+  const gateways = page.getByRole("region", { name: "Gateways", exact: true });
+  for (const band of bands) {
+    const row = gateways.getByRole("row").filter({ has: page.getByRole("cell", { name: band.name, exact: true }) });
+    for (const metric of ["Mean RTT", "Stddev", "Loss"]) {
+      await expect(row.locator(`[data-metric="${metric}"] .v-chip`)).toHaveClass(new RegExp(`text-${band.color}\\b`));
+    }
+    await expect(row.locator("td:last-child .v-chip")).toHaveText("Online");
+    await expect(row.locator("td:last-child .v-chip")).toHaveClass(/text-success/);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("overview-gateway-metric-colors.png"), fullPage: true, animations: "disabled" });
 });
 
 test("operational pages keep content compact with readable details", async ({ page }, testInfo) => {
@@ -1384,9 +1800,9 @@ test("operational pages keep content compact with readable details", async ({ pa
 test("appliance repair uses stored cross-service permissions and keeps 403 visible", async ({ page }) => {
   const initial = config(); initial.gateway_monitors = [monitor()]; initial.ntp = { enabled: true, servers: ["clock.example"] }; initial.vnstat.enabled = true;
   const backend = await mockBackend(page, { initialConfig: initial, serviceDenied: true }); await connect(page);
-  await navigate(page, "Appliance NTP");
+  await navigate(page, "NTP");
   await expect(page.getByRole("button", { name: "Reconcile all managed services", exact: true })).toHaveCount(0);
-  await navigate(page, "Maintenance");
+  await page.goto("/services/maintenance");
   await page.getByRole("button", { name: "Reconcile all managed services", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("gateway_monitors.write");
   await expect(page.getByRole("dialog")).toContainText("vnstat.write");
@@ -1395,75 +1811,22 @@ test("appliance repair uses stored cross-service permissions and keeps 403 visib
   expect(backend.writes).toEqual([{ path: "/services/softflowd/reconcile", body: undefined }]);
 });
 
-test("WireGuard and interface settings have separate owners and preserve one draft", async ({ page }, testInfo) => {
-  const initial = config();
-  const tunnel = { name: "wg0", kind: "wireguard" as const, role: "wan" as const, mtu: 1420, up: true, addresses: ["10.0.0.1/24"], dhcp_relay: { enabled: false, servers: [] }, wireguard: {
-    key_ref: "tunnel-key", listen_port: 51820, peers: [{ public_key: btoa("\x01".repeat(32)), endpoint: "198.51.100.1:51820", allowed_ips: ["10.20.0.0/24"], persistent_keepalive_seconds: 25 }],
-  } };
-  initial.interfaces.push(tunnel);
-  initial.dns = { wg0: { servers: ["192.0.2.53"], domains: [] } };
-  const backend = await mockBackend(page, { initialConfig: initial });
-  await connect(page); await navigate(page, "Physical interfaces");
-  await expect(page.getByRole("button", { name: "Add interface", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("main").getByRole("link", { name: "wg0", exact: true })).toHaveCount(0);
-  await navigate(page, "WireGuard");
-  await page.getByRole("link", { name: "Edit interface wg0", exact: true }).click();
-  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
-  await expect(page.getByLabel("Key reference", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("Stable listen port", { exact: true })).toHaveCount(0);
-  await page.getByLabel("MTU", { exact: true }).fill("1450");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await navigate(page, "WireGuard");
-  await expect(page.getByRole("columnheader", { name: "Listen port", exact: true })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "MTU", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
-  await page.getByRole("main").getByRole("link", { name: "wg0", exact: true }).click();
-  await expect(page).toHaveURL(/\/wireguard\/wg0$/);
-  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
-  for (const label of ["Required interface role", "MTU", "Interface address prefixes", "DNS server IP addresses", "Enable DHCPv4 relay"]) {
-    await expect(page.getByLabel(label, { exact: true })).toHaveCount(0);
-  }
-  await page.getByLabel("Stable listen port", { exact: true }).fill("51821");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("cell", { name: "51821", exact: true })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("wireguard-owner.png"), fullPage: true, animations: "disabled" });
-  await page.getByRole("link", { name: "Edit interface wg0", exact: true }).click();
-  await expect(page).toHaveURL(/\/interfaces\/wg0$/);
-  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
-  await expect(page.getByLabel("MTU", { exact: true })).toHaveValue("1450");
-  await expect(page.getByLabel("DNS server IP addresses", { exact: true })).toHaveValue("192.0.2.53");
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.getByRole("link", { name: "Save configuration", exact: true }).click();
-  await expect(page).toHaveURL(/\/config\/changes$/);
-  await page.getByRole("button", { name: "Commit & push", exact: true }).click();
-  await page.getByRole("button", { name: "Push changes", exact: true }).click();
-  await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
-  expect(backend.writes).toHaveLength(1);
-  expect(backend.writes[0]?.body).toMatchObject({ config: {
-    interfaces: [initial.interfaces[0], { ...tunnel, mtu: 1450, wireguard: { ...tunnel.wireguard, listen_port: 51821 } }],
-    dns: initial.dns, firewall: initial.firewall, routes: initial.routes,
-  } });
-});
-
 test("new WireGuard tunnels are created only from their owning page", async ({ page }) => {
-  const backend = await mockBackend(page); await connect(page); await navigate(page, "WireGuard");
+  const backend = await mockBackend(page); await connect(page); await navigate(page, "Tunnel interfaces");
   await page.getByRole("button", { name: "Add tunnel", exact: true }).click();
-  await page.getByLabel("Interface name", { exact: true }).fill("wg1");
-  await page.getByLabel("Required interface role", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "Unassigned", exact: true }).click();
-  await page.getByLabel("Key reference", { exact: true }).fill("new-tunnel-key");
-  await page.getByLabel("Stable listen port", { exact: true }).fill("51822");
-  await expect(page.getByLabel("Enable DHCPv4 relay", { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("DNS server IP addresses", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Name", { exact: true })).toHaveValue("tun_wg0");
+  await page.getByLabel("Private Key", { exact: true }).fill("new-tunnel-key");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("dialog")).not.toBeVisible();
-  await expect(page.getByRole("cell", { name: "51822", exact: true })).toBeVisible();
+  await expect(page.getByRole("row", { name: /tun_wg0/ })).toContainText("51820");
   await navigate(page, "Physical interfaces");
-  await expect(page.getByRole("link", { name: "wg1", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Add interface", exact: true })).toHaveCount(0);
-  await navigate(page, "WireGuard");
-  await expect(page.getByRole("link", { name: "wg1", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "tun_wg0", exact: true })).toHaveCount(0);
+  await navigate(page, "WireGuard peers");
+  await page.getByRole("button", { name: "Add peer", exact: true }).click();
+  await page.getByLabel("Public key", { exact: true }).fill(btoa("\x01".repeat(32)));
+  await page.getByLabel("Allowed networks (comma separated)", { exact: true }).fill("10.20.0.0/24");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("button", { name: /^Details for tun_wg0/ }).click();
+  await expect(page.getByRole("row").filter({ hasText: "Allowed networks" })).toContainText("10.20.0.0/24");
   expect(backend.writes).toHaveLength(0);
 });
 

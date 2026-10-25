@@ -231,6 +231,10 @@ body {
   max-width: 360px;
 }
 
+.v-table > .v-table__wrapper > table > :is(thead, tbody, tfoot) > tr > :is(td, th) {
+  padding-block: 2px;
+}
+
 .v-table > .v-table__wrapper > table > tbody > tr > :is(td, th) {
   border-block-width: 0 !important;
 }

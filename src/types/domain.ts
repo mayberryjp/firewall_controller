@@ -17,6 +17,7 @@ export const kernelSchema = z.object({ namespace: stringMap, host: stringMap }).
 export const peerSchema = z.object({
   ...annotation,
   public_key: z.string(), endpoint: optionalText, allowed_ips: list(z.string()),
+  enabled: z.boolean().optional(),
   persistent_keepalive_seconds: integer,
 }).strict();
 export const dhcpRelaySchema = z.object({
@@ -44,6 +45,7 @@ export type DiscoveredInterface = z.infer<typeof discoveredInterfacesSchema>[num
 export const dhcpRetrySchema = z.object({ interface: z.string(), status: z.literal("retrying") }).strict();
 export const routeSchema = z.object({
   ...annotation,
+  enabled: z.boolean().default(true),
   destination: z.string(), gateway: optionalText, interface: z.string(), table: integer, metric: integer,
 }).strict();
 export const filterSchema = z.object({
@@ -133,6 +135,39 @@ export const dnsConfigSchema = z.object({
   servers: z.array(z.string()).default([]),
   domains: z.array(z.object({ ...annotation, name: z.string(), route_only: z.boolean() }).strict()).default([]),
 }).strict();
+export const mqttSchema = z.object({
+  enabled: z.boolean().default(false), endpoint: z.string().default(""), username: z.string().default(""),
+  password_ref: z.string().regex(/^(?:[a-f0-9]{32})?$/).default(""),
+  source_interface: z.string().default(""), interval_seconds: integer.default(60),
+}).strict();
+export type MqttConfig = z.infer<typeof mqttSchema>;
+export const mqttPasswordReferenceSchema = z.object({ password_ref: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
+export const mqttStatusSchema = z.object({
+  device_id: z.string(), enabled: z.boolean(),
+  state: z.string(),
+  error: z.string().nullable(), last_published_at_unix: integer.nonnegative().nullable(),
+}).strict();
+export const dynamicDnsSchema = z.object({
+  ...annotation,
+  name: z.string(), enabled: z.boolean(), source_interface: z.string(), address_source: z.enum(["interface", "public_ip"]),
+  tenant_id: z.string(), client_id: z.string(), secret_ref: z.string().regex(/^[a-f0-9]{32}$/),
+  zone_resource_id: z.string(), record_name: z.string(), ttl_seconds: integer, interval_seconds: integer,
+}).strict();
+export type DynamicDnsEntry = z.infer<typeof dynamicDnsSchema>;
+export const blackholeSchema = z.object({
+  ...annotation,
+  name: z.string().default(""), action: z.enum(["blackhole", "unreachable", "prohibit"]).default("blackhole"),
+}).strict();
+export type BlackholeConfig = z.infer<typeof blackholeSchema>;
+export const dynamicDnsSecretReferenceSchema = z.object({ secret_ref: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
+export const dynamicDnsStatusSchema = z.object({
+  entries: list(z.object({
+    name: z.string(),
+    state: z.string(),
+    address: z.string().nullable(), last_checked_at_unix: integer.nonnegative().nullable(),
+    last_updated_at_unix: integer.nonnegative().nullable(), error: z.string().nullable(),
+  }).strict()),
+}).strict();
 export const configSchema = z.object({
   ipv6_enabled: z.boolean().optional(),
   interfaces: list(interfaceSchema), routes: list(routeSchema),
@@ -146,10 +181,15 @@ export const configSchema = z.object({
   softflowd: list(softflowdSchema),
   gateway_monitors: list(gatewayMonitorSchema).default([]),
   ntp: ntpSchema, syslog: syslogSchema, vnstat: vnstatSchema,
+  mqtt: mqttSchema.optional(),
+  dynamic_dns: list(dynamicDnsSchema).optional(),
+  blackhole: blackholeSchema.optional(),
   dhcp_clients: z.record(dhcpClientSchema).optional(), dns: z.record(dnsConfigSchema).optional(),
   // The backend added kernel settings after FRONTEND_SPEC; preserve, but do not edit them.
   kernel: kernelSchema.optional(),
-}).strict();
+  // Retired public field: present at all (even [] or null) is incompatible.
+  policy_rules: z.never().optional(),
+}).passthrough(); // Unknown top-level sections pass through drafts unchanged so a newer backend keeps them.
 export const transactionSchema = z.object({
   id: z.string(), actor: z.string(), status: z.string(),
   base_revision: revisionSchema, candidate: configSchema, previous: configSchema,
@@ -182,6 +222,8 @@ export const parentSchema = z.object({
 export const serviceStatusSchema = z.object({
   name: z.string(), state: z.string(), pid: integer.optional(),
   started_at: timestamp.nullable().optional(), error: optionalText,
+  dropped_packets: z.string().regex(/^(0|[1-9]\d*)$/).optional(),
+  statistics_complete: z.boolean().optional(),
 });
 export const dhcpRelayStatusSchema = z.object({
   interface: z.string(), state: z.string(), pid: integer.optional(),
@@ -230,6 +272,14 @@ export const runtimeSchema = z.preprocess(value => {
   parent_interfaces: list(parentSchema), softflowd: list(serviceStatusSchema), error: optionalText,
   dhcp_relay: list(dhcpRelayStatusSchema),
   gateway_monitors: list(gatewayStatisticsSchema), appliance_services: list(applianceStatusSchema),
+  wireguard: list(z.object({
+    interface: z.string(), public_key: z.string().nullable(), listen_port: integer.nullable(),
+    peers: list(z.object({
+      public_key: z.string(), endpoint: z.string().nullable(),
+      rx_bytes: z.string().regex(/^(0|[1-9]\d*)$/), tx_bytes: z.string().regex(/^(0|[1-9]\d*)$/),
+      last_handshake_unix_seconds: integer.nonnegative().nullable(),
+    }).strict()),
+  }).strict()).optional(),
   ipv6: z.object({
     enabled: z.boolean(), status: z.enum(["measured", "simulated"]),
     disable_ipv6: z.record(z.enum(["0", "1"])).nullable(), drift: z.boolean().nullable(),

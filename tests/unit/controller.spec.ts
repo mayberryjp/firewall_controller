@@ -241,6 +241,18 @@ describe("provisional transaction safety", () => {
     expect(store.activeTransactions[0]?.status).toBe("recovery_failed");
     expect(store.uncertain?.id).toBe(failure.id); expect(store.draft).not.toBeNull();
   });
+  it.each(["rolled_back", "recovery_failed"])("retains the full %s cause, transaction identity and draft without automatically retrying", async outcome => {
+    const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
+    const cause = `apply failed: ${"nested apply context: ".repeat(300)}gateway monitoring opt-in missing; rollback detail retained`;
+    const failure = { ...transaction(outcome), candidate, error: cause };
+    vi.mocked(api.getTransaction).mockResolvedValue(failure);
+    vi.mocked(api.submitPackage).mockRejectedValue(new ApiFailure(cause, 500, failure, true));
+    vi.mocked(api.getTransactions).mockResolvedValueOnce({}).mockResolvedValue({ [failure.id]: failure });
+    await store.apply(120, "");
+    expect(store.transactions.data?.[failure.id]).toMatchObject({ id: failure.id, status: outcome, error: cause });
+    expect(store.actionError).toBe(cause); expect(store.draft).toEqual(candidate); expect(store.baseRevision).toBe("0");
+    await store.refresh(); expect(api.submitPackage).toHaveBeenCalledOnce();
+  });
   it("a 403 preserves the draft and reports the action instead of claiming success", async () => {
     const store = await connected(); const candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
     vi.mocked(api.submitPackage).mockRejectedValue(new ApiFailure("permission denied", 403));

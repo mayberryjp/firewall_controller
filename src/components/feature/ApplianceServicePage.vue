@@ -8,15 +8,14 @@ import { record, type Field } from "@/types/forms";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import FieldInput from "@/components/base/FieldInput.vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
-import { metadataFields } from "@/services/resourceForms";
 const props = defineProps<{ service: ApplianceService }>();
 const store = useControllerStore();
 const service = toRef(props, "service");
-const titles = { ntp: "Appliance NTP", syslog: "Appliance syslog", vnstat: "Dual-scope vnStat" };
+const titles = { ntp: "NTP", syslog: "Syslog", vnstat: "Dual-scope vnStat" };
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
 const editing = computed(() => store.draft ?? stored.value);
 const form = ref<Record<string, unknown>>({}), initial = ref(""), error = ref(""), errors = ref<Record<string, string[]>>({});
-const fields = computed<Field[]>(() => metadataFields([
+const fields = computed<Field[]>(() => [
   { key: "enabled", label: "Desired enabled", kind: "switch" },
   ...(service.value === "ntp" ? [{ key: "servers", label: "NTP server hosts", kind: "lines" as const, hint: "One canonical IP or lowercase ASCII DNS host per line; 1..8 when enabled, 0..8 disabled. Lists remain validated and retained." }] : []),
   ...(service.value === "syslog" ? [{
@@ -28,7 +27,7 @@ const fields = computed<Field[]>(() => metadataFields([
       { key: "transport", label: "Explicit transport", kind: "select" as const, choices: ["udp", "tcp", "tls"].map(value => ({ title: value.toUpperCase(), value })) },
     ],
   }] : []),
- ]));
+]);
 function reset(): void {
   form.value = record(JSON.parse(JSON.stringify(editing.value?.[service.value] ?? { enabled: false, ...(service.value === "vnstat" ? {} : { servers: [] }) })));
   initial.value = stableJson(form.value); store.editorDirty = false; error.value = ""; errors.value = {};

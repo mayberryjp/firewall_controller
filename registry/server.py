@@ -33,6 +33,30 @@ MAX_DEVICES = 500
 NAME_LIMIT = 80
 ADDRESS_LIMIT = 300
 CREDENTIAL_LIMIT = 4096
+OVERVIEW_WIDGETS = {"interfaces", "gateways", "wireguard", "system", "counters"}
+
+
+def default_overview_layout() -> dict[str, object]:
+    return {"version": 1, "columns": [["interfaces", "gateways", "wireguard"], ["system", "counters"]]}
+
+
+def normalize_overview_layout(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {"version", "columns"}:
+        raise ValueError("Overview layout must contain version and columns")
+    if type(value["version"]) is not int or value["version"] != 1:
+        raise ValueError("Unsupported overview layout version")
+    columns = value["columns"]
+    if not isinstance(columns, list) or len(columns) != 2:
+        raise ValueError("Overview layout requires two columns")
+    seen: set[str] = set()
+    for column in columns:
+        if not isinstance(column, list) or len(column) > len(OVERVIEW_WIDGETS):
+            raise ValueError("Invalid overview layout column")
+        for widget in column:
+            if not isinstance(widget, str) or widget not in OVERVIEW_WIDGETS or widget in seen:
+                raise ValueError("Overview layout contains an unknown or duplicate box")
+            seen.add(widget)
+    return {"version": 1, "columns": columns}
 
 
 def encode_token(value: bytes) -> str:
@@ -121,6 +145,9 @@ class DeviceRegistry:
                 updated_at TEXT NOT NULL
             )"""
         )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS preferences (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
         connection.commit()
         return connection
 
@@ -185,6 +212,21 @@ class DeviceRegistry:
                 "SELECT id, name, address, created_at, updated_at FROM devices ORDER BY name COLLATE NOCASE, id"
             ).fetchall()
         return [self._public(row) for row in rows]
+
+    def get_overview_layout(self) -> dict[str, object]:
+        with self._connection() as connection:
+            row = connection.execute("SELECT value FROM preferences WHERE key = 'overview'").fetchone()
+        return normalize_overview_layout(json.loads(row["value"])) if row else default_overview_layout()
+
+    def save_overview_layout(self, value: object) -> dict[str, object]:
+        layout = normalize_overview_layout(value)
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT INTO preferences (key, value) VALUES ('overview', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (json.dumps(layout, separators=(",", ":")),),
+            )
+        return layout
 
     def create_device(self, name: object, address: object, credential: object) -> dict[str, str]:
         device_id = str(uuid.uuid4())
@@ -475,15 +517,18 @@ def make_server(
             if proxy_match is not None:
                 self._proxy("GET", proxy_match.group(1), proxy_match.group(2))
                 return
-            if path != "/api/v1/devices":
+            if path not in ("/api/v1/devices", "/api/v1/preferences/overview"):
                 self._send(404, {"error": "Not found"})
                 return
             if not self._authorized():
                 self._send(401, {"error": "Registry login required"}, {"X-Registry-Auth-Error": "true"})
                 return
             try:
+                if path == "/api/v1/preferences/overview":
+                    self._send(200, self.registry.get_overview_layout())
+                    return
                 devices = self.registry.list_devices()
-            except sqlite3.Error as error:
+            except (sqlite3.Error, ValueError) as error:
                 self.log_error("device registry database read failed: %s", error)
                 self._send(503, {"error": "Device registry storage is unavailable"})
                 return
@@ -512,6 +557,9 @@ def make_server(
                     return
                 if not self._authorized():
                     self._send(401, {"error": "Registry login required"}, {"X-Registry-Auth-Error": "true"})
+                    return
+                if path == "/api/v1/preferences/overview":
+                    self._send(200, self.registry.save_overview_layout(body))
                     return
                 if path == "/api/v1/devices":
                     self._send(201, {"device": self.registry.create_device(

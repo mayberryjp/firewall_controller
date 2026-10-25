@@ -7,7 +7,7 @@ import ApplyConfigurationDialog from "@/components/feature/ApplyConfigurationDia
 import SafetyBanner from "@/components/layout/SafetyBanner.vue";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import { useControllerStore } from "@/stores/controller";
-import { config, state, transaction } from "../fixtures";
+import { config, state, transaction, monitor } from "../fixtures";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
@@ -148,6 +148,37 @@ describe("navbar firewall status", () => {
   });
 });
 describe("shared save safety", () => {
+  it.each(["rolled_back", "recovery_failed"])("shows complete monitor errors and operator prerequisites for %s without altering the retained draft", async outcome => {
+    const store = useControllerStore(), candidate = config(); candidate.gateway_monitors = [monitor()]; store.stage(candidate);
+    const before = JSON.stringify(store.draft), base = store.baseRevision;
+    const cause = `apply failed: ${"nested cause: ".repeat(400)}gateway probes require explicit allow_gateway_monitoring opt-in; recovery cause retained`;
+    const failed = { ...transaction(outcome), candidate, error: cause };
+    const apply = vi.spyOn(store, "apply").mockResolvedValue(failed);
+    const wrapper = saveDialog();
+    try {
+      expect(wrapper.find(".monitor-prerequisites").exists()).toBe(false);
+      await wrapper.findAll("button").find(button => button.text() === "Push changes")!.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain(cause);
+      if (outcome === "rolled_back") expect(wrapper.text()).toContain("Changes rolled back.");
+      else expect(wrapper.text()).toContain("recovery failed");
+      const help = wrapper.get(".monitor-prerequisites");
+      expect(help.text()).toContain("--allow-host-services"); expect(help.text()).toContain("--gateway-monitoring");
+      expect(help.text()).toContain("no active transaction or upgrade"); expect(help.text()).toContain("refresh committed state and revision");
+      expect(JSON.stringify(store.draft)).toBe(before); expect(store.baseRevision).toBe(base);
+      expect(apply).toHaveBeenCalledOnce();
+    } finally { wrapper.unmount(); }
+  });
+  it("offers monitor prerequisites for a rejected push but not for an unrelated configuration failure", async () => {
+    const store = useControllerStore(), candidate = config(); candidate.gateway_monitors = [monitor()]; store.stage(candidate);
+    const apply = vi.spyOn(store, "apply").mockImplementation(async () => { store.actionError = "HTTP 500: native apply failed; previous configuration restored"; return null; });
+    const wrapper = saveDialog();
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Push changes")!.trigger("click"); await flushPromises();
+      expect(wrapper.find(".monitor-prerequisites").exists()).toBe(true); expect(store.draft).toEqual(candidate);
+      store.stage(config()); await flushPromises();
+      expect(wrapper.find(".monitor-prerequisites").exists()).toBe(false); expect(apply).toHaveBeenCalledOnce();
+    } finally { wrapper.unmount(); }
+  });
   it("does not display a separate pending-confirmation banner but retains recovery failures", async () => {
     const store = useControllerStore(), pending = transaction(); store.transactions.data = { [pending.id]: pending };
     store.notice = "Server reports pending_confirmation; only committed is a durable revision.";
@@ -181,7 +212,7 @@ describe("shared save safety", () => {
     expect(wrapper.text()).toContain(`Push blocked: ${useControllerStore().applyBlockedReason}`);
     expect(wrapper.text()).toContain("Modeled drift");
   });
-  it("pushes and confirms in the same dialog without another popup or connectivity attestation", async () => {
+  it("pushes and confirms in the same dialog then opens results without a Done step", async () => {
     stageDraft();
     const pending = transaction(), store = useControllerStore();
     const apply = vi.spyOn(store, "apply").mockResolvedValue(pending);
@@ -199,11 +230,42 @@ describe("shared save safety", () => {
     const confirmation = wrapper.findAll("button").find(button => button.text() === "Confirm changes")!;
     await confirmation.trigger("click"); await flushPromises();
     expect(confirm).toHaveBeenCalledWith(pending.id, "confirm");
-    expect(wrapper.text()).toContain("Changes confirmed.");
-    expect(wrapper.findAll('[role="dialog"]')).toHaveLength(1);
-    await wrapper.findAll("button").find(button => button.text() === "Done")!.trigger("click"); await flushPromises();
+    expect(wrapper.emitted("update:modelValue")).toContainEqual([false]);
     expect(push).toHaveBeenCalledWith(`/config/commits/${pending.id}`);
+    expect(push).toHaveBeenCalledOnce();
+    await wrapper.setProps({ modelValue: false });
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     wrapper.unmount();
+  });
+  it("opens results when a delayed status read verifies that the push committed", async () => {
+    vi.useFakeTimers(); stageDraft();
+    const pending = transaction(), store = useControllerStore();
+    vi.spyOn(store, "apply").mockResolvedValue({ ...pending, status: "applying" });
+    const read = vi.spyOn(store, "readTransaction").mockResolvedValue({ ...pending, status: "committed" });
+    const wrapper = saveDialog();
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Push changes")!.trigger("click"); await flushPromises();
+      expect(push).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2000); await flushPromises();
+      expect(wrapper.emitted("update:modelValue")).toContainEqual([false]);
+      expect(push).toHaveBeenCalledExactlyOnceWith(`/config/commits/${pending.id}`);
+      await vi.advanceTimersByTimeAsync(10000); expect(read).toHaveBeenCalledOnce();
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
+  it("keeps an unsuccessful confirmation in the dialog without navigating to results", async () => {
+    stageDraft();
+    const pending = transaction(), store = useControllerStore();
+    vi.spyOn(store, "apply").mockResolvedValue(pending);
+    vi.spyOn(store, "lifecycle").mockImplementation(async () => { store.actionError = "Confirmation outcome is uncertain"; return null; });
+    const wrapper = saveDialog();
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Push changes")!.trigger("click"); await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Confirm changes")!.trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("Confirmation outcome is uncertain");
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+      expect(push).not.toHaveBeenCalled();
+      expect(wrapper.emitted("update:modelValue")).toBeUndefined();
+    } finally { wrapper.unmount(); }
   });
   it("does not save over unstaged form input", async () => {
     stageDraft();

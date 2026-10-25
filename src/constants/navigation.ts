@@ -21,6 +21,8 @@ export const navigationSections: NavigationSection[] = [
     { title: "Physical interfaces", name: "interfaces", path: "/interfaces", icon: "mdi-lan" },
     { title: "VLANs", name: "vlans", path: "/vlans", icon: "mdi-lan" },
     { title: "Loopbacks", name: "loopbacks", path: "/loopbacks", icon: "mdi-restore" },
+    { title: "Blackhole interfaces", name: "blackhole", path: "/blackhole", icon: "mdi-cancel" },
+    { title: "Tunnel interfaces", name: "tunnels", path: "/tunnels", icon: "mdi-tunnel-outline" },
   ] },
   { title: "Routing", name: "routing-section", path: "/routing", icon: "mdi-transit-connection-variant", pages: [
     { title: "Static Routes", name: "routes", path: "/routes", icon: "mdi-transit-connection-variant" },
@@ -33,18 +35,19 @@ export const navigationSections: NavigationSection[] = [
     { title: "NAT masquerading", name: "nat", path: "/nat", icon: "mdi-swap-horizontal" },
   ] },
   { title: "VPN", name: "vpn-section", path: "/vpn", icon: "mdi-wan", pages: [
-    { title: "WireGuard", name: "wireguard", path: "/wireguard", icon: "mdi-wan" },
+    { title: "WireGuard peers", name: "wireguard", path: "/wireguard", icon: "mdi-wan" },
   ] },
   { title: "Services", name: "services-section", path: "/services", icon: "mdi-apps", pages: [
-    { title: "softflowd", name: "softflowd", path: "/services/softflowd", icon: "mdi-chart-timeline-variant" },
+    { title: "NetFlow/IPFIX", name: "netflow", path: "/services/netflow", icon: "mdi-chart-timeline-variant" },
     { title: "DHCPv4 relay", name: "dhcp-relay", path: "/services/dhcp-relay", icon: "mdi-lan-connect" },
-    { title: "Appliance NTP", name: "ntp", path: "/services/ntp", icon: "mdi-clock-outline" },
-    { title: "Appliance syslog", name: "syslog", path: "/services/syslog", icon: "mdi-text-box-outline" },
+    { title: "NTP", name: "ntp", path: "/services/ntp", icon: "mdi-clock-outline" },
+    { title: "Syslog", name: "syslog", path: "/services/syslog", icon: "mdi-text-box-outline" },
     { title: "vnStat", name: "vnstat", path: "/services/vnstat", icon: "mdi-chart-bar" },
-    { title: "Maintenance", name: "service-maintenance", path: "/services/maintenance", icon: "mdi-wrench-outline" },
   ] },
   { title: "Settings", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
     { title: "General", name: "settings-general", path: "/settings/general", icon: "mdi-cog-outline" },
+    { title: "MQTT STREAMING", name: "settings-mqtt-streaming", path: "/settings/mqtt-streaming", icon: "mdi-home-assistant" },
+    { title: "Dynamic DNS", name: "settings-dynamic-dns", path: "/settings/dynamic-dns", icon: "mdi-dns-outline" },
   ] },
   { title: "Config", name: "config-section", path: "/config", icon: "mdi-history", pages: [
     { title: "SAVE", name: "changes", path: "/config/changes", icon: "mdi-file-compare" },

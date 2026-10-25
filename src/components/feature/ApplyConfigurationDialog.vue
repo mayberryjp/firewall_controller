@@ -15,6 +15,8 @@ const error = ref("");
 const confirmationSeconds = ref<number | string>(120), saveDescription = ref("");
 const pushed = ref<Transaction | null>(null);
 const current = computed(() => pushed.value ? store.transactions.data?.[pushed.value.id] ?? pushed.value : null);
+const monitorFailure = computed(() => Boolean(error.value || current.value?.error) &&
+  (current.value?.candidate ?? store.draft)?.gateway_monitors.some(monitor => monitor.enabled));
 let timer: ReturnType<typeof setTimeout> | undefined, generation = 0, failures = 0;
 function stopReading(): void { generation++; clearTimeout(timer); }
 function scheduleRead(): void {
@@ -38,6 +40,9 @@ watch(open, value => {
   error.value = ""; pushed.value = null;
   confirmationSeconds.value = props.seconds; saveDescription.value = props.description;
 }, { immediate: true });
+watch([open, () => current.value?.status, () => store.busy], () => {
+  if (open.value && current.value?.status === "committed" && !store.busy) void close();
+});
 async function apply(): Promise<void> {
   if (!store.canApply || store.editorDirty) return;
   try {
@@ -64,6 +69,14 @@ async function close(): Promise<void> {
       <v-card-text>
         <template v-if="current">
           <v-alert
+            v-if="store.ignoredFields.length"
+            type="warning"
+            variant="tonal"
+            class="mb-3"
+          >
+            The firewall ignored unrecognized settings, so they are not applied: {{ store.ignoredFields.join(', ') }}
+          </v-alert>
+          <v-alert
             v-if="current.status === 'committed'"
             type="success"
           >
@@ -82,20 +95,20 @@ async function close(): Promise<void> {
             >
               {{ current.status === 'pending_confirmation' ? 'Changes applied.' : current.status.replaceAll('_', ' ') }}
             </p>
-            <v-alert
-              v-if="current.error"
-              type="error"
-              role="alert"
-              class="mb-3"
-            >
-              {{ current.error }}
-            </v-alert>
             <TransactionActions
               :transaction="current"
               :show-details="false"
               @updated="pushed = $event"
             />
           </template>
+          <v-alert
+            v-if="current.error"
+            type="error"
+            role="alert"
+            class="mb-3 push-diagnostic"
+          >
+            {{ current.error }}
+          </v-alert>
         </template>
         <template v-else>
           <p class="mb-4">
@@ -146,10 +159,29 @@ async function close(): Promise<void> {
           v-if="error"
           type="error"
           role="alert"
-          class="mb-4"
+          class="mb-4 push-diagnostic"
         >
           {{ error }}
         </v-alert>
+        <details
+          v-if="monitorFailure"
+          class="monitor-prerequisites mb-4"
+        >
+          <summary>Gateway monitoring prerequisites</summary>
+          <p class="mt-2 mb-2">
+            Host monitoring requires both <code>--allow-host-services</code> and <code>--gateway-monitoring</code>.
+            <code>--appliance</code> alone is insufficient; the shipped service unit enables neither opt-in.
+          </p>
+          <p class="mb-2">
+            An operator must review other configured host services, preserve existing startup flags,
+            and keep independent OS SSH or console access. Restart only with no active transaction or upgrade.
+          </p>
+          <p>
+            After operator enablement, verify connectivity and refresh committed state and revision before an explicit retry.
+            Review the transaction outcome first; a failed recovery must be resolved before another push.
+            Do not disable monitors or add static routes or lease addresses to work around a DHCP monitor failure.
+          </p>
+        </details>
       </v-card-text>
       <v-card-actions class="flex-wrap">
         <v-btn
@@ -179,3 +211,9 @@ async function close(): Promise<void> {
     </v-card>
   </v-dialog>
 </template>
+
+<style scoped>
+.push-diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; }
+.monitor-prerequisites { overflow-wrap: anywhere; }
+.monitor-prerequisites summary { cursor: pointer; }
+</style>

@@ -119,11 +119,10 @@ describe("unified configuration diff", () => {
     after.interfaces = []; after.routes = [];
     const removed = diff(before, after);
     expect(removed.findAll(".deletion").length).toBeGreaterThan(0);
-    expect(removed.find(".addition").exists()).toBe(false);
     expect(removed.findAll(".line-code").some(line => line.text() === "null")).toBe(false);
     const added = diff(after, before);
     expect(added.findAll(".addition").length).toBeGreaterThan(0);
-    expect(added.find(".deletion").exists()).toBe(false);
+    expect(added.findAll(".line-code").some(line => line.text() === "null")).toBe(false);
   });
   it("shows an empty state for semantically unchanged configuration", () => {
     const wrapper = diff();

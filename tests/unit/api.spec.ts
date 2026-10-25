@@ -5,6 +5,7 @@ import { registryApiBaseUrl, setRegistrySessionToken } from "@/services/registry
 import * as net from "@/services/netcontrol";
 import { z } from "zod";
 import { decodeJson, encodeJson } from "@/services/json";
+import { differences, requiredPermissions } from "@/services/configuration";
 import { gatewayMonitorSchema, upgradeVersionSchema } from "@/types/domain";
 import { config, state, runtime, transaction, statistics, gatewayStatistics, connections } from "../fixtures";
 
@@ -19,6 +20,43 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("tolerates unknown response keys, keeping unknown config sections intact for later submits", async () => {
+    const pending = { ...transaction(), future_field: true, candidate: { ...config(), future_section: { enabled: true } }, previous: config() };
+    pending.candidate.routes = [{ ...pending.candidate.routes[0]!, future_route_option: 1 }] as never;
+    body = encodeJson({ [pending.id]: pending });
+    const result = (await net.getTransactions())[pending.id]!;
+    expect(result).not.toHaveProperty("future_field");
+    expect(result.candidate).toHaveProperty("future_section", { enabled: true });
+    expect(result.candidate.routes[0]).not.toHaveProperty("future_route_option");
+    body = encodeJson({ ...runtime(), future_runtime: [] });
+    expect((await net.getRuntime()).parent_interfaces).toEqual([]);
+  });
+  it("accepts ignored_fields on submit and preserves Dynamic DNS settings with their own write permission", async () => {
+    const candidate = config();
+    candidate.dynamic_dns = [{ name: "azure-wan", enabled: true, source_interface: "lab0", address_source: "public_ip", tenant_id: "11111111-1111-4111-8111-111111111111",
+      client_id: "22222222-2222-4222-8222-222222222222", secret_ref: "a".repeat(32), zone_resource_id: "/subscriptions/x/dnszones/example.com", record_name: "home", ttl_seconds: 300, interval_seconds: 60 }];
+    status = 202; body = encodeJson({ ...transaction(), candidate, ignored_fields: ["/config/future_option"] });
+    const result = await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 });
+    expect(result.ignored_fields).toEqual(["/config/future_option"]); expect(result.candidate.dynamic_dns).toEqual(candidate.dynamic_dns);
+    expect(requiredPermissions(differences(config(), candidate))).toEqual(["transactions.write", "dynamic_dns.write"]);
+  });
+  it("uploads MQTT passwords once and returns only the immutable reference", async () => {
+    status = 201; body = encodeJson({ password_ref: "a".repeat(32) });
+    expect(await net.uploadMqttPassword("synthetic-password")).toEqual({ password_ref: "a".repeat(32) });
+    expect(captured?.url).toBe("/services/mqtt/passwords");
+    expect(decodeJson(String(captured?.data))).toEqual({ password: "synthetic-password" });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it("never exposes echoed password text or automatically retries upload failures", async () => {
+    status = 503; body = encodeJson({ error: "synthetic-password exposed by backend", transaction: null });
+    await expect(net.uploadMqttPassword("synthetic-password")).rejects.toThrow("Password storage failed (HTTP 503)");
+    expect(adapter).toHaveBeenCalledTimes(1);
+    adapter.mockRejectedValueOnce(new AxiosError("synthetic-password", "ETIMEDOUT"));
+    await expect(net.uploadMqttPassword("synthetic-password")).rejects.toThrow("Password upload outcome is unknown");
+    expect(adapter).toHaveBeenCalledTimes(2);
+    await expect(net.uploadMqttPassword("\0")).rejects.toThrow("without NUL");
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
   it("preserves DHCP monitor variants through full state, transaction reads and package writes without lease pins", async () => {
     const candidate = config();
     candidate.interfaces[0]!.kind = "ethernet"; candidate.interfaces[0]!.addresses = []; candidate.routes = [];
@@ -242,6 +280,24 @@ describe("controller-proxied API boundary", () => {
     status = 500; body = encodeJson({ error: "recovery detail", transaction: transaction("recovery_failed") });
     await expect(net.submitPackage({ base_revision: "0", config: config(), confirm_timeout_seconds: 120 }))
       .rejects.toMatchObject({ status: 500, uncertain: true, transaction: { status: "recovery_failed" } });
+  });
+  it.each(["rolled_back", "recovery_failed"])("preserves long structured apply causes and %s outcome without exposing the session credential", async outcome => {
+    const cause = `apply failed: ${"nested cause: ".repeat(500)}registry-test-session: gateway probes require explicit allow_gateway_monitoring opt-in; rollback detail retained`;
+    const failed = { ...transaction(outcome), error: cause };
+    status = 500; body = encodeJson({ error: cause, transaction: failed });
+    try {
+      await net.submitPackage({ base_revision: "0", config: config(), confirm_timeout_seconds: 120 });
+      expect.fail("Expected the backend apply error");
+    } catch (failure) {
+      expect(failure).toBeInstanceOf(ApiFailure);
+      const error = failure as ApiFailure;
+      expect(error.message.length).toBeGreaterThan(4096);
+      expect(error.message).toContain("gateway probes require explicit allow_gateway_monitoring opt-in; rollback detail retained");
+      expect(error.message).toContain("[redacted]"); expect(error.message).not.toContain("registry-test-session");
+      expect(error.transaction).toMatchObject({ id: failed.id, status: outcome, error: cause.replace("registry-test-session", "[redacted]") });
+      expect(error.transaction?.error).not.toContain("registry-test-session");
+      expect(error.uncertain).toBe(true); expect(adapter).toHaveBeenCalledOnce();
+    }
   });
   it("rejects malformed successful response visibly rather than inventing empty state", async () => {
     body = '{"revision":0,"desired":{}}';

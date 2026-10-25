@@ -68,6 +68,13 @@ onUnmounted(() => { disposed = true; generation++; });
               {{ current.base_revision }}
             </router-link>
           </dd>
+          <template v-if="resultRevision">
+            <dt>Result revision</dt><dd>
+              <router-link :to="`/config/revisions/${resultRevision}`">
+                {{ resultRevision }}
+              </router-link>
+            </dd>
+          </template>
           <template v-if="current.actor">
             <dt>Actor</dt><dd>{{ current.actor }}</dd>
           </template>
@@ -75,27 +82,21 @@ onUnmounted(() => { disposed = true; generation++; });
             <dt>Submitted (UTC)</dt><dd>{{ formatTimestamp(current.submitted_at) }}</dd>
           </template>
           <template v-if="current.committed_at">
-            <dt>Committed (UTC)</dt><dd>{{ formatTimestamp(current.committed_at) }}<span v-if="current.committed_by"> · {{ current.committed_by }}</span></dd>
+            <dt>Committed (UTC)</dt><dd>{{ formatTimestamp(current.committed_at) }}</dd>
+          </template>
+          <template v-if="current.description">
+            <dt>Comment</dt><dd class="wrap-text">
+              {{ current.description }}
+            </dd>
+          </template>
+          <template v-if="current.restored_from_revision !== undefined">
+            <dt>Restored from</dt><dd>
+              <router-link :to="`/config/revisions/${current.restored_from_revision}`">
+                {{ current.restored_from_revision }}
+              </router-link>
+            </dd>
           </template>
         </dl>
-        <p v-if="current.restored_from_revision !== undefined">
-          Restored from
-          <router-link :to="`/config/revisions/${current.restored_from_revision}`">
-            {{ current.restored_from_revision }}
-          </router-link>
-        </p>
-        <p v-if="resultRevision">
-          Result revision
-          <router-link :to="`/config/revisions/${resultRevision}`">
-            {{ resultRevision }}
-          </router-link>
-        </p>
-        <p
-          v-if="current.description"
-          class="my-3 wrap-text"
-        >
-          {{ current.description }}
-        </p>
         <v-alert
           v-if="current.error"
           type="warning"
@@ -103,18 +104,16 @@ onUnmounted(() => { disposed = true; generation++; });
         >
           {{ current.error }}
         </v-alert>
-        <TransactionActions :transaction="current" />
+        <TransactionActions
+          v-if="['pending_confirmation', 'recovery_failed'].includes(current.status)"
+          :transaction="current"
+          :show-details="false"
+        />
       </div>
       <ConfigDiff
         :before="current.previous"
         :after="current.candidate"
       />
     </template>
-    <v-btn
-      to="/config/commits"
-      variant="text"
-    >
-      All commits
-    </v-btn>
   </section>
 </template>

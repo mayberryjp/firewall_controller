@@ -23,6 +23,19 @@ describe("interface dropdown labels", () => {
   });
 });
 
+describe("native flow capture loss", () => {
+  it("preserves exact cumulative drops and incomplete statistics independently of worker state", () => {
+    const instance = { name: "capture", state: "running", dropped_packets: "18446744073709551615", statistics_complete: false };
+    expect(runtimeSchema.parse({ ...runtime(), softflowd: [instance] }).softflowd).toEqual([instance]);
+    expect(runtimeSchema.parse(runtime()).softflowd[0]?.statistics_complete).toBeUndefined();
+  });
+  it.each([31, "-1", "1.5", "", null])("rejects malformed capture-drop counters %j", dropped_packets => {
+    expect(runtimeSchema.safeParse({
+      ...runtime(), softflowd: [{ name: "capture", state: "running", dropped_packets, statistics_complete: false }],
+    }).success).toBe(false);
+  });
+});
+
 describe("native runtime parent diagnostics", () => {
   const parent = { name: "eth0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:01", mtu: 1500, up: true, available: true };
   it.each([[], [parent], null])("accepts the native parents field %j", parents => {

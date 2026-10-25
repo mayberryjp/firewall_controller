@@ -1,4 +1,22 @@
 import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage } from "@/types/domain";
+import type { HostHealth } from "../src/services/hostHealth";
+export function healthSnapshot(ticks = "9007199254740993", idle = "9007199254740993", uptime = 100): HostHealth {
+  const unavailable = { status: "unavailable" as const, data: null, error: "Not supported" };
+  return {
+    schema: "netcontrol-host-health/v1",
+    sample: { scope: "host", boot_id: "boot-1", status: "partial", started_at: "2026-10-24T12:00:00Z", collected_at: new Date(Date.UTC(2026, 9, 24, 12, 0, uptime, 123)).toISOString() },
+    sections: {
+      cpu: { status: "available", error: null, data: { ticks_per_second: 100, cpus: [{ name: "cpu", ticks: { user: ticks, nice: "0", system: "0", idle, guest: ticks } }], scheduler: {} } },
+      uptime: { status: "available", error: null, data: { uptime_seconds: uptime, idle_seconds: uptime } },
+      memory: { status: "available", error: null, data: { bytes: { MemTotal: "8000000000", MemFree: "1000000000", MemAvailable: "2000000000", SwapTotal: "2000000000", SwapFree: "2000000000" }, used_bytes: "6000000000", swap_used_bytes: "0" } },
+      load: { status: "available", error: null, data: { one: 0.1, five: 0.2, fifteen: 0.3, runnable_tasks: "1", total_tasks: "100", last_pid: "123" } },
+      vm: unavailable, pressure_cpu: unavailable, pressure_memory: unavailable, pressure_io: unavailable, disks: unavailable,
+      filesystems: { status: "available", error: null, data: [{ mount_id: "1", device: "8:1", mount_point: "/", filesystem: "ext4", usage: { status: "available", error: null, data: { total_bytes: "100000000000", free_bytes: "10000000000", available_bytes: "8000000000", used_bytes: "90000000000", total_inodes: "1000", free_inodes: "500", available_inodes: "500", read_only: false } } }] },
+      thermal: { status: "available", error: null, data: [{ id: "thermal_zone0", status: "available", error: null, data: { type: "CPU package", temperature_millicelsius: 48125 } }] },
+      hwmon: { status: "available", error: null, data: [{ id: "hwmon0/fan1", chip: "test-fan", unit: "rpm", status: "available", error: null, data: { value: 0, label: "Chassis fan" } }] },
+    },
+  };
+}
 export function connections(): ConnectionsPage {
   return {
     schema: "netcontrol-connections/v1", sample: { scope: "test:namespace", started_at: "2026-10-24T12:00:00Z", collected_at: "2026-10-24T12:00:01Z", status: "partial" },
@@ -32,7 +50,7 @@ export function gatewayStatistics(): GatewayStatistics {
 export function config(): Config {
   return {
     interfaces: [{ name: "lab0", kind: "dummy", role: "lan", mtu: 1500, up: true, addresses: ["192.0.2.10/24", "2001:db8::10/64"], dhcp_relay: { enabled: false, servers: [] } }],
-    routes: [{ destination: "198.51.100.0/24", interface: "lab0", table: 10000, metric: 1 }],
+    routes: [{ enabled: true, destination: "198.51.100.0/24", interface: "lab0", table: 10000, metric: 1 }],
     firewall: { allow_all_icmp: true, policy: "accept", rules: [{ source: "192.0.2.0/24", action: "accept" }], nat: { masquerade: [{ family: "ipv4", out_interface: "lab0" }] } },
     softflowd: [{ name: "capture", enabled: false, interface: "lab0", collector: "127.0.0.1:2055", export_version: 9, sampling_rate: 1, max_flows: 8192, snaplen: 128, promiscuous: false, timeouts: {} }],
     kernel: { namespace: { "net.ipv4.tcp_syncookies": "1" }, host: {} },

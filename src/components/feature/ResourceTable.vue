@@ -11,15 +11,41 @@ import type { Section } from "@/services/resourceForms";
 import type { ResourceRow } from "@/composables/useResourceCollection";
 
 const props = defineProps<{ section: Section; rows: ResourceRow[]; total: number; disabled: boolean; detail: boolean; wireguard?: boolean; vlan?: boolean; inventory?: boolean; loopbacks?: boolean; expandedName?: string; editingRow?: number }>();
-defineEmits<{ edit: [value: unknown]; delete: [row: ResourceRow]; move: [index: number, delta: number]; manage: [link: DiscoveredInterface]; toggle: [value: unknown, enabled: boolean] }>();
+const emit = defineEmits<{ edit: [value: unknown]; delete: [row: ResourceRow]; move: [index: number, delta: number]; manage: [link: DiscoveredInterface]; toggle: [value: unknown, enabled: boolean] }>();
 const store = useControllerStore();
 const expandedMonitor = ref<string | null>(null);
+const statusVersions = ref<Record<string, number>>({});
+const blackholeLabel = computed(() => ({ blackhole: 'Drop', unreachable: 'Unreachable', prohibit: 'Prohibited' })[blackholeTarget.value?.action ?? 'blackhole']);
+// Enabled IPv4 routes on a DHCP interface are installed only while the lease is valid; enabled stays configured intent.
+function waitingForDhcp(route: Record<string, unknown>): string {
+  const name = String(route.interface), data = store.runtime.data;
+  if (props.section !== "routes" || route.enabled === false || String(route.destination).includes(":") ||
+      !store.state.data?.desired.dhcp_clients?.[name] || !data?.dhcp_clients || store.runtime.stale) return "";
+  const lease = data.dhcp_clients.leases[name], error = data.dhcp_clients.errors[name];
+  if (lease && lease.acquired_at + lease.lifetime > (store.runtime.lastSuccess ?? Date.now()) / 1000) return "";
+  return `Not installed until ${name} has a valid DHCP lease${error ? `: ${error}` : ""}`;
+}
+const blackholeTarget = computed(() => {
+  const target = (store.draft ?? store.state.data?.desired)?.blackhole;
+  return target?.name ? target : undefined;
+});
+function toggleStatus(row: ResourceRow, enabled: boolean): void {
+  emit("toggle", row.value, enabled);
+  statusVersions.value[row.rowID] = (statusVersions.value[row.rowID] ?? 0) + 1;
+}
 const physical = computed(() => props.section === "interfaces" && !props.loopbacks && !props.vlan && !props.wireguard);
-const compact = computed(() => physical.value || props.vlan || props.loopbacks || props.section === "routes" || props.section === "gateway_monitors");
+const compact = computed(() => physical.value || props.vlan || props.loopbacks || ["routes", "gateway_monitors", "nat", "softflowd"].includes(props.section));
 const hasChanges = computed(() => !compact.value && store.diff.some(item => item.area === props.section));
-const visibleColumns = computed(() => (physical.value ? ["name", "role", "up", "mtu", "addresses", "ipv6_addresses"] : props.loopbacks ? ["name", "role", "up", "mtu", "active_addresses"] : props.inventory ? ["name", "kind", "ownership", "role", "up", "mtu", "active_addresses"] : props.vlan ? ["name", "id", "mtu", "parent", "addresses"] : props.wireguard ? ["name", "key_ref", "listen_port", "peers"] : resourceColumns[props.section])
+const visibleColumns = computed(() => (physical.value ? ["name", "role", "up", "mtu", "address_mode", "addresses", "ipv6_addresses"] : props.loopbacks ? ["name", "role", "up", "mtu", "active_addresses"] : props.inventory ? ["name", "kind", "ownership", "role", "up", "mtu", "active_addresses"] : props.vlan ? ["name", "id", "up", "mtu", "parent", "addresses"] : props.wireguard ? ["name", "key_ref", "listen_port", "peers"] : resourceColumns[props.section])
   .filter(key => store.ipv6Enabled || key !== "ipv6_addresses"));
-const columns = computed(() => visibleColumns.value.length + 1 + Number(hasChanges.value) + Number(props.section === "softflowd") + Number(["firewall", "nat"].includes(props.section)));
+const previewColumns = computed(() => visibleColumns.value.filter(key => props.section !== "gateway_monitors" || key !== "target"));
+const monitorMetrics = ["Health", "Loss", "Mean RTT", "Stddev", "RTT variation"];
+const hasStatus = computed(() => ["routes", "gateway_monitors", "softflowd"].includes(props.section));
+function statusLabel(value: Record<string, unknown>): string {
+  if (props.section === "gateway_monitors") return `Monitoring enabled for ${value.name}`;
+  return props.section === "softflowd" ? `Export enabled for ${value.name}` : `Route enabled for ${value.destination}`;
+}
+const columns = computed(() => previewColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 3 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)));
 function editable(row: ResourceRow): boolean {
   return row.value.name !== "lo" && (!row.discovered || (row.index >= 0 && row.discovered.ownership !== "loopback" && ["ethernet", "veth", "dummy", "vlan", "wireguard"].includes(row.discovered.kind)));
 }
@@ -31,7 +57,7 @@ function cell(value: Record<string, unknown>, key: string, discovered?: Discover
   if (physical.value) {
     if (key === "name") return String(value.name);
     if (key === "display_name") return String(record(value.metadata).display_name || "—");
-    if (key === "address_mode") return rowMode(value);
+    if (key === "address_mode") return discovered?.ownership === "unmanaged" ? "—" : rowMode(value);
     if (key === "ipv6_addresses" || key === "addresses") {
       if (key === "addresses" && rowMode(value) === "DHCP") {
         const committed = store.state.data?.desired.dhcp_clients?.[String(value.name)];
@@ -58,7 +84,7 @@ function rowMode(value: Record<string, unknown>): string {
 }
 function heading(key: string): string {
   if (props.section === "gateway_monitors" && key === "target") return "Probe Target";
-  const labels: Record<string, string> = { display_name: "Display name", address_mode: "IPv4 configuration", ipv6_addresses: "IPv6 addresses", kind: "Type", id: "VLAN ID", up: "Admin state", mtu: "MTU", source_address: "Source address", routing_table: "Routing table", key_ref: "Key reference", listen_port: "Listen port" };
+  const labels: Record<string, string> = { display_name: "Display name", address_mode: "Mode", ipv6_addresses: "IPv6 addresses", kind: "Type", id: "VLAN ID", up: "Admin state", mtu: "MTU", source_address: "Source address", routing_table: "Routing table", key_ref: "Key reference", listen_port: "Listen port" };
   if ((physical.value || props.vlan) && key === "addresses") return "IPv4";
   if (physical.value && key === "ipv6_addresses") return "IPv6";
   if (props.inventory && key === "active_addresses") return "Active Addresses";
@@ -70,17 +96,41 @@ function interfaceChipColor(row: ResourceRow, key: string): string {
     return up === true ? "success" : up === false ? "error" : "default";
   }
   if (key === "role") return row.value.role === "lan" ? "info" : row.value.role === "wan" ? "secondary" : "default";
+  if (key === "address_mode") return rowMode(row.value) === "DHCP" ? "primary" : "default";
   if (key === "ownership") return row.discovered?.ownership === "managed" ? "success" : row.discovered?.ownership === "unmanaged" ? "warning" : "default";
   return "primary";
 }
+const softflowStatus = (name: unknown) => store.runtime.data?.softflowd.find(item => item.name === name);
 function observedEnabled(name: unknown): string {
   const observed = configSchema.safeParse(store.state.data?.observed);
   if (!observed.success) return "Unknown";
   const service = observed.data.softflowd.find(item => item.name === name);
-  return service ? (service.enabled ? "Yes" : "No") : "Unknown (not observed)";
+  return service ? (service.enabled ? "True" : "False") : "Unknown";
+}
+// Observed differing from the desired setting is the part worth noticing.
+function observedColor(row: Record<string, unknown>): string {
+  const observed = observedEnabled(row.name);
+  if (observed === "Unknown") return "default";
+  return (observed === "True") !== (row.enabled !== false) ? "warning" : observed === "True" ? "success" : "default";
+}
+const stateLabels: Record<string, string> = {
+  running: "Running", disabled: "Disabled", simulated: "Simulated", not_running: "Not running", unhealthy: "Unhealthy", exited: "Exited",
+};
+function stateColor(state?: string): string {
+  return state === "running" ? "success" : ["unhealthy", "not_running", "exited"].includes(state ?? "") ? "error" : "default";
+}
+const countFormat = new Intl.NumberFormat("en-US");
+function droppedColor(value?: string): string {
+  if (value === undefined) return "default";
+  const count = BigInt(value);
+  return count === 0n ? "green" : count < 1000n ? "yellow" : count < 100000n ? "orange" : "red";
+}
+function droppedTitle(status?: { dropped_packets?: string; statistics_complete?: boolean }): string {
+  if (status?.dropped_packets === undefined) return "Dropped packets are not reported";
+  return `${status.dropped_packets} packets dropped since this worker started${status.statistics_complete === false ? "; capture statistics are incomplete, so flow totals may undercount" : ""}`;
 }
 function runtime(name: unknown): string {
-  const status = store.runtime.data?.softflowd.find(item => item.name === name);
+  const status = softflowStatus(name);
   if (!status) return "Unknown";
   const labels: Record<string, string> = {
     running: "Running; local responsiveness checked, delivery not verified", disabled: "Disabled", simulated: "Simulated; no real process",
@@ -97,22 +147,41 @@ function staged(value: unknown): string {
 </script>
 
 <template>
-  <v-table :class="{ 'interface-table': section === 'interfaces', 'compact-interface-table': compact, 'physical-table': physical, 'wireguard-table': wireguard, 'vlan-table': vlan, 'loopback-table': loopbacks, 'routes-table': section === 'routes', 'monitors-table': section === 'gateway_monitors', 'inventory-table': inventory }">
+  <v-table :class="{ 'interface-table': section === 'interfaces', 'compact-interface-table': compact, 'physical-table': physical, 'wireguard-table': wireguard, 'vlan-table': vlan, 'loopback-table': loopbacks, 'routes-table': section === 'routes', 'monitors-table': section === 'gateway_monitors', 'nat-table': section === 'nat', 'inventory-table': inventory }">
     <thead>
       <tr>
-        <th v-if="['firewall', 'nat'].includes(section)">
+        <th
+          v-if="['firewall', 'nat'].includes(section)"
+          class="column-position"
+        >
           Position
         </th>
         <th
-          v-for="key in visibleColumns"
+          v-for="key in previewColumns"
           :key="key"
           :class="`column-${key}`"
         >
           {{ heading(key) }}
         </th>
-        <th v-if="section === 'softflowd'">
-          Observed enabled / runtime
+        <th
+          v-if="hasStatus"
+          class="column-status"
+        >
+          Status
         </th>
+        <template v-if="section === 'gateway_monitors'">
+          <th
+            v-for="metric in monitorMetrics"
+            :key="metric"
+          >
+            {{ metric }}
+          </th>
+        </template>
+        <template v-if="section === 'softflowd'">
+          <th>Observed</th>
+          <th>State</th>
+          <th>Dropped packets</th>
+        </template>
         <th
           v-if="hasChanges"
           class="column-changes"
@@ -143,10 +212,15 @@ function staged(value: unknown): string {
           @click="section === 'interfaces' && row.value.kind === 'ethernet' && editable(row) && !disabled && $emit('edit', row.value)"
         >
           <td v-if="['firewall', 'nat'].includes(section)">
+            <span
+              v-if="compact"
+              class="compact-cell-label"
+              aria-hidden="true"
+            >Position</span>
             {{ row.index + 1 }}
           </td>
           <td
-            v-for="key in visibleColumns"
+            v-for="key in previewColumns"
             :key="key"
             :class="{ 'interface-addresses': key === 'addresses' || key === 'active_addresses', 'ipv4-cell': physical && key === 'addresses' }"
             :title="physical && key === 'name' ? `${cell(row.value, 'kind', row.discovered)} · ${row.discovered?.ownership ?? 'managed'}` : undefined"
@@ -167,8 +241,8 @@ function staged(value: unknown): string {
               @click.stop="expandedMonitor = expandedMonitor === row.value.name ? null : String(row.value.name)"
             />
             <router-link
-              v-if="!vlan && !inventory && key === 'name' && ['interfaces', 'softflowd'].includes(section) && row.value.kind !== 'ethernet'"
-              :to="`${section === 'softflowd' ? '/services/softflowd' : vlan ? '/vlans' : wireguard ? '/wireguard' : '/interfaces'}/${encodeURIComponent(String(row.value.name))}`"
+              v-if="!vlan && !inventory && key === 'name' && section === 'interfaces' && row.value.kind !== 'ethernet'"
+              :to="`${wireguard ? '/wireguard' : '/interfaces'}/${encodeURIComponent(String(row.value.name))}`"
             >
               {{ cell(row.value, 'name') }}
             </router-link>
@@ -180,7 +254,7 @@ function staged(value: unknown): string {
                 {{ record(row.value.metadata).display_name }}
               </div>
               <v-chip
-                v-if="section === 'interfaces' && ['kind', 'ownership', 'role', 'up'].includes(key)"
+                v-if="section === 'interfaces' && ['kind', 'ownership', 'role', 'up', 'address_mode'].includes(key)"
                 :color="interfaceChipColor(row, key)"
                 size="small"
                 variant="tonal"
@@ -197,17 +271,24 @@ function staged(value: unknown): string {
             >
               {{ physical ? record(row.value.metadata).display_name : row.value.name }}
             </div>
-            <v-switch
-              v-if="section === 'gateway_monitors' && key === 'name'"
-              :model-value="row.value.enabled === true"
-              :aria-label="`Monitoring enabled for ${row.value.name}`"
-              :title="`Monitoring enabled for ${row.value.name}`"
-              :disabled="disabled"
-              color="primary"
-              density="compact"
-              hide-details
-              @update:model-value="$emit('toggle', row.value, Boolean($event))"
-            />
+            <v-chip
+              v-if="section === 'routes' && key === 'interface' && row.value.interface === blackholeTarget?.name"
+              size="x-small"
+              variant="tonal"
+              class="ml-1"
+            >
+              {{ blackholeLabel }}
+            </v-chip>
+            <v-chip
+              v-if="section === 'routes' && key === 'interface' && waitingForDhcp(row.value)"
+              color="warning"
+              size="x-small"
+              variant="tonal"
+              class="ml-1"
+              :title="waitingForDhcp(row.value)"
+            >
+              Waiting for DHCP
+            </v-chip>
             <div
               v-if="section === 'gateway_monitors' && key === 'interface'"
               class="text-caption text-medium-emphasis"
@@ -221,16 +302,97 @@ function staged(value: unknown): string {
               {{ record(row.value.metadata).description }}
             </div>
           </td>
-          <td v-if="section === 'softflowd'">
-            {{ observedEnabled(row.value.name) }}<br>{{ runtime(row.value.name) }}
+          <td v-if="hasStatus">
+            <span
+              class="compact-cell-label"
+              aria-hidden="true"
+            >Status</span>
+            <v-switch
+              :key="statusVersions[row.rowID] ?? 0"
+              :model-value="row.value.enabled !== false"
+              :aria-label="statusLabel(row.value)"
+              :title="row.value.enabled === false ? 'Disabled' : 'Enabled'"
+              :disabled="disabled || !editable(row)"
+              color="primary"
+              density="compact"
+              hide-details
+              @update:model-value="toggleStatus(row, Boolean($event))"
+            />
           </td>
+          <GatewayStatisticsPanel
+            v-if="section === 'gateway_monitors'"
+            :name="String(row.value.name)"
+            summary
+          >
+            <template #default="{ measurements, healthColor, metricIndicators, error }">
+              <td
+                v-for="metric in monitorMetrics"
+                :key="metric"
+                class="monitor-statistic-cell"
+                :data-metric="metric"
+                :title="String(measurements[metric] ?? (metric === 'Health' ? 'unknown' : 'Unavailable'))"
+              >
+                <span
+                  class="compact-cell-label"
+                  aria-hidden="true"
+                >{{ metric }}</span>
+                <v-chip
+                  :color="metric === 'Health' ? healthColor : metricIndicators[metric]?.color"
+                  :title="metricIndicators[metric]?.tooltip"
+                  :aria-label="metricIndicators[metric] ? `${metric}: ${measurements[metric] ?? 'Unavailable'} (${metricIndicators[metric].rating})` : undefined"
+                  size="small"
+                  variant="tonal"
+                >
+                  {{ measurements[metric] ?? (metric === "Health" ? "unknown" : "Unavailable") }}
+                </v-chip>
+                <p
+                  v-if="metric === 'Health' && error"
+                  role="alert"
+                >
+                  {{ error }}
+                </p>
+              </td>
+            </template>
+          </GatewayStatisticsPanel>
+          <template v-if="section === 'softflowd'">
+            <td>
+              <v-chip
+                :color="observedColor(row.value)"
+                size="small"
+                variant="tonal"
+                :title="observedColor(row.value) === 'warning' ? 'Observed state differs from the desired setting' : undefined"
+              >
+                {{ observedEnabled(row.value.name) }}
+              </v-chip>
+            </td>
+            <td>
+              <v-chip
+                :color="stateColor(softflowStatus(row.value.name)?.state)"
+                size="small"
+                variant="tonal"
+                :title="runtime(row.value.name)"
+              >
+                {{ softflowStatus(row.value.name) ? stateLabels[softflowStatus(row.value.name)!.state] ?? softflowStatus(row.value.name)!.state : 'Unknown' }}
+              </v-chip>
+            </td>
+            <td>
+              <v-chip
+                :color="droppedColor(softflowStatus(row.value.name)?.dropped_packets)"
+                size="small"
+                variant="tonal"
+                :title="droppedTitle(softflowStatus(row.value.name))"
+              >
+                {{ softflowStatus(row.value.name)?.dropped_packets === undefined ? '—' : countFormat.format(BigInt(softflowStatus(row.value.name)!.dropped_packets!)) }}
+              </v-chip>
+            </td>
+          </template>
           <td v-if="hasChanges">
             <span class="text-warning">{{ staged(row.value) === "Staged change" ? "Unsaved" : "" }}</span>
           </td>
           <td>
             <div
               v-if="editable(row)"
-              class="d-flex ga-1 py-2"
+              class="d-flex align-center ga-1"
             >
               <v-btn
                 icon="mdi-pencil-outline"
@@ -245,9 +407,9 @@ function staged(value: unknown): string {
               <v-btn
                 v-if="section === 'interfaces' && !wireguard && row.value.kind === 'wireguard'"
                 icon="mdi-wan"
-                :to="`/wireguard/${encodeURIComponent(String(row.value.name))}`"
-                :aria-label="`Edit WireGuard ${row.value.name}`"
-                :title="`Edit WireGuard ${row.value.name}`"
+                :to="`/tunnels`"
+                :aria-label="`Edit tunnel interface ${row.value.name}`"
+                :title="`Edit tunnel interface ${row.value.name}`"
                 size="small"
                 variant="text"
               />
@@ -323,14 +485,6 @@ function staged(value: unknown): string {
           :row="row"
           :columns="columns"
         />
-        <tr v-if="section === 'gateway_monitors' && expandedMonitor !== row.value.name && editingRow !== row.index">
-          <td :colspan="columns">
-            <GatewayStatisticsPanel
-              :name="String(row.value.name)"
-              summary
-            />
-          </td>
-        </tr>
         <tr v-if="section === 'gateway_monitors' && expandedMonitor === row.value.name && editingRow !== row.index">
           <td :colspan="columns">
             <GatewayStatisticsPanel :name="String(row.value.name)" />
@@ -373,7 +527,7 @@ function staged(value: unknown): string {
 }
 .compact-interface-table { container-type: inline-size; }
 .compact-interface-table :deep(.v-table__wrapper > table > thead > tr > th),
-.compact-interface-table :deep(.v-table__wrapper > table > tbody > tr > td) { padding: 6px; }
+.compact-interface-table :deep(.v-table__wrapper > table > tbody > tr > td) { padding: 2px 6px; }
 .compact-interface-table :deep(th) { white-space: normal; }
 .compact-cell-label { display: none; }
 .compact-interface-table :deep(td.interface-addresses) { min-width: 0; }
@@ -385,6 +539,7 @@ function staged(value: unknown): string {
 .compact-interface-table :deep(.column-role) { width: 104px; }
 .compact-interface-table :deep(.column-up) { width: 88px; }
 .compact-interface-table :deep(.column-mtu) { width: 76px; }
+.physical-table :deep(.column-address_mode) { width: 96px; }
 .physical-table :deep(.column-ipv6_addresses) { width: 160px; }
 .compact-interface-table :deep(.column-actions) { width: 96px; }
 .vlan-table :deep(.column-id) { width: 120px; }
@@ -400,13 +555,19 @@ function staged(value: unknown): string {
 .routes-table :deep(.column-interface) { width: 128px; }
 .routes-table :deep(.column-table) { width: 88px; }
 .routes-table :deep(.column-metric) { width: 80px; }
-.monitors-table :deep(.column-enabled) { width: 76px; }
-.monitors-table :deep(.column-interface) { width: 112px; }
-.monitors-table :deep(.column-routing_table) { width: 88px; }
+.monitors-table :deep(.column-name) { width: 12%; }
+.monitors-table :deep(.column-interface) { width: 96px; }
+.compact-interface-table :deep(.column-status) { width: 80px; }
+.monitors-table :deep(.column-actions) { width: 96px; }
+.nat-table :deep(.column-position) { width: 64px; }
+.nat-table :deep(.column-family) { width: 112px; }
+.nat-table :deep(.column-actions) { width: 192px; }
+.monitors-table :deep(td) { vertical-align: middle; }
 .compact-interface-table :deep(td:last-child .v-btn) { padding-inline: 8px; }
 .physical-table :deep(td:last-child .v-btn__content),
 .vlan-table :deep(td:last-child .v-btn__content),
 .routes-table :deep(td:last-child .v-btn__content),
+.nat-table :deep(td:last-child .v-btn__content),
 .monitors-table :deep(td:last-child .v-btn__content) { white-space: nowrap; overflow-wrap: normal; letter-spacing: 0; }
 @container (max-width: 860px) {
   .compact-interface-table :deep(table),
@@ -420,13 +581,13 @@ function staged(value: unknown): string {
     min-width: 0;
     max-width: none;
     height: auto;
-    padding: 8px;
+    padding: 4px 8px;
     border: 0;
   }
   .compact-interface-table :deep(td:last-child),
   .compact-interface-table :deep(.ipv4-cell),
   .compact-interface-table :deep(td[colspan]) { grid-column: 1 / -1; }
   .loopback-table :deep(.role-cell) { grid-column: 1 / -1; }
-  .compact-interface-table :deep(.compact-cell-label) { display: block; margin-bottom: 6px; color: rgba(var(--v-theme-on-surface), 0.6); font-size: 12px; }
+  .compact-interface-table :deep(.compact-cell-label) { display: block; margin-bottom: 2px; color: rgba(var(--v-theme-on-surface), 0.6); font-size: 12px; }
 }
 </style>

@@ -83,37 +83,6 @@ function stage(): void {
           >
             Enable IPv6 configuration across the firewall. Remove existing IPv6 settings before disabling.
           </p>
-          <div class="d-flex align-center ga-2 flex-wrap">
-            <v-chip
-              size="small"
-              :color="store.runtime.stale || !store.runtime.data?.ipv6 ? 'warning' : store.runtime.data.ipv6.status === 'simulated' ? 'grey' : store.runtime.data.ipv6.drift ? 'warning' : 'success'"
-            >
-              {{ store.runtime.stale ? 'Stale runtime' : !store.runtime.data?.ipv6 ? 'Runtime unavailable' : store.runtime.data.ipv6.status === 'simulated' ? 'Simulated / unmeasured' : store.runtime.data.ipv6.drift ? 'IPv6 drift detected' : `Measured: ${store.runtime.data.ipv6.enabled ? 'enabled' : 'disabled'}` }}
-            </v-chip>
-            <v-btn
-              icon="mdi-refresh"
-              variant="text"
-              size="small"
-              aria-label="Refresh IPv6 runtime"
-              title="Refresh IPv6 runtime"
-              :disabled="!store.connected"
-              :loading="store.runtime.loading"
-              @click="store.refreshRuntime"
-            />
-          </div>
-          <details v-if="store.runtime.data?.ipv6?.status === 'measured' && store.runtime.data.ipv6.disable_ipv6">
-            <summary>Observed IPv6 controls</summary>
-            <dl>
-              <template
-                v-for="(value, name) in store.runtime.data.ipv6.disable_ipv6"
-                :key="name"
-              >
-                <dt class="mono">
-                  {{ name }}
-                </dt><dd>{{ value === '1' ? 'Disabled' : 'Enabled' }} ({{ value }})</dd>
-              </template>
-            </dl>
-          </details>
         </div>
       </div>
       <v-divider />
@@ -200,10 +169,6 @@ function stage(): void {
   line-height: 1.45;
   color: var(--text-muted);
 }
-
-.setting-control details { max-width: 100%; overflow-wrap: anywhere; }
-.setting-control dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; margin-top: 8px; }
-.setting-control dd { margin: 0; }
 
 @media (max-width: 700px) {
   .setting-row {

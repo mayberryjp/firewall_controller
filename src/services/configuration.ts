@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { configSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService } from "@/types/domain";
+import { configSchema, mqttSchema, blackholeSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 
 export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
@@ -16,6 +16,10 @@ export function normalize(config: Config): Config {
   const parsed = configSchema.safeParse(config);
   const result = cloneConfig(parsed.success ? parsed.data : config);
   if (result.ipv6_enabled === true) delete result.ipv6_enabled;
+  if (result.mqtt && stableJson(result.mqtt) === stableJson(mqttSchema.parse({}))) delete result.mqtt;
+  if (!result.dynamic_dns?.length) delete result.dynamic_dns;
+  if (result.blackhole && stableJson(result.blackhole) === stableJson(blackholeSchema.parse({}))) delete result.blackhole;
+  result.dynamic_dns?.sort((a, b) => a.name.localeCompare(b.name));
   for (const area of ["dhcp_clients", "dns"] as const) {
     if (!Object.keys(result[area] ?? {}).length) delete result[area];
   }
@@ -31,6 +35,7 @@ export function normalize(config: Config): Config {
       link.wireguard.peers.sort((a, b) => a.public_key.localeCompare(b.public_key));
       for (const peer of link.wireguard.peers) {
         peer.allowed_ips.sort();
+        peer.enabled ??= true;
         if (!peer.endpoint) delete peer.endpoint;
       }
     }
@@ -120,7 +125,8 @@ export function differences(before: Config, after: Config): Difference[] {
   named("routes", old.routes, next.routes, (item) => `${item.table}/${item.destination}/${item.metric}`);
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
-  for (const area of ["ntp", "syslog", "vnstat"] as const) {
+  named("dynamic_dns", old.dynamic_dns ?? [], next.dynamic_dns ?? [], item => item.name);
+  for (const area of ["ntp", "syslog", "vnstat", "mqtt", "blackhole"] as const) {
     if (stableJson(old[area]) !== stableJson(next[area])) result.push({
       area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
     });
@@ -149,8 +155,52 @@ export function differences(before: Config, after: Config): Difference[] {
   return result;
 }
 
+// Applies one change to the old configuration so the review can diff it inside the whole document.
+export function differenceContext(old: Config, next: Config, change: Difference): { before: Config; after: Config } {
+  const doc = cloneConfig(old), unchanged = { before: old, after: old };
+  const entry = (value: unknown) => Array.isArray(value) ? { [String(value[0])]: value[1] } : value;
+  const entries = (value?: Record<string, unknown>) => Object.entries(value ?? {}).map(entry);
+  const record = (list: unknown[]) => list.length ? Object.assign({}, ...list as object[]) : undefined;
+  const lists: Record<string, [unknown[], unknown[], (list: unknown[]) => void]> = {
+    interfaces: [old.interfaces, next.interfaces, list => { doc.interfaces = list as Config["interfaces"]; }],
+    routes: [old.routes, next.routes, list => { doc.routes = list as Config["routes"]; }],
+    softflowd: [old.softflowd, next.softflowd, list => { doc.softflowd = list as Config["softflowd"]; }],
+    gateway_monitors: [old.gateway_monitors, next.gateway_monitors, list => { doc.gateway_monitors = list as Config["gateway_monitors"]; }],
+    dynamic_dns: [old.dynamic_dns ?? [], next.dynamic_dns ?? [], list => { doc.dynamic_dns = list as Config["dynamic_dns"]; }],
+    firewall: [old.firewall.rules, next.firewall.rules, list => { doc.firewall.rules = list as Config["firewall"]["rules"]; }],
+    nat: [old.firewall.nat.masquerade, next.firewall.nat.masquerade, list => { doc.firewall.nat.masquerade = list as Config["firewall"]["nat"]["masquerade"]; }],
+    dhcp_clients: [entries(old.dhcp_clients), entries(next.dhcp_clients), list => { doc.dhcp_clients = record(list) as Config["dhcp_clients"]; }],
+    dns: [entries(old.dns), entries(next.dns), list => { doc.dns = record(list) as Config["dns"]; }],
+  };
+  const collection = lists[change.area];
+  if (collection) {
+    if (change.kind === "moved") return unchanged;
+    const [previous, current, assign] = collection, ordered = change.area === "firewall" || change.area === "nat";
+    const [was, now] = change.area === "dhcp_clients" || change.area === "dns" ? [entry(change.before), entry(change.after)] : [change.before, change.after];
+    const find = (items: unknown[], value: unknown) => items.findIndex(item => stableJson(item) === stableJson(value));
+    const position = Number(/^position (\d+)$/.exec(change.identity)?.[1]) - 1;
+    const list = [...previous];
+    if (change.kind === "added") list.splice(Math.min(Math.max(ordered ? position : find(current, now), 0), list.length), 0, now);
+    else {
+      const index = ordered ? position : find(previous, was);
+      if (index < 0 || index >= list.length) return unchanged;
+      if (change.kind === "deleted") list.splice(index, 1); else list[index] = now;
+    }
+    assign(list);
+    if (!doc.dhcp_clients) delete doc.dhcp_clients;
+    if (!doc.dns) delete doc.dns;
+    if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
+  } else if (["ntp", "syslog", "vnstat", "mqtt", "blackhole", "kernel"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
+  else if (change.area === "ipv6") doc.ipv6_enabled = change.after === false ? false : undefined;
+  else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
+  else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
+  else if (change.area === "firewall-policies") doc.firewall.policies = change.after as Config["firewall"]["policies"];
+  else if (change.area === "firewall-input") doc.firewall.input = change.after as Config["firewall"]["input"];
+  else return unchanged;
+  return { before: old, after: doc };
+}
 export function numericAddress(text: string): ipaddr.IPv4 | ipaddr.IPv6 {
-  if (text.includes("%") || !ipaddr.isValid(text)) throw new Error("Use a numeric IP without a zone");
+  if (text.includes("%") || !ipaddr.isValid(text)) throw new Error("Use an IP without a zone");
   const address = ipaddr.parse(text);
   if (address.kind() === "ipv6" && address instanceof ipaddr.IPv6 && address.isIPv4MappedAddress()) {
     throw new Error("IPv4-mapped IPv6 is not accepted");
@@ -216,7 +266,7 @@ export function validateServerHost(host: string): void {
 }
 export function endpoint(text: string, collector = false): void {
   const match = /^(\[[^\]]+\]|[^:]+):([1-9]\d*)$/.exec(text);
-  if (!match?.[1] || !match[2]) throw new Error("Use numeric IP:port; bracket IPv6");
+  if (!match?.[1] || !match[2]) throw new Error("Use IP:port; bracket IPv6");
   const host = match[1].replace(/^\[|\]$/g, "");
   const address = numericAddress(host);
   if (Number(match[2]) > 65535) throw new Error("Port must be 1..65535");
@@ -230,7 +280,7 @@ export function ipv6Conflicts(config: Config): string[] {
     if (Array.isArray(value)) { value.forEach((item, index) => visit(item, `${path}.${index}`)); return; }
     if (value && typeof value === "object") {
       for (const [key, item] of Object.entries(value)) {
-        if (key !== "metadata" && key !== "kernel") visit(item, path ? `${path}.${key}` : key);
+        if (key !== "metadata" && key !== "kernel" && key !== "mqtt") visit(item, path ? `${path}.${key}` : key);
       }
       return;
     }
@@ -244,6 +294,9 @@ export function ipv6Conflicts(config: Config): string[] {
       (path.endsWith(".capture_filter") && ["ip6", "icmp6"].includes(value))) conflicts.push(path);
   }
   visit(config, "");
+  if (config.mqtt?.endpoint) {
+    try { if (new URL(config.mqtt.endpoint).hostname.includes(":")) conflicts.push("mqtt.endpoint"); } catch { return conflicts; }
+  }
   return conflicts;
 }
 export function validateConfig(config: Config, parents: ParentInterface[] = [], baseline?: Config): ValidationIssue[] {
@@ -261,6 +314,47 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), relayAddresses = new Set<string>();
   const validName = (name: string) => /^[a-zA-Z0-9_.-]{1,15}$/.test(name) && !["lo", ".", ".."].includes(name);
   const interfaces = new Map(config.interfaces.map((link) => [link.name, link]));
+  if (config.mqtt) {
+    const settings = config.mqtt, page = "/settings/mqtt-streaming";
+    if (utf8Size(settings.endpoint) > 1024) issue("mqtt.endpoint", "Broker URL must be at most 1024 UTF-8 bytes", page);
+    if (settings.endpoint) check("mqtt.endpoint", page, () => {
+      const url = new URL(settings.endpoint);
+      if (!["mqtt:", "mqtts:"].includes(url.protocol) || !url.hostname || url.username || url.password ||
+        !["", "/"].includes(url.pathname) || url.search || url.hash || /\s/.test(settings.endpoint) ||
+        (url.port && (!/^\d+$/.test(url.port) || Number(url.port) < 1 || Number(url.port) > 65535))) {
+        throw new Error("Use mqtt:// or mqtts:// with a host and optional port, without credentials, path, query or fragment");
+      }
+    });
+    if (utf8Size(settings.username) > 256 || /\p{Cc}/u.test(settings.username)) issue("mqtt.username", "Use at most 256 UTF-8 bytes without control characters", page);
+    if (settings.password_ref && !settings.username) issue("mqtt.username", "A stored password requires a username", page);
+    if (settings.source_interface && !/^[a-zA-Z0-9_.-]{1,15}$/.test(settings.source_interface)) issue("mqtt.source_interface", "Use a valid interface name", page);
+    bound(settings.interval_seconds, 10, 3600, "mqtt.interval_seconds", page);
+    if (settings.enabled) {
+      if (!settings.endpoint) issue("mqtt.endpoint", "Select a broker URL", page);
+      if (!interfaces.get(settings.source_interface)?.up) issue("mqtt.source_interface", "Select an up managed interface", page);
+    }
+  }
+  if (config.dynamic_dns?.length) {
+    const page = "/settings/dynamic-dns", targets = new Set<string>(), uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (config.dynamic_dns.length > 32) issue("dynamic_dns", "At most 32 Dynamic DNS entries", page);
+    config.dynamic_dns.forEach((entry, index) => {
+      const path = `dynamic_dns.${index}`;
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(entry.name)) issue(`${path}.name`, "Use 1..64 letters, digits, underscore or hyphen", page);
+      else if (config.dynamic_dns!.findIndex(other => other.name === entry.name) !== index) issue(`${path}.name`, "Duplicate entry name", page);
+      if (!uuid.test(entry.tenant_id)) issue(`${path}.tenant_id`, "Use a tenant UUID", page);
+      if (!uuid.test(entry.client_id)) issue(`${path}.client_id`, "Use a client UUID", page);
+      if (!/^\/subscriptions\/[^/\s]+\/resourceGroups\/[^/\s]+\/providers\/Microsoft\.Network\/dnszones\/[^/\s]+$/i.test(entry.zone_resource_id)) {
+        issue(`${path}.zone_resource_id`, "Use the exact Azure public DNS zone resource ID", page);
+      }
+      if (!/^(@|[a-z0-9_-]{1,63}(\.[a-z0-9_-]{1,63})*)$/.test(entry.record_name)) issue(`${path}.record_name`, "Use @ or a lowercase name relative to the zone, without wildcard or trailing dot", page);
+      bound(entry.ttl_seconds, 30, 86400, `${path}.ttl_seconds`, page);
+      bound(entry.interval_seconds, 60, 86400, `${path}.interval_seconds`, page);
+      const target = `${entry.zone_resource_id.toLowerCase()}|${entry.record_name}`;
+      if (targets.has(target)) issue(`${path}.record_name`, "Another entry already updates this zone record", page);
+      targets.add(target);
+      if (entry.enabled && !interfaces.get(entry.source_interface)?.up) issue(`${path}.source_interface`, "Select an up managed interface", page);
+    });
+  }
   const interfacePage = (name: string): string => `/${interfaces.get(name)?.kind === "vlan" ? "vlans" : "interfaces"}/${encodeURIComponent(name)}`;
   if (config.gateway_monitors.length > 64) issue("gateway_monitors", "At most 64 gateway monitors", "/gateway-monitors");
   const monitorNames = new Set<string>();
@@ -285,12 +379,12 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         const link = interfaces.get(monitor.interface), target = numericAddress(monitor.target);
         if (!link || !config.dhcp_clients?.[monitor.interface]) throw new Error("DHCP monitor requires a managed DHCP-configured interface, including when disabled");
         if (monitor.enabled && !link.up) throw new Error("Enabled DHCP monitor requires an up managed interface");
-        if (target.kind() !== "ipv4" || !globalUnicast(target)) throw new Error("DHCP monitor requires an IPv4 unicast numeric probe target");
+        if (target.kind() !== "ipv4" || !globalUnicast(target)) throw new Error("DHCP monitor requires an IPv4 unicast probe target");
         return;
       }
       const source = numericAddress(monitor.source_address), gateway = numericAddress(monitor.gateway), target = numericAddress(monitor.target);
       if (!globalUnicast(source) || ![gateway, target].every(address => globalUnicast(address) || (address.kind() === "ipv6" && address.range() === "linkLocal"))) {
-        throw new Error("Use canonical unicast numeric addresses; IPv6 link-local is allowed only for gateway/target, scoped by interface");
+        throw new Error("Use canonical unicast IP addresses; IPv6 link-local is allowed only for gateway/target, scoped by interface");
       }
       if (source.kind() !== gateway.kind() || source.kind() !== target.kind() || monitor.source_address === monitor.gateway || monitor.source_address === monitor.target) {
         throw new Error("Source, gateway and target must share a family; gateway and target must be remote");
@@ -307,9 +401,9 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         const parsed = ipaddr.parseCIDR(network);
         return parsed[0].kind() === address.kind() && address.match(parsed);
       };
-      const matchingRoute = config.routes.some(route => route.table === monitor.routing_table && route.interface === monitor.interface &&
+      const matchingRoute = config.routes.some(route => route.enabled !== false && route.table === monitor.routing_table && route.interface === monitor.interface &&
         contains(route.destination, target) && (route.gateway === monitor.gateway || (monitor.target === monitor.gateway && !route.gateway)));
-      if (!matchingRoute) throw new Error("Enabled monitor requires an explicit matching route through its gateway/table; no route is auto-created");
+      if (!matchingRoute) throw new Error("Enabled monitor requires an enabled explicit matching route through its gateway/table; no route is auto-created");
     });
   });
   for (const name of ["ntp", "syslog"] as const) {
@@ -417,13 +511,21 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         });
         if (peer.endpoint) check(`${peerPath}.endpoint`, page, () => endpoint(peer.endpoint!));
         bound(peer.persistent_keepalive_seconds, 0, 65535, `${peerPath}.persistent_keepalive_seconds`, page);
+        const own = new Set<string>();
         peer.allowed_ips.forEach((network, j) => check(`${peerPath}.allowed_ips.${j}`, page, () => {
           prefix(network, true);
-          if (allowed.has(network)) throw new Error("Duplicate allowed network across peers");
+          if (own.has(network)) throw new Error("Duplicate allowed network within a peer");
+          own.add(network);
+          if (peer.enabled === false) return;
+          if (allowed.has(network)) throw new Error("Duplicate allowed network across enabled peers");
           allowed.add(network);
         }));
       });
     }
+  }
+  const blackholeName = config.blackhole?.name ?? "";
+  if (blackholeName && (!validName(blackholeName) || interfaces.has(blackholeName) || parents.some(parent => parent.name === blackholeName))) {
+    issue("blackhole.name", "Use a valid name that no managed or adopted interface already uses", "/blackhole");
   }
   config.routes.forEach((route, index) => {
     const path = `routes.${index}`, page = "/routes";
@@ -431,7 +533,9 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       const destination = prefix(route.destination, true);
       if (route.gateway && numericAddress(route.gateway).kind() !== destination.family) throw new Error("Gateway family must match destination");
     });
-    if (!interfaces.has(route.interface)) issue(`${path}.interface`, "Select a gateway interface", page);
+    const toBlackhole = Boolean(blackholeName) && route.interface === blackholeName;
+    if (!interfaces.has(route.interface) && !toBlackhole) issue(`${path}.interface`, "Select a gateway interface", page);
+    if (toBlackhole && route.gateway) issue(`${path}.gateway`, "A blackhole route cannot have a gateway", page);
     if (route.table !== 254) bound(route.table, 10000, 19999, `${path}.table`, page);
     bound(route.metric, 1, 2147483647, `${path}.metric`, page);
     const key = `${route.table}/${route.destination}/${route.metric}`;
@@ -474,10 +578,10 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       issue("firewall.input", "Input policy metadata exceeds 65536 bytes", page);
     }
   }
-  if (config.softflowd.length > 16) issue("softflowd", "At most 16 instances including disabled entries", "/services/softflowd");
+  if (config.softflowd.length > 16) issue("softflowd", "At most 16 instances including disabled entries", "/services/netflow");
   const serviceNames = new Set<string>();
   config.softflowd.forEach((service, index) => {
-    const path = `softflowd.${index}`, page = `/services/softflowd/${encodeURIComponent(service.name)}`;
+    const path = `softflowd.${index}`, page = `/services/netflow/${encodeURIComponent(service.name)}`;
     if (!/^[a-zA-Z0-9_-]{1,32}$/.test(service.name) || serviceNames.has(service.name)) issue(`${path}.name`, "Invalid or duplicate instance name", page);
     serviceNames.add(service.name);
     if (!interfaces.has(service.interface) && !parents.some((parent) => parent.name === service.interface && parent.available)) issue(`${path}.interface`, "Select a managed or available adopted capture interface", page);
@@ -500,7 +604,10 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
 
 export function importConfig(text: string): Config {
   if (utf8Size(text) > 1_048_576) throw new Error("Import exceeds 1 MiB");
-  return configSchema.parse(decodeJson(text));
+  const parsed = configSchema.parse(decodeJson(text));
+  const unknown = Object.keys(parsed).filter(key => !(key in configSchema.shape));
+  if (unknown.length) throw new Error(`Unrecognized configuration key(s): ${unknown.join(", ")}`);
+  return parsed;
 }
 export function requiredPermissions(diff: Difference[]): string[] {
   const permissions = new Set(["transactions.write"]);
@@ -511,6 +618,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write",
+    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

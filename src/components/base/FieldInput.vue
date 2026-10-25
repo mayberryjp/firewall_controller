@@ -10,6 +10,9 @@ watch(() => rows.value.length, (length) => {
   rowIDs.value.length = length;
 }, { immediate: true });
 const text = computed(() => typeof props.modelValue === "string" || typeof props.modelValue === "number" ? props.modelValue : "");
+const choices = computed(() => props.field.hideLabel && props.field.placeholder
+  ? [{ title: props.field.placeholder, value: "", props: { class: "d-none" } }, ...(props.field.choices ?? [])]
+  : props.field.choices);
 const lines = computed(() => rows.value.join("\n"));
 function updateLines(value: string): void {
   emit("update:modelValue", value.split("\n").map(item => item.trim()).filter(Boolean));
@@ -35,7 +38,10 @@ function move(index: number, delta: number): void {
     v-if="field.kind === 'text' || field.kind === 'number'"
     :id="path"
     :model-value="text"
-    :label="field.label"
+    :label="field.hideLabel ? undefined : field.label"
+    :aria-label="field.hideLabel ? field.label : undefined"
+    :placeholder="field.placeholder"
+    :persistent-placeholder="Boolean(field.placeholder)"
     :type="field.kind === 'number' ? 'number' : 'text'"
     :disabled="field.disabled"
     :title="field.hint"
@@ -58,8 +64,11 @@ function move(index: number, delta: number): void {
     v-else-if="field.kind === 'select'"
     :id="path"
     :model-value="text"
-    :label="field.label"
-    :items="field.choices"
+    :label="field.hideLabel ? undefined : field.label"
+    :aria-label="field.hideLabel ? field.label : undefined"
+    :placeholder="field.placeholder"
+    :persistent-placeholder="Boolean(field.placeholder)"
+    :items="choices"
     :disabled="field.disabled"
     :title="field.hint"
     hide-details="auto"

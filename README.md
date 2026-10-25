@@ -73,18 +73,21 @@ review the backend's networkd/resolved and persistent-state prerequisites.
 | Browser route | Purpose |
 | --- | --- |
 | `/connect` | Registry sign-in, persistent firewall list, encrypted key storage and controller-proxied device connection |
-| `/overview` | Compact interface, gateway and WireGuard status widgets; exact interface counters with one interface per row |
+| `/overview` | Customizable system, interface, gateway and WireGuard status widgets; exact interface counters with one interface per row |
 | `/interfaces`, `/interfaces/:name` | Physical interfaces inventory and active IPv4/IPv6 addresses, excluding dummy/loopback links; inline NIC editing and explicit management/release |
 | `/loopbacks` | Loopback creation, editing and explicit adoption; built-in `lo` and other system loopback links remain read-only |
+| `/blackhole` | The single deviceless drop target (`config.blackhole`: name and drop/unreachable/prohibit action) that static routes can use as their interface; routes only, needs `routes.write`, no drop counters |
 | `/vlans`, `/vlans/:name` | VLAN-only creation, behavior editing and deletion, parent/tag validation and dependency review |
 | `/routes` | Static routes and managed-interface/table/metric validation; legacy `/policy-rules` redirects here |
 | `/firewall` | Default forward policy and ordered accept/drop rules; existing host/ingress policies preserved read-only |
-| `/settings`, `/settings/general` | Global IPv6 policy and measured/simulated runtime, IPv4 ICMP exception; settings join the shared draft |
+| `/settings`, `/settings/general` | Global IPv6 policy and IPv4 ICMP exception; settings join the shared draft |
+| `/settings/mqtt-streaming` | MQTT STREAMING (old `/settings/home-assistant` redirects here): MQTT broker, source interface, publish interval and write-only password replacement; shared draft and confirmed publisher status |
 | `/connections` | Live conntrack snapshots, filters/paging, exact nullable counters and explicitly confirmed state deletion |
 | `/nat` | Ordered IPv4/IPv6 masquerading with family-correct egress |
-| `/wireguard`, `/wireguard/:name` | Tunnel creation, key reference, listen port and peers; links back to Interfaces for link settings/deletion |
+| `/tunnels` | Tunnel interfaces: pick a type (WireGuard for now) and create e.g. `tun_wg0` with private key (the name of a key stored on the appliance), listen port, MTU, addresses and admin state; several tunnels are supported and peers are kept when a tunnel is edited |
+| `/wireguard`, `/wireguard/:name` | Peers across all tunnel interfaces (optionally one tunnel): add, edit and delete peers, each belonging to a tunnel chosen when it is added; a Status toggle disables a peer without deleting it (disabled peers aren't installed, show no handshake or counters, and may reuse an allowed network that an enabled peer uses). Handshake-age chips are green through 5x the keepalive interval, yellow through 10x, orange through 15x, and red beyond; never-handshaken peers are red, and keepalive-off peers use a neutral color. |
 | `/firewall/input` | Host-input policy and ordered managed-ingress rules, separate from forwarding |
-| `/services/softflowd`, `/services/softflowd/:name` | Staged flow-export instances and independent runtime |
+| `/services/netflow`, `/services/netflow/:name` | NetFlow/IPFIX: staged flow-export instances (**Add export**, inline Status enable/disable toggle) and independent runtime; instance names are plain text, with editing through the row action |
 | `/services/dhcp-relay` | Sole editor for per-interface relay enablement/upstream servers, with stored/observed configuration and runtime |
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
@@ -92,6 +95,15 @@ review the backend's networkd/resolved and persistent-state prerequisites.
 | `/config/changes` | Staged changes, unified diff, Commit & push |
 | `/config/commits`, `/config/commits/:id` | Commits: independent recovery discovery and explicit lifecycle actions |
 | `/config/revisions`, `/config/revisions/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
+
+Services labels the flow exporter **NetFlow/IPFIX**, under `/services/netflow`.
+The backend API paths, `softflowd` configuration key and API permissions are unchanged. It controls
+Netcontrol's in-process Rust exporter, not an external softflowd daemon. Native capture drops
+do not stop export: when supplied by the backend, cumulative `dropped_packets`
+and `statistics_complete: false` produce an inline warning that flow totals may
+undercount traffic. Loss remains recorded until that worker restarts. Missing
+statistics are unknown, not evidence of loss-free capture; running does not
+verify collector delivery.
 
 Deep links fall back to the SPA; reload restores an unexpired registry session
 and reconnects the remembered firewall.
@@ -120,6 +132,17 @@ read timestamps or deployment instructions. Errors and stale-data notices remain
 visible. Detailed values use expandable labeled fields rather than JSON dumps;
 small resource lists omit filter bars. Service-impact warnings appear in change
 review and explicit repair/apply confirmations.
+
+Tables use compact row density throughout the app, with reduced vertical cell and
+action spacing. Wrapped content and inline editors can still grow to fit; narrow
+screens retain their labeled, stacked layouts with tighter spacing.
+
+NAT masquerading uses inline table rows for Add rule and editing, with Save/Cancel
+and validation in place rather than popup forms or discard confirmations.
+Save stages into the shared draft for the normal SAVE/apply review flow; it does
+not write to the backend. Rule order and settings not changed in the editor are
+preserved. The editor omits Labels (display name and description), retaining any
+existing saved labels. Cancel or switching rows discards the current unstaged input.
 
 Human-facing timestamps use `yyyy-mm-dd hh:mm:ss` in UTC, matching the supplied
 containers' default timezone, not the browser's timezone. Table headings, detail
@@ -152,7 +175,9 @@ Inventory is fetched independently of configuration/runtime; failed discovery sh
 unavailable state or retains stale rows rather than reporting a successful empty table.
 VLAN creation and editing live under Interfaces > VLANs. Add VLAN inserts an inline
 table row with interface name, compact VLAN ID and MTU fields, parent interface,
-and IPv4 addresses/prefixes. IPv4 addresses can also be added or changed after
+admin state, and IPv4 addresses/prefixes. The Admin state column uses green Up
+and red Down chips; the inline editor stages admin-state changes with Save.
+IPv4 addresses can also be added or changed after
 creation by editing the VLAN row; IPv6 and other hidden settings are preserved.
 The parent dropdown offers only physical Ethernet interfaces from the current
 configuration and available adopted parents, not VLANs, loopbacks or tunnels.
@@ -264,6 +289,70 @@ refresh and inspect, never automatically retry. The registry forwards authentica
 DELETE JSON and permits DELETE preflight. Native TCP/NAT/IPv6 acceptance needs a
 disposable appliance, not a production management session.
 
+### Home Assistant And System Stats
+
+Home Assistant settings use the normal shared draft, SAVE review and confirmed
+transaction flow. MQTT changes require `mqtt.write` and `transactions.write`;
+status and host-health reads require `state.read`. Deploy a backend with the MQTT
+and `netcontrol-host-health/v1` APIs. Only confirmed settings publish. A broker
+acknowledgment is not proof of Home Assistant ingestion. The publisher also sends
+host-health sensors (memory, load, CPU, temperatures, filesystems); CPU percent is
+unknown until the second sample and a failed sensor is unknown, never zero.
+
+Replacement passwords upload once via `/services/mqtt/passwords`; only the
+immutable reference enters configuration, exports and history. The form clears
+plaintext after save/error or dismissal and never automatically retries an upload.
+Upload over HTTPS or a trusted management channel. Appliance password files are
+private but unencrypted; discarded uploads still count toward the 256-reference
+limit. Prefer `mqtts://` with a trusted broker certificate.
+
+Overview polls `/statistics/host` independently every three seconds while visible;
+the settings page polls confirmed MQTT status every 7.5 seconds. Reads do not
+overlap and failures back off. System stats describe the daemon-visible host, not
+cgroup limits. CPU usage needs two samples and exact tick deltas, excludes guest
+double counting, and resets on boot/scope/CPU changes or counter/time regressions.
+Capacity usage chips are green below 70%, amber from 70%, red from 90%; stale
+readings are neutral. Load and hardware sensors have no invented alarm thresholds.
+Root-filesystem usage is not a sum of mounts; available space excludes reserved
+blocks. Missing, partial and simulated readings remain explicit. Verification
+uses synthetic data; physical hardware, broker TLS and Home Assistant ingestion
+require appliance acceptance.
+
+### DHCP-dependent static routes
+
+An enabled IPv4 static route on a DHCP-managed interface is not installed by the
+backend while that interface has no valid lease, and is restored after the lease
+routes. `enabled` stays configured intent: the Static Routes table shows a **Waiting
+for DHCP** chip (with the lease error on hover) instead of changing the toggle or
+the route, and the page reads runtime every 5 seconds while it is visible. IPv6,
+disabled and other-interface routes are not affected. A lease alone does not prove
+the route's pinned gateway is reachable.
+
+### Unknown fields and Azure Dynamic DNS
+
+The backend now drops unknown keys inside a submitted `config` instead of rejecting
+them and lists them as `ignored_fields` on the submit response. The push dialog shows
+that list as a warning; those settings are not applied. The list is not stored.
+
+Responses from a newer backend no longer fail on keys this client doesn't know:
+unknown keys are dropped before validation, except unknown top-level `config`
+sections, which are kept unchanged in drafts so saving doesn't reset them. Imports
+still reject unknown keys, and wrong types, missing fields and the retired
+`policy_rules` field remain incompatible.
+
+`config.dynamic_dns` (Azure public DNS A records) is decoded strictly, preserved
+through drafts, imports, history and restores, and needs `dynamic_dns.write` in
+addition to `transactions.write`. Settings > Dynamic DNS lists entries with an inline
+Status toggle and an add/edit form. The Azure client secret is uploaded once via
+`/services/dynamic-dns/secrets`; only the returned reference enters the draft, the
+field is cleared after save, error or dismissal, and uploads are never retried
+automatically. Entry state, address and last update come from
+`/services/dynamic-dns/status`, polled every 7.5 seconds while that page is visible;
+`current` means Azure accepted the record, not that DNS has propagated. Disabling or
+deleting an entry does not delete the Azure record, and rollback cannot undo DNS
+writes already made. Deployment needs an Azure DNS Zone Contributor service
+principal; secrets are stored unencrypted on the appliance.
+
 ### Signed self-upgrade
 
 Service maintenance reads `GET /api/v1/system/upgrade` with `state.read` and submits
@@ -372,6 +461,14 @@ as an empty inventory.
   unsupported/simulated, never fabricated as a successful lease.
 - Routes and monitors accept main table 254 or 10000..19999 at the API boundary;
   the inline editors use main table 254. Public policy rules are no longer supported.
+  Static routes default to enabled when omitted. Their Status toggle stages only
+  the enabled flag, preserving the route path and metadata; SAVE applies the full
+  configuration through the normal confirmed transaction. Disabled routes remain
+  configurable and validated but are not installed. Route toggles stage directly
+  without warning popups; enabled explicit monitors still need an enabled
+  matching route, so disable or repoint dependent monitors in the same draft.
+  Deploy the route-toggle backend before using disable controls. Gateway monitor
+  enable switches also have a dedicated Status column, separate from Actions.
   Ethernet is eligible for
   VLAN parenting and DHCP relay. NAT still requires an address of its family
   in the configured static egress, matching the current backend validator.
@@ -421,7 +518,7 @@ fields are rejected as incompatible rather than silently stripped.
   replace these preserved policies; historical restore remains server-authorized.
 - Each interface has `dhcp_relay: { enabled, servers }`, default disabled/empty.
   Disabled server lists remain preserved and validated. Entries must be distinct
-  canonical numeric unicast IPv4 addresses, with no names, ports, prefixes, IPv6,
+  canonical unicast IPv4 addresses, with no names, ports, prefixes, IPv6,
   loopback, link-local, multicast, unspecified or broadcast. All servers receive
   requests, not ordered failover. Enabled relay requires an administratively up
   dummy/VLAN link, servers and a configured unicast IPv4 address. The selected
@@ -498,11 +595,11 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   gateway/table. The backend installs exact-source routing rules: all traffic from
   that source is affected, not only probes. Enabled monitors sharing a source must
   use the same table. No public source-policy record is required or accepted.
-  Canonical numeric addresses must share
+  Canonical IP addresses must share
   a family; IPv6 link-local gateway/target are scoped by the selected interface.
   Disabled explicit monitors need valid settings but not live references.
 - DHCP monitors require a managed DHCP-configured interface even when disabled,
-  and an up interface when enabled. The target must be numeric unicast IPv4.
+  and an up interface when enabled. The target must be a unicast IPv4 address.
   Saving requires no current lease, static address or configured route, and emits
   no `source_address`, `gateway` or `routing_table`. The backend resolves only the
   selected interface's lease and route, never another WAN. Private marked probe
@@ -520,9 +617,37 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   configuration observation. Visible polling is non-overlapping every 3 seconds,
   with existing hidden-tab pause/backoff. GETs read cached measurements, not new
   probes. Gateway runtime is also decoded from `/runtime`.
-  Monitor rows show sample state, health, loss, mean RTT, standard deviation,
-  RTT variation and sent/received/lost/pending counts without expansion. Expanding
-  a row reveals the complete measurements and resolved-path details.
+  Monitor rows show a colored health chip, loss, mean RTT, standard deviation,
+  and RTT variation in separate table columns, with the enable/disable switch
+  beside its edit/delete actions. Expanding a row reveals the probe target,
+  sample state, sent/received/lost/pending counts, complete measurements and
+  resolved-path details. Narrow screens wrap the inline statistics within the
+  same monitor record.
+- Probe metrics use green/yellow/orange/red chips with these display-only bands:
+
+  | Metric | Green | Yellow | Orange | Red |
+  | --- | --- | --- | --- | --- |
+  | Packet loss | <1% | 1 to <3% | 3 to <5% | >=5% |
+  | Mean RTT | <100 ms | 100 to <150 ms | 150 to <300 ms | >=300 ms |
+  | RTT stddev / variation | <10 ms | 10 to <20 ms | 20 to <30 ms | >=30 ms |
+
+  Tooltips explain each rating and its bands; unavailable, stale, warming-up,
+  disabled, simulated, or errored samples remain neutral. Numeric ratings use
+  unrounded measurements. These bands do not change configured health thresholds.
+  There is no universal four-color ICMP quality standard: these are practical
+  UI heuristics informed by real-time media guidance.
+  [Microsoft Teams CQD](https://learn.microsoft.com/en-us/microsoftteams/stream-classification-in-call-quality-dashboard)
+  classifies average media jitter above 30 ms as poor; its 500 ms RTT poor boundary
+  is not this UI's more conservative 300 ms boundary.
+  [Microsoft network performance guidance](https://learn.microsoft.com/en-us/previous-versions/skypeforbusiness/optimizing-your-network/media-quality-and-network-connectivity-performance)
+  also distinguishes optimal from poor latency, jitter, and loss. Those media
+  thresholds are not universal ICMP SLAs. RTT variation and population stddev
+  are not one-way/RTP jitter; applying the same spread bands is a display
+  heuristic, not a claim of standards compliance.
+  The Overview gateway widget uses the same RTT, standard deviation, and loss
+  chip bands, plus a colored status chip. Retained last-measured status keeps
+  its existing explanation; old numeric samples remain visible but neutral
+  while awaiting fresh measurements.
 - Worker lifecycle, sample availability and health are separate. Stale after
   max(1 second, 3 probe intervals), errors, warmup and simulated/no-data results
   are Unknown, not current reachability or remote Down. Per-row measurement
@@ -538,7 +663,18 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   150 ms mean RTT Degraded; optional variation threshold off. Failure/recovery
   holds are 3/5 seconds and rolling-window effects add delay. Last success is
   since worker start and can predate the current window.
-- Linux requires explicit `-gateway-monitoring`, raw-socket/namespace privileges,
+- Host Linux monitoring requires both `--allow-host-services` and
+  `--gateway-monitoring`; `--appliance` alone is insufficient and the shipped
+  systemd unit enables neither opt-in. The operator must review other configured
+  host services, preserve custom startup flags, retain independent OS SSH/console
+  access, and restart only without an active transaction or upgrade. Verify
+  connectivity and refresh committed state/revision before explicitly retrying.
+  Failed pushes involving enabled monitors offer these prerequisites in the push
+  dialog. Full structured apply/rollback errors and transaction outcomes remain
+  available without truncation; drafts are retained and writes are never retried
+  automatically. Missing opt-ins are not repaired by disabling monitors, adding
+  static DHCP routes, resetting state, or automatically editing service units.
+  Linux also requires raw-socket/namespace privileges,
   matching configured routes for explicit mode or a usable IPv4 lease route for
   DHCP mode, plus ICMP/ICMPv6 return paths. Exact-source rules for explicit mode
   and private marked paths for DHCP mode are backend-managed; no dpinger,
@@ -604,7 +740,14 @@ native readiness or native reboot recovery. Deployment labels stay explicit.
 - Statistics counters/protocol values remain **quoted decimal strings**, including
   values above the JS safe-integer limit and gauges such as `Tcp.MaxConn = "-1"`.
   Missing counters/groups are unavailable, not zero.
-- `ipaddr.js` validates numeric addresses/prefixes. Host bits are retained for
+- Overview packet totals below 100,000 use full grouped numbers. Larger totals use
+  compact K/M/B/T suffixes with two decimal places; hover for the exact total.
+  Packet-in/out chips show the change since the previous fresh poll, not a
+  per-second rate (including `+0` when unchanged). Large deltas use the same
+  formatting and retain their exact value in a tooltip. Chips require two valid
+  samples and reset after stale/failed/simulated reads, missing counters, changed
+  interface identity or scope, non-increasing sample times, or decreasing counters.
+- `ipaddr.js` validates IP addresses/prefixes. Host bits are retained for
   interface addresses. Network selectors with host bits produce a correction
   suggestion that must be entered explicitly; they are never silently widened.
 - Backend preflight remains authoritative. No local dry-run, permission discovery,
@@ -676,6 +819,25 @@ simulated states. There is no offline mutation queue.
 The fetch adapter refuses controller redirects rather than forwarding
 Authorization elsewhere; normal API calls omit cookies and set `cache: no-store`. Session login, restore, and sign-out include the registry cookie. Error
 text redacts the registry session token.
+
+### Overview layout
+
+On Overview, select **Customize layout** to drag boxes within or between the two
+columns. Move buttons provide keyboard and touch alternatives. Hide unwanted
+boxes, use **Show** to restore them, or **Reset layout** to restore the default
+arrangement. On narrow screens the left column appears above the right column.
+**Save layout** persists the arrangement and hidden boxes in the registry's SQLite
+database; **Cancel** discards unsaved changes. Hiding a box does not change firewall
+configuration or the overview's background polling.
+
+The layout is shared by all browsers, devices, and administrators using the same
+registry, not stored per browser or firewall. It loads when Overview opens; the
+last successful save wins if multiple browsers edit at once. Loading or saving
+failures are shown explicitly and can be retried. The authenticated registry
+endpoints are `GET /api/v1/preferences/overview` and
+`POST /api/v1/preferences/overview`, with a version-1 body containing two ordered
+`columns` arrays of unique widget IDs (`interfaces`, `gateways`, `wireguard`,
+`system`, `counters`). Omitted IDs are hidden; empty columns are allowed.
 
 ### Central registry, remote devices and CORS
 

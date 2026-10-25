@@ -3,11 +3,40 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRegistrySessionToken, getRememberedRegistryDevice, loginRegistry, logoutRegistry,
   registryDeviceStorageKey, rememberRegistryDevice, restoreRegistrySession, setRegistrySessionToken,
+  getOverviewLayout, saveOverviewLayout,
 } from "@/services/registry";
+import { defaultOverviewLayout, overviewLayoutSchema } from "@/services/overviewLayout";
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock("axios", async importOriginal => {
   const actual = await importOriginal<typeof import("axios")>();
   return { ...actual, default: { ...actual.default, create: () => ({ request }) } };
+});
+describe("shared overview layout", () => {
+  it("reads and writes the authenticated registry preference without browser storage", async () => {
+    setRegistrySessionToken("test-session");
+    const layout = defaultOverviewLayout();
+    request.mockResolvedValue({ data: layout });
+    expect(await getOverviewLayout()).toEqual(layout);
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ method: "GET", url: "/preferences/overview", withCredentials: false }));
+    expect(await saveOverviewLayout(layout)).toEqual(layout);
+    expect(request).toHaveBeenLastCalledWith(expect.objectContaining({ method: "POST", url: "/preferences/overview", data: layout }));
+    expect(localStorage.length).toBe(0);
+  });
+  it.each([
+    { version: 2, columns: [[], []] },
+    { version: 1, columns: [["unknown"], []] },
+    { version: 1, columns: [["interfaces"], ["interfaces"]] },
+    { version: 1, columns: [[]] },
+    { version: 1, columns: [[], []], extra: true },
+  ])("rejects invalid layout %j before sending it", layout => {
+    expect(overviewLayoutSchema.safeParse(layout).success).toBe(false);
+  });
+  it("accepts all boxes hidden and surfaces incompatible saved data", async () => {
+    expect(overviewLayoutSchema.parse({ version: 1, columns: [[], []] })).toEqual({ version: 1, columns: [[], []] });
+    setRegistrySessionToken("test-session");
+    request.mockResolvedValue({ data: { version: 1, columns: [["unknown"], []] } });
+    await expect(getOverviewLayout()).rejects.toThrow("Incompatible device registry response");
+  });
 });
 const device = "11111111-1111-4111-8111-111111111111";
 beforeEach(() => {

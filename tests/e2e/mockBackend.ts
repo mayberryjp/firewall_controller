@@ -1,10 +1,12 @@
 import type { Page } from "@playwright/test";
-import { config, runtime, statistics, transaction, gatewayStatistics, connections } from "../fixtures";
+import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot } from "../fixtures";
 import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics, RuntimeState } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
+import { defaultOverviewLayout, overviewLayoutSchema } from "../../src/services/overviewLayout";
 
-export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics } = {}) {
+export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; applyError?: { message: string; outcome: "rolled_back" | "recovery_failed" }; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics } = {}) {
   let committed = options.initialConfig ?? config(), revision = "0";
+  let overviewLayout = defaultOverviewLayout();
   const transactions: Record<string, Transaction> = {};
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
   const writes: Array<{ path: string; body: unknown }> = [];
@@ -63,6 +65,10 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       if (request.headers().authorization !== "Bearer registry-test-session") {
         return reply({ error: "Registry login required" }, 401, { "X-Registry-Auth-Error": "true" });
       }
+      if (path === "/preferences/overview") {
+        if (request.method() === "POST") overviewLayout = overviewLayoutSchema.parse(request.postDataJSON());
+        return reply(overviewLayout);
+      }
       if (path === "/devices" && request.method() === "GET") {
         return reply({ devices: [{
           id: "11111111-1111-4111-8111-111111111111", name: "Test firewall",
@@ -88,6 +94,12 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       if (path === "/interfaces/discovered") return reply(options.discoveredInterfaces ?? []);
       if (path === "/services/dhcp-relay/status") return reply({ interfaces: runtimeState().dhcp_relay, error: "" });
       if (path === "/statistics") return reply(options.statistics ?? statistics());
+      if (path === "/statistics/host") {
+        const sample = healthSnapshot(); sample.sample.status = "simulated"; sample.sample.scope = "simulator"; sample.sample.boot_id = null;
+        for (const section of Object.values(sample.sections)) { section.status = "simulated"; section.data = null; section.error = "No physical host measurements in simulator"; }
+        return reply(sample);
+      }
+      if (path === "/services/mqtt/status") return reply({ device_id: "a".repeat(32), enabled: committed.mqtt?.enabled ?? false, state: committed.mqtt?.enabled ? "simulated" : "disabled", error: null, last_published_at_unix: null });
       if (path === "/statistics/connections") return reply({ ...connections(), connections: [], sample: { ...connections().sample, status: "simulated" }, summary: { total: null, matched: null, returned: 0, accounting_unavailable: null } });
       if (path === "/statistics/gateways") return reply({ sample: statistics().sample, monitors: gatewayRows() });
       if (path.startsWith("/statistics/gateways/")) {
@@ -106,13 +118,19 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     if (request.method() === "POST") {
       const body: unknown = request.postData() ? decodeJson(request.postData()!) : undefined;
       writes.push({ path, body });
+      if (path === "/services/mqtt/passwords") return reply({ password_ref: "a".repeat(32) }, 201);
       if (path === "/transactions" || path.endsWith("/restore")) {
         const parsed = body && typeof body === "object" ? body : {};
         const pending = transaction();
         pending.previous = committed;
         pending.candidate = "config" in parsed ? parsed.config as Config : config();
+        if ("description" in parsed && typeof parsed.description === "string") pending.description = parsed.description;
         if (path.endsWith("/restore")) pending.restored_from_revision = path.split("/")[2];
         transactions[pending.id] = pending;
+        if (options.applyError) {
+          pending.status = options.applyError.outcome; pending.error = options.applyError.message;
+          return reply({ error: options.applyError.message, transaction: pending }, 500);
+        }
         if (options.lostSubmit) return route.abort("failed");
         return reply(pending, 202);
       }

@@ -7,13 +7,23 @@ import { useAppStore } from "@/stores/app";
 import { useControllerStore } from "@/stores/controller";
 import { usePolling } from "@/composables/usePolling";
 import * as api from "@/services/netcontrol";
-import { state, runtime, transaction } from "../fixtures";
+import { state, runtime, transaction, healthSnapshot } from "../fixtures";
 import privateRoutes from "@/router/routes/privateRoutes";
 import { navigationSections, primaryNavigationSections } from "@/constants/navigation";
+import { resourceTitles } from "@/services/resourceCollections";
 
 const PollingHost = defineComponent({ setup() { usePolling(); return () => null; } });
 
 describe("routed navigation sections", () => {
+  it("routes NetFlow/IPFIX through netflow while preserving the backend resource identity", () => {
+    const page = navigationSections.find(section => section.name === "services-section")?.pages.find(page => page.name === "netflow");
+    expect(page?.title).toBe("NetFlow/IPFIX");
+    expect(page?.path).toBe("/services/netflow");
+    expect(resourceTitles.softflowd).toBe("NetFlow/IPFIX");
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    expect(router.resolve(page!.path).name).toBe("netflow");
+    expect(router.resolve("/services/netflow/capture").name).toBe("netflow-detail");
+  });
   it("uses the selected Interfaces, Routing, Services, and VPN icons", () => {
     const interfaces = navigationSections.find(section => section.name === "networking-section");
     expect(interfaces?.icon).toBe("mdi-lan");
@@ -29,7 +39,7 @@ describe("routed navigation sections", () => {
   });
   it("keeps Config routable without a duplicate primary navigation entry", () => {
     expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall", "VPN", "Services", "Settings"]);
-    expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks"]);
+    expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels"]);
     expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
@@ -45,7 +55,7 @@ describe("routed navigation sections", () => {
       expect(resolved.matched[0]?.name).toBe(section.name);
     }
     for (const [path, selectedPage] of [
-      ["/interfaces/lab0", "interfaces"], ["/wireguard/wg0", "wireguard"], ["/services/softflowd/capture", "softflowd"],
+      ["/interfaces/lab0", "interfaces"], ["/wireguard/wg0", "wireguard"], ["/services/netflow/capture", "netflow"],
       ["/config/commits/transaction-id", "commits"], ["/config/revisions/0", "history"],
     ]) {
       expect(router.resolve(path!).meta.navigationPage).toBe(selectedPage);
@@ -107,6 +117,30 @@ describe("app store", () => {
 });
 
 describe("page-scoped polling", () => {
+  it("keeps host and MQTT polling route-scoped, non-overlapping, hidden-tab paused and stopped on unmount", async () => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    for (const action of ["refreshState", "refreshRuntime", "refreshTransactions", "refreshStatistics", "refreshGatewayStatistics", "refreshUpgrade"] as const) vi.spyOn(store, action).mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let finish!: (value: ReturnType<typeof healthSnapshot>) => void;
+    const host = vi.spyOn(api, "getHostHealth").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(healthSnapshot());
+    const mqtt = vi.spyOn(api, "getMqttStatus").mockResolvedValue({ device_id: "a".repeat(32), enabled: false, state: "disabled", error: null, last_published_at_unix: null });
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push("/overview");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(12000); expect(host).toHaveBeenCalledTimes(1); expect(mqtt).not.toHaveBeenCalled();
+      finish(healthSnapshot()); await vi.advanceTimersByTimeAsync(0);
+      await router.push("/settings/mqtt-streaming"); await vi.advanceTimersByTimeAsync(15000);
+      expect(host).toHaveBeenCalledTimes(1); expect(mqtt).toHaveBeenCalledTimes(3);
+      visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(15000); expect(mqtt).toHaveBeenCalledTimes(3);
+      visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0); expect(mqtt).toHaveBeenCalledTimes(4);
+      wrapper.unmount(); await vi.advanceTimersByTimeAsync(15000); expect(mqtt).toHaveBeenCalledTimes(4);
+    } finally { wrapper.unmount(); visibility.mockRestore(); vi.useRealTimers(); }
+  });
   it("polls only gateway measurements on the visible monitor page and stops when monitoring is disabled", async () => {
     vi.useFakeTimers();
     const pinia = createPinia(); setActivePinia(pinia);
@@ -129,7 +163,7 @@ describe("page-scoped polling", () => {
       await vi.advanceTimersByTimeAsync(6000); expect(refreshGatewayStatistics).toHaveBeenCalledTimes(2);
     } finally { wrapper.unmount(); vi.useRealTimers(); }
   });
-  it.each(["/interfaces", "/interfaces/lab0", "/wireguard", "/routes", "/services/ntp", "/config/commits/tx-test", "/config/changes", "/config/revisions"])("keeps %s manual even during pending transactions", async path => {
+  it.each(["/interfaces", "/interfaces/lab0", "/services/ntp", "/config/commits/tx-test", "/config/changes", "/config/revisions"])("keeps %s manual even during pending transactions", async path => {
     vi.useFakeTimers();
     const pinia = createPinia();
     setActivePinia(pinia);

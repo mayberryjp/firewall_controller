@@ -15,11 +15,12 @@ export interface ResourceFilters {
   interface: string;
   family: string;
   table: string;
+  enabled: string;
 }
 
 export function useResourceCollection(section: Section, wireguard: boolean, name?: string, vlan = false) {
   const store = useControllerStore();
-  const filters = reactive<ResourceFilters>({ search: "", kind: "All", role: "All", admin: "All", interface: "All", family: "All", table: "" });
+  const filters = reactive<ResourceFilters>({ search: "", kind: "All", role: "All", admin: "All", interface: "All", family: "All", table: "", enabled: "All" });
   const selectedConfig = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
   const rows = computed<ResourceRow[]>(() => selectedConfig.value ? resourceItems(selectedConfig.value, section).map((value, index) => ({
     value: record(value), index,
@@ -32,6 +33,7 @@ export function useResourceCollection(section: Section, wireguard: boolean, name
     if (filters.role !== "All" && value.role !== filters.role.toLowerCase()) return false;
     if (filters.admin !== "All" && value.up !== (filters.admin === "Up")) return false;
     if (filters.interface !== "All" && value.interface !== filters.interface) return false;
+    if (filters.enabled !== "All" && (value.enabled !== false) !== (filters.enabled === "Enabled")) return false;
     if (filters.table && String(value.table) !== filters.table) return false;
     if (filters.family !== "All") {
       try { if (prefix(String(value.destination || value.source), true).family !== filters.family) return false; } catch { return false; }

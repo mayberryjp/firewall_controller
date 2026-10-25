@@ -4,6 +4,8 @@ export interface Field {
   label: string;
   kind: "text" | "number" | "switch" | "select" | "lines" | "object" | "rows";
   hint?: string;
+  placeholder?: string;
+  hideLabel?: boolean;
   disabled?: boolean;
   choices?: Choice[];
   fields?: Field[];

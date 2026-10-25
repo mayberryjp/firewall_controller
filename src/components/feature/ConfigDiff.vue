@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, useId } from "vue";
 import { structuredPatch } from "diff";
-import { differences, stableJson } from "@/services/configuration";
+import { differenceContext, differences, normalize, stableJson } from "@/services/configuration";
 import type { ApplianceService, Config } from "@/types/domain";
 import { record } from "@/types/forms";
 import ApplianceWarnings from "@/components/feature/ApplianceWarnings.vue";
@@ -16,8 +16,11 @@ const hasWarnings = computed(() => changedServices.value.length || relayChanged.
 function source(value: unknown): string {
   return value === undefined ? "" : `${JSON.stringify(JSON.parse(stableJson(value)), null, 2)}\n`;
 }
-const files = computed(() => changes.value.map(item => {
-  const patch = structuredPatch(item.area, item.area, source(item.before), source(item.after), undefined, undefined, { context: 3 });
+const files = computed(() => {
+  const old = normalize(props.before), next = normalize(props.after);
+  return changes.value.map(item => {
+  const context = differenceContext(old, next, item);
+  const patch = structuredPatch(item.area, item.area, source(context.before), source(context.after), undefined, undefined, { context: 12 });
   const hunks = patch.hunks.map(hunk => {
     let oldLine = hunk.oldStart, newLine = hunk.newStart;
     return { ...hunk, rows: hunk.lines.filter(line => !line.startsWith("\\")).map(line => ({
@@ -31,7 +34,8 @@ const files = computed(() => changes.value.map(item => {
     additions: hunks.reduce((count, hunk) => count + hunk.rows.filter(row => row.kind === "addition").length, 0),
     deletions: hunks.reduce((count, hunk) => count + hunk.rows.filter(row => row.kind === "deletion").length, 0),
   };
-}));
+  });
+});
 const totals = computed(() => files.value.reduce((total, file) => ({
   additions: total.additions + file.additions, deletions: total.deletions + file.deletions,
 }), { additions: 0, deletions: 0 }));

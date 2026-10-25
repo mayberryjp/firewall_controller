@@ -1,10 +1,89 @@
 import { describe, expect, it } from "vitest";
-import { configSchema, revisionSchema, statisticsSchema, transactionSchema } from "@/types/domain";
+import { configSchema, mqttSchema, blackholeSchema, revisionSchema, statisticsSchema, transactionSchema } from "@/types/domain";
 import { decodeJson, encodeJson, utf8Size } from "@/services/json";
-import { differences, endpoint, equalConfig, importConfig, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
+import { differenceContext, differences, endpoint, equalConfig, importConfig, normalize, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, statistics, transaction } from "../fixtures";
 
 describe("lossless boundary and import", () => {
+  it("validates blackhole route targets and requires only routes.write", () => {
+    const before = config(), after = config();
+    after.blackhole = blackholeSchema.parse({ name: "blackhole0", action: "unreachable" });
+    after.routes.push({ enabled: true, destination: "198.51.100.0/24", interface: "blackhole0", table: 254, metric: 50 });
+    expect(importConfig(encodeJson(after)).blackhole).toEqual(after.blackhole);
+    expect(validateConfig(after)).toEqual([]);
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "routes.write"]);
+    expect(equalConfig(before, { ...before, blackhole: blackholeSchema.parse({}) })).toBe(true);
+    const gateway = structuredClone(after); gateway.routes[1]!.gateway = "192.0.2.1";
+    expect(validateConfig(gateway).some(issue => issue.path === "routes.1.gateway")).toBe(true);
+    const cleared = structuredClone(after); cleared.blackhole!.name = "";
+    expect(validateConfig(cleared).some(issue => issue.path === "routes.1.interface")).toBe(true);
+    const collision = structuredClone(after); collision.blackhole!.name = "lab0";
+    expect(validateConfig(collision).some(issue => issue.path === "blackhole.name")).toBe(true);
+  });
+  it("applies one change to the whole configuration document for surrounding review context", () => {
+    const before = config();
+    before.routes = Array.from({ length: 30 }, (_, index) => ({ ...before.routes[0]!, destination: `198.51.100.${index}/32`, metric: index + 1 }));
+    const after = config(); after.routes = before.routes.map(route => ({ ...route })); after.routes[15]!.enabled = false;
+    const [change] = differences(before, after);
+    const context = differenceContext(normalize(before), normalize(after), change!);
+    expect(context.after.routes).toHaveLength(30);
+    expect(context.after.interfaces).toEqual(context.before.interfaces);
+    expect(context.after.routes.filter(route => !route.enabled)).toHaveLength(1);
+    expect(context.before.routes.every(route => route.enabled)).toBe(true);
+  });
+  it("validates MQTT URLs, source interfaces, intervals and IPv6 even when settings are retained disabled", () => {
+    const candidate = config(); candidate.mqtt = mqttSchema.parse({ enabled: true, endpoint: "mqtts://broker.example.test:8883", source_interface: "lab0" });
+    expect(validateConfig(candidate)).toEqual([]);
+    candidate.mqtt.endpoint = "mqtt://user:secret@broker.example.test/path";
+    expect(validateConfig(candidate).some(issue => issue.path === "mqtt.endpoint")).toBe(true);
+    candidate.mqtt.endpoint = "mqtts://[2001:db8::1]:8883"; candidate.ipv6_enabled = false;
+    expect(validateConfig(candidate).some(issue => issue.path === "mqtt.endpoint")).toBe(true);
+    candidate.mqtt.endpoint = ""; candidate.mqtt.source_interface = "absent0"; candidate.mqtt.interval_seconds = 9;
+    for (const field of ["endpoint", "source_interface", "interval_seconds"]) expect(validateConfig(candidate).some(issue => issue.path === `mqtt.${field}`)).toBe(true);
+    candidate.mqtt.enabled = false; candidate.mqtt.interval_seconds = 60;
+    candidate.interfaces[0]!.addresses = ["192.0.2.10/24"];
+    expect(validateConfig(candidate)).toEqual([]);
+  });
+  it("preserves MQTT references through imports and transactions with independent write permission", () => {
+    const before = config(), after = config();
+    after.mqtt = mqttSchema.parse({ enabled: true, endpoint: "mqtts://broker.example.test:8883", username: "publisher", password_ref: "a".repeat(32), source_interface: "lab0" });
+    expect(importConfig(encodeJson(after)).mqtt).toEqual(after.mqtt);
+    const record = transaction(); record.candidate = after;
+    expect(transactionSchema.parse(record).candidate.mqtt).toEqual(after.mqtt);
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "mqtt.write"]);
+    expect(equalConfig(before, { ...before, mqtt: mqttSchema.parse({}) })).toBe(true);
+    expect(mqttSchema.parse({})).toMatchObject({ enabled: false, interval_seconds: 60 });
+    expect(mqttSchema.safeParse({ password: "not-allowed" }).success).toBe(false);
+    expect(mqttSchema.safeParse({ password_ref: null }).success).toBe(false);
+  });
+  it("defaults omitted route enabled to true and preserves explicit false through imports and transactions", () => {
+    const before = config();
+    const legacy = { ...before, routes: before.routes.map(route => ({ ...route, enabled: undefined })) };
+    expect(importConfig(JSON.stringify(legacy)).routes[0]!.enabled).toBe(true);
+    expect(equalConfig(importConfig(JSON.stringify(legacy)), before)).toBe(true);
+    const disabled = config(); disabled.routes[0]!.enabled = false;
+    disabled.routes[0]!.metadata = { display_name: "Backup", description: "Retained path" };
+    expect(importConfig(encodeJson(disabled))).toEqual(disabled);
+    const record = transaction(); record.previous = before; record.candidate = disabled;
+    const parsed = transactionSchema.parse(decodeJson(encodeJson(record)));
+    expect(parsed.previous.routes[0]!.enabled).toBe(true);
+    expect(parsed.candidate.routes).toEqual(disabled.routes);
+    expect(differences(before, disabled)).toEqual([expect.objectContaining({ area: "routes", kind: "modified" })]);
+    expect(requiredPermissions(differences(before, disabled))).toEqual(["transactions.write", "routes.write"]);
+  });
+  it.each([null, "false", 0, 1, [], {}])("rejects nonboolean route enabled %j", enabled => {
+    const candidate = config();
+    expect(configSchema.safeParse({ ...candidate, routes: [{ ...candidate.routes[0], enabled }] }).success).toBe(false);
+  });
+  it("continues validating disabled routes and duplicate route identities", () => {
+    const candidate = config(); candidate.routes[0]!.enabled = false;
+    expect(validateConfig(candidate)).toEqual([]);
+    candidate.routes.push({ ...candidate.routes[0]!, enabled: true });
+    expect(validateConfig(candidate).some(issue => issue.message.includes("Duplicate table/destination/metric"))).toBe(true);
+    candidate.routes = [{ ...candidate.routes[0]!, interface: "absent0", metric: 0 }];
+    expect(validateConfig(candidate).some(issue => issue.path === "routes.0.interface")).toBe(true);
+    expect(validateConfig(candidate).some(issue => issue.path === "routes.0.metric")).toBe(true);
+  });
   it("reads and preserves backend host-input policies in transaction candidates", () => {
     const record = transaction();
     record.candidate.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [
@@ -113,7 +192,7 @@ describe("canonical addresses, networks, endpoints", () => {
   it.each(["2001:0db8::/64", "2001:DB8::/64", "::ffff:192.0.2.1/128", "fe80::1%eth0/64", "192.168.001.0/24", "2001:db8::/129"])("rejects noncanonical prefix %s", value => {
     expect(() => prefix(value, true)).toThrow();
   });
-  it.each(["192.0.2.1:1", "192.0.2.1:65535", "[2001:db8::1]:51820", "[::1]:2055"])("accepts numeric endpoint %s", value => {
+  it.each(["192.0.2.1:1", "192.0.2.1:65535", "[2001:db8::1]:51820", "[::1]:2055"])("accepts endpoint %s", value => {
     expect(() => endpoint(value, true)).not.toThrow();
   });
   it.each(["host.example:2055", "192.0.2.1:0", "192.0.2.1:65536", "2001:db8::1:2055", "[fe80::1%eth0]:2055", "[::ffff:192.0.2.1]:1"])("rejects endpoint %s", value => {
@@ -167,6 +246,13 @@ describe("inclusive validation limits and dependencies", () => {
   it.each([0, 1, 2147483647, 2147483648])("checks route metric %s", value => {
     const candidate = config(); candidate.routes[0]!.metric = value;
     expect(validateConfig(candidate).some(issue => issue.path === "routes.0.metric")).toBe(value < 1 || value > 2147483647);
+  });
+  it("links flow validation errors to netflow routes without changing configuration paths", () => {
+    const candidate = config();
+    candidate.softflowd[0]!.sampling_rate = 0;
+    expect(validateConfig(candidate).find(issue => issue.path === "softflowd.0.sampling_rate")?.page).toBe("/services/netflow/capture");
+    candidate.softflowd = Array.from({ length: 17 }, (_, index) => ({ ...candidate.softflowd[0]!, name: `capture${index}` }));
+    expect(validateConfig(candidate).find(issue => issue.path === "softflowd")?.page).toBe("/services/netflow");
   });
   it.each([0, 1, 1000000, 1000001])("validates disabled softflowd sampling/max flows %s", value => {
     const candidate = config(); candidate.softflowd[0]!.sampling_rate = value; candidate.softflowd[0]!.max_flows = value;

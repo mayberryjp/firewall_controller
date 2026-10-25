@@ -39,6 +39,7 @@ const inputs = computed(() => {
   return [
     props.fields.find(field => field.key === "name"),
     vlan.find(field => field.key === "id"),
+    { key: "up", label: "Admin state", kind: "switch" as const },
     props.fields.find(field => field.key === "mtu"),
     vlan.find(field => field.key === "parent"),
     { key: "addresses", label: "IPv4 addresses / prefixes", kind: "text" as const },
@@ -80,7 +81,7 @@ function change(field: Field, value: unknown): void {
         {{ form.mtu }}
       </template>
       <v-switch
-        v-else-if="loopbacks && field.key === 'up'"
+        v-else-if="field.key === 'up'"
         :id="`editor.${field.key}`"
         :model-value="form.up === true"
         aria-label="Admin state"

@@ -11,6 +11,8 @@ export default createVuetify({
   defaults: {
     VBtn: { rounded: "lg" },
     VCard: { rounded: "lg", elevation: 0 },
+    VTable: { density: "compact" },
+    VDataTable: { density: "compact" },
   },
   theme: {
     defaultTheme: "appTheme",

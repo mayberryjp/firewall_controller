@@ -450,6 +450,12 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
                 />
               </button>
             </th>
+            <th
+              scope="col"
+              class="connection-actions"
+            >
+              Delete
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -515,16 +521,6 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
                   >
                     DNAT
                   </v-chip>
-                  <v-btn
-                    icon="mdi-delete-outline"
-                    :aria-label="`Delete connection ${row.id ?? 'without identity'}`"
-                    :title="connectionSelector(row) ? 'Delete this connection state' : 'Deletion unavailable: unsupported or incomplete identity'"
-                    variant="text"
-                    size="x-small"
-                    color="error"
-                    :disabled="deleting || deleteBlocked || !connectionSelector(row)"
-                    @click="reviewDeletion(row)"
-                  />
                 </div>
               </td>
               <td
@@ -565,10 +561,25 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
                   class="mr-1"
                 />{{ row.timeout_seconds === null ? 'Unavailable' : `${row.timeout_seconds}s` }}
               </td>
+              <td
+                class="connection-actions"
+                data-label="Delete"
+              >
+                <v-btn
+                  icon="mdi-delete-outline"
+                  :aria-label="`Delete connection ${row.id ?? 'without identity'}`"
+                  :title="connectionSelector(row) ? 'Delete this connection state' : 'Deletion unavailable: unsupported or incomplete identity'"
+                  variant="text"
+                  size="x-small"
+                  color="error"
+                  :disabled="deleting || deleteBlocked || !connectionSelector(row)"
+                  @click="reviewDeletion(row)"
+                />
+              </td>
             </tr>
           </template>
           <tr v-if="!sortedConnections.length">
-            <td :colspan="columns.length">
+            <td :colspan="columns.length + 1">
               {{ data.sample.status === 'simulated' ? 'Simulated; no measured connections.' : stateFilter ? `No ${stateFilter} connections on this page.` : 'No connections match these filters.' }}
             </td>
           </tr>
@@ -614,7 +625,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
 .connection-sort { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; color: inherit; font: inherit; cursor: pointer; }
 .connection-sort:hover, .connections-table :deep(th[aria-sort="ascending"]), .connections-table :deep(th[aria-sort="descending"]) { color: var(--text-primary); }
 .connection-sort:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
-.connections-table :deep(td) { height: 56px; vertical-align: middle; }
+.connections-table :deep(td) { vertical-align: middle; }
 .connection-row:hover { background: var(--bg-hover); }
 .connection-protocol-cell { min-width: 88px; }
 .connection-family { display: block; color: var(--text-muted); font-size: 11px; line-height: 16px; padding-left: 8px; }
@@ -625,6 +636,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
 .state-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .connection-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
 .connection-timeout { min-width: 110px; white-space: nowrap; color: var(--text-secondary); font-size: 13px; }
+.connection-actions { width: 1%; text-align: center; white-space: nowrap; }
 .connection-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; }
 .connection-offset { margin-left: auto; }
 @media (max-width: 600px) {
@@ -636,7 +648,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
   .connections-table :deep(thead) { display: block; overflow-x: auto; }
   .connections-table :deep(thead tr) { display: flex; }
   .connections-table :deep(th) { flex-shrink: 0; }
-  .connection-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; padding: 12px; position: relative; border-bottom: 1px solid var(--border); }
+  .connection-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; padding: 8px; position: relative; border-bottom: 1px solid var(--border); }
   .connections-table :deep(.v-table__wrapper > table > tbody > .connection-row > td) { height: auto; min-width: 0; max-width: none; padding: 0; border: 0; }
   .connection-protocol-cell { grid-column: 1; grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
   .connection-family { padding: 0; }
@@ -647,6 +659,8 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
   .connection-timeout { grid-column: 1 / -1; text-align: right; }
   .endpoint::before, .connection-number::before, .connection-timeout::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; }
   .connection-timeout::before { margin-right: 8px; }
+  .connection-row > .connection-actions { grid-column: 1 / -1; width: auto; display: flex; align-items: center; justify-content: space-between; }
+  .connection-actions::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; }
   .connection-footer > span:first-child { flex-basis: 100%; }
   .connection-footer { padding-inline-end: 72px; }
   .connection-offset { margin-left: 0; margin-right: auto; }

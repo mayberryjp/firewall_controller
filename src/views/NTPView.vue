@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import ApplianceServicePage from "@/components/feature/ApplianceServicePage.vue";
+import ApplianceServersPage from "@/components/feature/ApplianceServersPage.vue";
 </script>
 <template>
-  <ApplianceServicePage service="ntp" />
+  <ApplianceServersPage service="ntp" />
 </template>

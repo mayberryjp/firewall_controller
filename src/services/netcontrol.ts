@@ -1,6 +1,9 @@
-import { request } from "@/services/api";
+import { ApiFailure, request } from "@/services/api";
+import { z } from "zod";
 import { numericAddress } from "@/services/configuration";
+import { hostHealthSchema } from "@/services/hostHealth";
 import {
+  mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema,
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
   revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
@@ -10,6 +13,28 @@ import {
 } from "@/types/domain";
 
 const id = encodeURIComponent;
+const submittedTransactionSchema = transactionSchema.extend({ ignored_fields: z.array(z.string()).optional() });
+export const getHostHealth = (signal?: AbortSignal) => request("GET", "/statistics/host", hostHealthSchema, undefined, signal);
+export const getMqttStatus = (signal?: AbortSignal) => request("GET", "/services/mqtt/status", mqttStatusSchema, undefined, signal);
+export const getDynamicDnsStatus = (signal?: AbortSignal) => request("GET", "/services/dynamic-dns/status", dynamicDnsStatusSchema, undefined, signal);
+export async function uploadDynamicDnsSecret(secret: string, signal?: AbortSignal) {
+  if (!secret || secret.includes("\0") || new TextEncoder().encode(secret).length > 4096) throw new Error("Client secret must be 1..4096 UTF-8 bytes without NUL");
+  try { return await request("POST", "/services/dynamic-dns/secrets", dynamicDnsSecretReferenceSchema, { client_secret: secret }, signal); }
+  catch (error) {
+    const status = error instanceof ApiFailure ? error.status : undefined;
+    throw new ApiFailure(status ? `Client secret storage failed (HTTP ${status}). Check permissions and backend availability.` :
+      "Client secret upload outcome is unknown. No automatic retry was made; check backend availability before another upload.", status);
+  }
+}
+export async function uploadMqttPassword(password: string, signal?: AbortSignal) {
+  if (!password || password.includes("\0") || new TextEncoder().encode(password).length > 4096) throw new Error("Password must be 1..4096 UTF-8 bytes without NUL");
+  try { return await request("POST", "/services/mqtt/passwords", mqttPasswordReferenceSchema, { password }, signal); }
+  catch (error) {
+    const status = error instanceof ApiFailure ? error.status : undefined;
+    throw new ApiFailure(status ? `Password storage failed (HTTP ${status}). Check permissions and backend availability.` :
+      "Password upload outcome is unknown. No automatic retry was made; check backend availability before another upload.", status);
+  }
+}
 export const getState = (signal?: AbortSignal) => request("GET", "/state", stateSchema, undefined, signal);
 export const getRuntime = (signal?: AbortSignal) => request("GET", "/runtime", runtimeSchema, undefined, signal);
 export const getDiscoveredInterfaces = (signal?: AbortSignal) => request("GET", "/interfaces/discovered", discoveredInterfacesSchema, undefined, signal);
@@ -52,7 +77,7 @@ export function startSystemUpgrade(version: string) {
 export const getRevisions = (before?: string) => request("GET",
   `/revisions?limit=50${before === undefined ? "" : `&before_revision=${id(before)}`}`, revisionPageSchema);
 export const getRevision = (revision: string) => request("GET", `/revisions/${id(revision)}`, revisionDetailSchema);
-export const submitPackage = (body: PackageRequest) => request("POST", "/transactions", transactionSchema, body);
+export const submitPackage = (body: PackageRequest) => request("POST", "/transactions", submittedTransactionSchema, body);
 export const confirmTransaction = (value: string) => request("POST", `/transactions/${id(value)}/confirm`, transactionSchema);
 export const rollbackTransaction = (value: string) => request("POST", `/transactions/${id(value)}/rollback`, transactionSchema);
 export const getDHCPRelayStatus = (signal?: AbortSignal) =>

@@ -48,9 +48,31 @@ api.interceptors.request.use((request) => {
   return request;
 });
 
-function diagnostic(text: string, credential = getRegistrySessionToken()): string {
-  return [...text.replace(/<[^>]*>/g, " ")].map(char => char.charCodeAt(0) < 32 ? " " : char)
-    .join("").split(credential || "\u0000").join("[redacted]").slice(0, 4096);
+function diagnostic(text: string, credential = getRegistrySessionToken(), bounded = true): string {
+  const sanitized = [...text.replace(/<[^>]*>/g, " ")].map(char => char.charCodeAt(0) < 32 ? " " : char)
+    .join("").split(credential || "\u0000").join("[redacted]");
+  return bounded ? sanitized.slice(0, 4096) : sanitized;
+}
+
+// Drops keys this client doesn't know from a response (a newer backend) rather than rejecting it.
+function tolerantParse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): z.SafeParseReturnType<unknown, T> {
+  let result = schema.safeParse(data);
+  for (let attempt = 0; attempt < 3 && !result.success; attempt++) {
+    let removed = false;
+    const visit = (issues: z.ZodIssue[]): void => {
+      for (const issue of issues) {
+        if (issue.code === "unrecognized_keys") {
+          let target: unknown = data;
+          for (const step of issue.path) target = target && typeof target === "object" ? (target as Record<string | number, unknown>)[step] : undefined;
+          if (target && typeof target === "object") for (const key of issue.keys) { delete (target as Record<string, unknown>)[key]; removed = true; }
+        } else if (issue.code === "invalid_union") issue.unionErrors.forEach(error => visit(error.issues));
+      }
+    };
+    visit(result.error.issues);
+    if (!removed) break;
+    result = schema.safeParse(data);
+  }
+  return result;
 }
 
 export async function request<T>(
@@ -96,14 +118,15 @@ export async function request<T>(
   }
   if (response.status >= 400) {
     const envelope = data && typeof data === "object" ? data : {};
-    const message = "error" in envelope && typeof envelope.error === "string" ? diagnostic(envelope.error, requestCredential) : "Request rejected";
-    const transaction = "transaction" in envelope ? transactionSchema.safeParse(envelope.transaction) : undefined;
+    const message = "error" in envelope && typeof envelope.error === "string" ? diagnostic(envelope.error, requestCredential, false) : "Request rejected";
+    const transaction = "transaction" in envelope ? tolerantParse(transactionSchema, envelope.transaction) : undefined;
     const malformedTransaction = "transaction" in envelope && envelope.transaction !== null && !transaction?.success;
+    if (transaction?.success && transaction.data.error) transaction.data.error = diagnostic(transaction.data.error, requestCredential, false);
     throw new ApiFailure(`HTTP ${response.status}: ${message}${malformedTransaction ? " (incompatible transaction data)" : ""}`, response.status,
       transaction?.success ? transaction.data : undefined,
       writing && (response.status >= 500 || malformedTransaction), malformedTransaction);
   }
-  const decoded = schema.safeParse(data);
+  const decoded = tolerantParse(schema, data);
   if (!decoded.success) {
     const paths = decoded.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
     throw new ApiFailure(`Incompatible API response: ${diagnostic(paths, requestCredential)}`, response.status, undefined, writing, true);

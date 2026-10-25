@@ -39,6 +39,11 @@ watch(() => store.ipv6Enabled, enabled => {
     </template>
     <template v-if="section === 'routes'">
       <v-select
+        v-model="filters.enabled"
+        :items="['All', 'Enabled', 'Disabled']"
+        label="Status"
+      />
+      <v-select
         v-model="filters.interface"
         :items="[{ title: 'All', value: 'All' }, ...interfaces]"
         label="Interface"

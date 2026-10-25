@@ -10,7 +10,7 @@ export function interfaceChoice(link: Pick<Config["interfaces"][number], "name" 
 
 export const resourceTitles: Record<Section, string> = {
   interfaces: "Physical interfaces", routes: "Static Routes",
-  firewall: "Firewall forwarding", nat: "NAT masquerading", softflowd: "softflowd", gateway_monitors: "Gateway monitors",
+  firewall: "Firewall forwarding", nat: "NAT masquerading", softflowd: "NetFlow/IPFIX", gateway_monitors: "Gateway monitors",
 };
 export const resourceDescriptions: Record<Section, string> = {
   interfaces: "Administrative up is not carrier/readiness. WAN/LAN/Unassigned roles are descriptive metadata, not automatic NAT/firewall/routing. VLAN identity is immutable. All edits stage into one complete shared draft.",
@@ -25,7 +25,7 @@ export const resourceColumns: Record<Section, string[]> = {
   routes: ["destination", "interface", "metric"],
   firewall: ["source", "destination", "action"],
   nat: ["family", "source", "out_interface"],
-  softflowd: ["name", "enabled", "interface", "collector", "export_version"],
+  softflowd: ["name", "interface", "collector", "export_version"],
   gateway_monitors: ["name", "interface", "target"],
 };
 export function resourceItems(config: Config, section: Section): unknown[] {

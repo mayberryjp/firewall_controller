@@ -9,6 +9,9 @@ import {
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
+import type { HostHealth } from "@/services/hostHealth";
+import { mqttStatusSchema, dynamicDnsStatusSchema } from "@/types/domain";
+import type { z } from "zod";
 import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
 
 export interface Dataset<T> {
@@ -30,6 +33,8 @@ export const useControllerStore = defineStore("controller", () => {
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
   const transactions = dataset<Record<string, Transaction>>(), statistics = dataset<Statistics>();
   const gatewayStatistics = dataset<GatewayStatisticsPage>();
+  const hostHealth = dataset<HostHealth>(), mqttStatus = dataset<z.infer<typeof mqttStatusSchema>>();
+  const dynamicDnsStatus = dataset<z.infer<typeof dynamicDnsStatusSchema>>();
   const upgrade = dataset<UpgradeStatus>();
   const upgradePending = ref(false), upgradeUncertain = ref(false), upgradeNeedsRefresh = ref(false);
   const acceptedUpgradeID = ref(""), requestedUpgradeVersion = ref(""), previousUpgradeID = ref("");
@@ -40,6 +45,7 @@ export const useControllerStore = defineStore("controller", () => {
   const draft = ref<Config | null>(null), baseline = ref<Config | null>(null), baseRevision = ref<string | null>(null);
   const submitted = ref<{ config: Config; id?: string } | null>(null);
   const busy = ref(false), actionError = ref<string | null>(null), notice = ref<string | null>(null);
+  const ignoredFields = ref<string[]>([]);
   const uncertain = ref<{ operation: string; id?: string; priorIDs: string[]; base: string | null; startedAt: string } | null>(null);
   const editorDirty = ref(false), monitoring = ref(false), gatewayMonitoring = ref(false);
   const ipv6Enabled = computed(() => (draft.value ?? state.data?.active_transaction?.candidate ?? state.data?.desired)?.ipv6_enabled !== false);
@@ -53,7 +59,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -199,6 +205,9 @@ export const useControllerStore = defineStore("controller", () => {
   }
   const refreshStatistics = () => load(statistics, api.getStatistics);
   const refreshGatewayStatistics = () => load(gatewayStatistics, api.getGatewayStatistics);
+  const refreshHostHealth = () => load(hostHealth, api.getHostHealth);
+  const refreshMqttStatus = () => load(mqttStatus, api.getMqttStatus);
+  const refreshDynamicDnsStatus = () => load(dynamicDnsStatus, api.getDynamicDnsStatus);
   async function refresh(): Promise<void> {
     if (!connected.value) return;
     await Promise.all([refreshState(), refreshRuntime(), refreshTransactions()]);
@@ -213,6 +222,7 @@ export const useControllerStore = defineStore("controller", () => {
     catch (error) { authError.value = error instanceof Error ? error.message : "Invalid saved firewall"; return false; }
     connecting.value = true; authError.value = null;
     invalidateReads();
+    hostHealth.data = null; mqttStatus.data = null;
     await load(transactions, api.getTransactions);
     if (transactions.stale) {
       setApiDevice(""); connecting.value = false;
@@ -229,7 +239,7 @@ export const useControllerStore = defineStore("controller", () => {
     setApiDevice(""); connected.value = false; invalidateReads();
     allDatasets.forEach((query) => { query.data = null; query.error = null; query.lastSuccess = null; query.incompatible = false; });
     draft.value = null; baseline.value = null; baseRevision.value = null; submitted.value = null;
-    uncertain.value = null; actionError.value = null; notice.value = null; authError.value = null;
+    uncertain.value = null; actionError.value = null; notice.value = null; authError.value = null; ignoredFields.value = [];
     nextRevision.value = undefined; currentRevisionID.value = ""; editorDirty.value = false;
     revisionCache.clear();
     upgradePending.value = false; upgradeUncertain.value = false; upgradeNeedsRefresh.value = false;
@@ -352,8 +362,12 @@ export const useControllerStore = defineStore("controller", () => {
     if (!canApply.value || state.data?.revision !== capturedBase || !draft.value || !equalConfig(captured, draft.value)) throw new Error("Pre-submit state changed; review again");
     const request = { base_revision: capturedBase, config: captured, confirm_timeout_seconds: seconds, description: trimmed };
     if (utf8Size(encodeJson(request)) > 1_048_576) throw new Error("Complete request exceeds 1 MiB");
-    submitted.value = { config: captured };
-    return mutate("Apply package", () => api.submitPackage(request));
+    submitted.value = { config: captured }; ignoredFields.value = [];
+    return mutate("Apply package", async () => {
+      const { ignored_fields: ignored, ...transaction } = await api.submitPackage(request);
+      ignoredFields.value = ignored ?? [];
+      return transaction;
+    });
   }
   async function lifecycle(id: string, action: "confirm" | "rollback"): Promise<Transaction | null> {
     await checkMaintenance();
@@ -436,13 +450,14 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale) revisionCache.set(id, comparisonRevision.data);
   }
   return {
-    connected, connecting, authError, state, runtime, transactions, statistics, gatewayStatistics, revisions, revisionDetail,
-    nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, uncertain, editorDirty,
+    connected, connecting, authError, state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, revisions, revisionDetail,
+    nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, ignoredFields, uncertain, editorDirty,
     monitoring, gatewayMonitoring, activeTransactions, unknownStatus, incompatible, draftStale, diff, validation, freshState,
     canApply, applyBlockedReason, sortedTransactions, readOnlyReason, readOnlyNotice, ipv6Enabled,
     upgrade, upgradePending, upgradeUncertain, upgradeActive, upgradeBlockedReason, upgradeNotice, acceptedUpgradeID,
     refreshUpgrade, checkMaintenance, startUpgrade, supportsDhcpGatewayMonitors,
     connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics, refreshGatewayStatistics,
+    refreshHostHealth, refreshMqttStatus, dynamicDnsStatus, refreshDynamicDnsStatus,
     refreshRevisions, loadRevision, compareRevision, clearComparison, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
     readTransaction, resolveUncertainty,
   };

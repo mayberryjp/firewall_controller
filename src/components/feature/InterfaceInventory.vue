@@ -16,7 +16,8 @@ const rows = computed<ResourceRow[]>(() => {
   const links = (inventory.value ?? []).filter(link => {
     const loopback = link.name === "lo" || link.kind === "loopback" || link.ownership === "loopback" || link.kind === "dummy";
     const vlan = link.kind === "vlan" || selected.value?.interfaces.some(item => item.name === link.name && item.kind === "vlan");
-    return props.loopbacks ? loopback : !loopback && !vlan;
+    const tunnel = link.kind === "wireguard" || selected.value?.interfaces.some(item => item.name === link.name && item.kind === "wireguard");
+    return props.loopbacks ? loopback : !loopback && !vlan && !tunnel;
   });
   const result: ResourceRow[] = links.map(link => {
     const index = selected.value?.interfaces.findIndex(item => item.name === link.name) ?? -1;

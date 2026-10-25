@@ -13,8 +13,12 @@ const status = computed(() => {
 </script>
 
 <template>
-  <span
-    :class="{ 'text-success': status === 'Up', 'text-error': status === 'Down', 'text-medium-emphasis': status !== 'Up' && status !== 'Down' }"
+  <v-chip
+    :color="status === 'Up' ? 'success' : status === 'Down' ? 'error' : 'default'"
+    size="small"
+    variant="tonal"
     :title="sample?.error || (stale ? 'Live interface sample unavailable or stale' : sample?.oper_state)"
-  >{{ status }}</span>
+  >
+    {{ status }}
+  </v-chip>
 </template>

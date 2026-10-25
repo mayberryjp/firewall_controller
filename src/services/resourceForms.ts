@@ -18,7 +18,9 @@ export function metadataFields(fields: Field[], include = true): Field[] {
   return include && !result.some(field => field.key === "metadata") ? [...result, metadataField] : result;
 }
 export function resourceFields(...args: Parameters<typeof baseResourceFields>): Field[] {
-  const fields = metadataFields(baseResourceFields(...args), !args[7] || args[8] !== false);
+  // Route Status owns enabled; labels stay preserved in the row but are not edited here.
+  if (args[0] === "routes") return baseResourceFields(...args).filter(field => field.key !== "enabled");
+  const fields = metadataFields(baseResourceFields(...args), !["nat", "softflowd"].includes(args[0]) && (!args[7] || args[8] !== false));
   return args[0] === "interfaces" ? fields.map(field => field.key === "metadata"
     ? { ...field, fields: field.fields?.filter(child => child.key !== "description") } : field) : fields;
 }
@@ -55,7 +57,7 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
       ] : []),
       { key: "resolver_enabled", label: "Configure interface resolver", kind: "switch" },
       { key: "resolver", label: "Resolver settings", kind: "object", fields: [
-        { key: "servers", label: "DNS server IP addresses", kind: "lines", hint: "Up to 8 unique numeric IPv4/IPv6 addresses." },
+        { key: "servers", label: "DNS server IP addresses", kind: "lines", hint: "Up to 8 unique IPv4/IPv6 addresses." },
         { key: "domains", label: "Resolver domains", kind: "rows", create: () => ({ name: "", route_only: false }), fields: [
           text("name", "Domain name"), { key: "route_only", label: "Routing-only domain", kind: "switch" },
         ] },
@@ -74,7 +76,7 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
             create: () => ({ public_key: "", allowed_ips: [], persistent_keepalive_seconds: 0 }),
             fields: [
               text("public_key", "Public key", "Unique nonzero base64 32-byte key. No private-key upload/generation."),
-              text("endpoint", "Optional numeric endpoint", "Numeric IP:port, IPv6 bracketed. No DNS or zones."),
+              text("endpoint", "Optional endpoint", "IP:port, IPv6 bracketed. No DNS or zones."),
               { key: "allowed_ips", label: "Allowed networks", kind: "lines" as const },
               number("persistent_keepalive_seconds", "Keepalive seconds", "0..65535; 0 disables keepalive."),
             ],
@@ -83,6 +85,7 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
       }] : []),
     ] satisfies Field[]).filter(field => wireguard ? creating ? ["name", "kind", "role", "mtu", "up", "addresses", "wireguard"].includes(field.key) : field.key === "wireguard" : field.key !== "wireguard");
     case "routes": return [
+      { key: "enabled", label: "Enabled", kind: "switch" },
       text("destination", "Destination network"),
       select("interface", "Gateway interface", managed),
       number("metric", "Metric", "1..2147483647"),
@@ -94,15 +97,12 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
     ];
     case "softflowd": return [
       text("name", "Instance name", "1..32 letters, digits, underscore or hyphen; maximum 16 instances including disabled."),
-      { key: "enabled", label: "Desired enabled", kind: "switch" },
       select("interface", "Capture interface", [...managed, ...parents]),
-      text("collector", "Collector numeric IP:port", "Unicast/loopback; IPv6 bracketed; no DNS or zones."),
-      select("export_version", "Export version (10 = IPFIX)", [1, 5, 9, 10]),
-      number("sampling_rate", "Sampling rate", "1..1000000; 1 = unsampled"), number("max_flows", "Maximum flows", "1..1000000"),
-      number("snaplen", "Snap length bytes", "64..65535"), { key: "promiscuous", label: "Promiscuous capture", kind: "switch" },
-      text("capture_filter", "Optional single-line capture filter", "Maximum 4096 UTF-8 bytes; compilation is server-side."),
-      { key: "timeouts", label: "Optional timeout overrides (blank = executable default)", kind: "object",
-        fields: timeoutNames.map(name => number(name, `${name} seconds`, name === "general" ? "1..604800 or blank" : "0..604800 or blank")) },
+      text("collector", "Collector IP:port", "Unicast/loopback; IPv6 bracketed; no DNS or zones."),
+      select("export_version", "Export version", [{ title: "NetFlow v1", value: 1 }, { title: "NetFlow v5", value: 5 }, { title: "NetFlow v9", value: 9 }, { title: "IPFIX (v10)", value: 10 }]),
+      number("sampling_rate", "Sampling rate", "1..1000000; 1 = unsampled"),
+      number("max_flows", "Maximum flows", "1..1000000"),
+      ...timeoutNames.map(name => number(`timeout_${name}`, `${name} timeout seconds (blank = default)`, name === "general" ? "1..604800 or blank" : "0..604800 or blank")),
     ];
   }
 }
@@ -116,12 +116,12 @@ export function preset(section: Section, wireguard = false): unknown {
     case "interfaces": return wireguard
       ? { name: "", kind: "wireguard", mtu: 1420, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "", listen_port: 51820, peers: [] } }
       : { name: "", kind: "dummy", mtu: 1500, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] } };
-    case "routes": return { destination: "", interface: "", table: 254, metric: 1 };
+    case "routes": return { enabled: true, destination: "", interface: "", table: 254, metric: 1 };
     case "firewall": return { action: "accept" };
     case "nat": return { family: "ipv4", out_interface: "" };
     case "softflowd": return {
-      name: "", enabled: false, interface: "", collector: "", export_version: 9, sampling_rate: 1,
-      max_flows: 8192, snaplen: 128, promiscuous: false, timeouts: {},
+      name: "", enabled: true, interface: "", collector: "", export_version: 5, sampling_rate: 1,
+      max_flows: 8192, snaplen: 128, promiscuous: true, timeouts: {},
     };
   }
 }

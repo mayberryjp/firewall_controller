@@ -2,7 +2,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { ZodError } from "zod";
 import ipaddr from "ipaddr.js";
 import { useControllerStore } from "@/stores/controller";
-import { dhcpClientSchema, dnsConfigSchema, objectMetadataSchema, type DiscoveredInterface } from "@/types/domain";
+import { dhcpClientSchema, dnsConfigSchema, objectMetadataSchema, timeoutNames, type DiscoveredInterface } from "@/types/domain";
 import { record, type Field } from "@/types/forms";
 import { preset, resourceFields, type Section } from "@/services/resourceForms";
 import { cloneConfig, numericAddress, prefix, stableJson, validateConfig } from "@/services/configuration";
@@ -17,7 +17,11 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
   const editingConfig = computed(() => store.draft ?? store.state.data?.desired);
   const editingBlocked = computed(() => Boolean(store.readOnlyReason) || (section === "firewall" && Boolean(editingConfig.value?.firewall.policies)));
   const allManaged = computed(() => editingConfig.value?.interfaces.map(link => link.name) ?? []);
-  const interfaceOptions = computed(() => editingConfig.value?.interfaces.map(interfaceChoice) ?? []);
+  const interfaceOptions = computed(() => {
+    const options = editingConfig.value?.interfaces.map(interfaceChoice) ?? [];
+    const target = editingConfig.value?.blackhole?.name;
+    return section === "routes" && target ? [...options, { title: `${target} (blackhole)`, value: target }] : options;
+  });
   const parentOptions = computed(() => editingConfig.value?.interfaces
     .filter(link => link.kind === "ethernet" && link.name !== form.value.name).map(interfaceChoice) ?? []);
   const adopted = computed(() => store.runtime.data?.parent_interfaces
@@ -54,7 +58,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     try {
       const target = numericAddress(String(value.target));
       const routes = (editingConfig.value?.routes ?? []).flatMap(route => {
-        if (route.table !== 254 || route.interface !== value.interface) return [];
+        if (route.enabled === false || route.table !== 254 || route.interface !== value.interface) return [];
         try {
           const network = ipaddr.parseCIDR(route.destination);
           return network[0].kind() === target.kind() && target.match(network) ?
@@ -66,6 +70,25 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       const gateways = new Set(routes.filter(route => route.prefix === best.prefix && route.metric === best.metric).map(route => route.gateway));
       return gateways.size === 1 ? best.gateway : retained;
     } catch { return ""; }
+  }
+  function inferRouteGateway(value: Record<string, unknown>): string {
+    const parse = (text: string) => { try { return ipaddr.parseCIDR(text); } catch { return null; } };
+    const destination = parse(String(value.destination));
+    const name = String(value.interface), config = editingConfig.value;
+    if (!destination || !config || name === config.blackhole?.name) return "";
+    const lease = store.runtime.data?.dhcp_clients?.leases[name];
+    const local = [...(config.interfaces.find(link => link.name === name)?.addresses ?? []), ...(lease ? [lease.address] : [])]
+      .flatMap(address => { const cidr = parse(address); return cidr ? [cidr] : []; });
+    // A destination inside a connected subnet is reached directly and needs no next hop.
+    if (local.some(network => network[0].kind() === destination[0].kind() && destination[0].match(network))) return "";
+    const isDefault = (text: string) => ["0.0.0.0/0", "::/0"].includes(text);
+    const candidates = (routes: Array<{ destination: string; gateway?: string }>) => [...new Set(routes.flatMap(route => {
+      try { return isDefault(route.destination) && route.gateway && numericAddress(route.gateway).kind() === destination[0].kind() ? [route.gateway] : []; } catch { return []; }
+    }))];
+    const fromLease = candidates(lease?.routes ?? []);
+    if (fromLease.length === 1) return fromLease[0]!;
+    const fromConfig = candidates(config.routes.filter(route => route.enabled !== false && route.table === 254 && route.interface === name));
+    return fromLease.length === 0 && fromConfig.length === 1 ? fromConfig[0]! : "";
   }
   function monitorSource(value: Record<string, unknown>): string {
     let family: string | undefined;
@@ -106,6 +129,10 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     const initial = editingIndex.value >= 0 ? resourceItems(editingConfig.value, section)[editingIndex.value] : preset(section, wireguard);
     form.value = record(JSON.parse(JSON.stringify(initial)));
     if (section === "gateway_monitors") form.value = inferMonitor(form.value);
+    if (section === "softflowd") {
+      const timeouts = record(form.value.timeouts);
+      for (const name of timeoutNames) form.value[`timeout_${name}`] = timeouts[name] ?? "";
+    }
     if (section === "interfaces" && editingIndex.value < 0 && (vlan || loopbacks)) form.value.up = true;
     if (section === "interfaces" && loopbacks && editingIndex.value < 0) {
       form.value.role = "unassigned";
@@ -151,7 +178,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
   watch(form, () => { if (dialog.value) store.editorDirty = stableJson(form.value) !== formStart.value; }, { deep: true });
   onUnmounted(() => { store.editorDirty = false; });
   function cancel(): void {
-    if (store.editorDirty && form.value.kind !== "ethernet" && !window.confirm("Discard unstaged form input?")) return;
+    if (store.editorDirty && section !== "nat" && form.value.kind !== "ethernet" && !window.confirm("Discard unstaged form input?")) return;
     dialog.value = false; store.editorDirty = false; form.value = {};
   }
   function stageForm(): void {
@@ -160,7 +187,12 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     try {
       if (renaming.value && !renameAcknowledged.value) throw new Error("Review and acknowledge interface rename dependency impacts first");
       let value = JSON.parse(JSON.stringify(form.value)) as Record<string, unknown>;
-      if (section === "routes") value.table = 254;
+      if (section === "routes") {
+        value.table = 254;
+        if (record(original.value).interface !== value.interface) delete value.gateway;
+        if (!value.gateway) { const gateway = inferRouteGateway(value); if (gateway) value.gateway = gateway; else delete value.gateway; }
+        if (value.interface === editingConfig.value.blackhole?.name) delete value.gateway;
+      }
       if (section === "gateway_monitors") value = inferMonitor(value);
       if (section === "gateway_monitors" && value.mode === "dhcp") {
         if (!store.supportsDhcpGatewayMonitors) {
@@ -186,8 +218,12 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       }
       if (loopbacks && (value.kind !== "dummy" || value.name === "lo")) throw new Error("Only loopback interfaces other than lo can be managed here.");
       if (section === "softflowd") {
-        const timeouts = record(value.timeouts);
-        value.timeouts = Object.fromEntries(Object.entries(timeouts).filter(([, seconds]) => seconds !== "" && seconds !== undefined));
+        value.promiscuous = true;
+        value.timeouts = Object.fromEntries(timeoutNames.flatMap(name => {
+          const seconds = value[`timeout_${name}`];
+          delete value[`timeout_${name}`];
+          return seconds === "" || seconds === undefined || seconds === null ? [] : [[name, seconds]];
+        }));
       }
       const candidate = cloneConfig(editingConfig.value);
       if (section === "interfaces") {
@@ -221,7 +257,8 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
         issue.path === basePath || issue.path.startsWith(`${basePath}.`) ||
         (section === "interfaces" && ["dhcp_clients", "dns"].some(area => issue.path === `${area}.${String(value.name)}` || issue.path.startsWith(`${area}.${String(value.name)}.`))));
       for (const issue of ownIssues) {
-        const key = issue.path.replace(basePath, "editor").replace(/\.(addresses|allowed_ips|servers)\.\d+$/, ".$1");
+        const key = issue.path.replace(basePath, "editor").replace(/\.(addresses|allowed_ips|servers)\.\d+$/, ".$1")
+          .replace(/^editor\.timeouts\./, section === "softflowd" ? "editor.timeout_" : "editor.timeouts.");
         errors.value[key] = [...(errors.value[key] ?? []), issue.message];
       }
       if (ownIssues.length) throw new Error("Correct the highlighted local validation errors. Cross-resource errors remain visible in SAVE.");

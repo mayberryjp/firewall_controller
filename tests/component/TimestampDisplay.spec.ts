@@ -1,20 +1,22 @@
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
+import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
 import HistoryView from "@/views/HistoryView.vue";
 import TransactionsView from "@/views/TransactionsView.vue";
+import TransactionDetailView from "@/views/TransactionDetailView.vue";
 import { useControllerStore } from "@/stores/controller";
-import { transaction } from "../fixtures";
+import { gatewayStatistics, statistics, transaction } from "../fixtures";
 
 const timestamp = "2026-01-02T03:04:05.987+02:00";
 const formatted = "2026-01-02 01:04:05";
 const box = { template: "<div><slot /></div>" };
 const global = { stubs: {
-  VTable: box, VAlert: box, VBtn: box, RouterLink: box,
+  VTable: box, VAlert: box, VBtn: box, VChip: box, RouterLink: box,
   VDialog: { template: "<div />" }, VProgressLinear: true,
 } };
 
@@ -22,6 +24,74 @@ beforeEach(() => { setActivePinia(createPinia()); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe("human-facing timestamp displays", () => {
+  it("groups commit results and comment with metadata without duplicate actors or redundant navigation", async () => {
+    const store = useControllerStore(), committed = {
+      ...transaction("committed"), submitted_at: timestamp, committed_at: timestamp,
+      actor: "operator", committed_by: "operator", description: "Update the office route", restored_from_revision: "0",
+    };
+    vi.spyOn(store, "readTransaction").mockResolvedValue(committed);
+    const wrapper = mount(TransactionDetailView, { props: { id: committed.id }, global: { stubs: { ...global.stubs, ConfigDiff: true } } });
+    try {
+      await flushPromises();
+      const metadata = Object.fromEntries(wrapper.findAll(".record-metadata dt").map(label => [label.text(), label.element.nextElementSibling?.textContent?.trim()]));
+      expect(metadata).toMatchObject({
+        Status: "committed", "Base revision": "0", "Result revision": "1", Actor: "operator",
+        "Submitted (UTC)": formatted, "Committed (UTC)": formatted, Comment: committed.description, "Restored from": "0",
+      });
+      expect(wrapper.text().split("operator")).toHaveLength(2);
+      expect(wrapper.text()).not.toContain("Commit details"); expect(wrapper.text()).not.toContain("All commits");
+      expect(wrapper.findComponent(TransactionActions).exists()).toBe(false);
+      expect(wrapper.text()).not.toContain(timestamp);
+      expect(committed.committed_at).toBe(timestamp);
+    } finally { wrapper.unmount(); }
+  });
+  it.each(["pending_confirmation", "recovery_failed"])("retains necessary lifecycle actions for %s without a self-link", async status => {
+    const record = transaction(status);
+    vi.spyOn(useControllerStore(), "readTransaction").mockResolvedValue(record);
+    const wrapper = mount(TransactionDetailView, { props: { id: record.id }, global: { stubs: { ...global.stubs, ConfigDiff: true } } });
+    try {
+      await flushPromises();
+      expect(wrapper.getComponent(TransactionActions).props("showDetails")).toBe(false);
+      expect(wrapper.text()).toContain(status === "pending_confirmation" ? "Confirm changes" : "Retry rollback");
+      expect(wrapper.text()).not.toContain("Commit details");
+    } finally { wrapper.unmount(); }
+  });
+  it("formats every expanded gateway-monitor timestamp to UTC seconds without changing samples", () => {
+    const store = useControllerStore();
+    const sample = {
+      ...gatewayStatistics(),
+      collected_at: timestamp,
+      started_at: "2026-01-02T02:03:04.123456789Z",
+      health_changed_at: "2026-01-02T03:04:05.999999999-07:00",
+      last_success_at: "2026-01-02T04:05:06Z",
+    };
+    const original = structuredClone(sample);
+    store.gatewayStatistics.data = { sample: statistics().sample, monitors: [sample] };
+    const wrapper = mount(GatewayStatisticsPanel, { props: { name: sample.name }, global });
+    const measurement = (name: string) => wrapper.findAll("dl > div").find(row => row.get("dt").text() === name)!.get("dd").text();
+    expect(measurement("Measured (UTC)")).toBe(formatted);
+    expect(measurement("Started (UTC)")).toBe("2026-01-02 02:03:04");
+    expect(measurement("Health changed (UTC)")).toBe("2026-01-02 10:04:05");
+    expect(measurement("Last success (UTC)")).toBe("2026-01-02 04:05:06");
+    for (const value of [sample.collected_at, sample.started_at, sample.health_changed_at, sample.last_success_at]) {
+      expect(wrapper.text()).not.toContain(value);
+    }
+    expect(store.gatewayStatistics.data.monitors[0]).toEqual(original);
+    wrapper.unmount();
+  });
+
+  it("preserves unavailable timestamps in expanded gateway-monitor details", () => {
+    const store = useControllerStore();
+    const sample = { ...gatewayStatistics(), started_at: null, health_changed_at: null, last_success_at: null };
+    store.gatewayStatistics.data = { sample: statistics().sample, monitors: [sample] };
+    const wrapper = mount(GatewayStatisticsPanel, { props: { name: sample.name }, global });
+    for (const name of ["Started (UTC)", "Health changed (UTC)", "Last success (UTC)"]) {
+      const row = wrapper.findAll("dl > div").find(row => row.get("dt").text() === name)!;
+      expect(row.get("dd").text()).toBe("Unavailable");
+    }
+    wrapper.unmount();
+  });
+
   it("formats nested diagnostics and Unix-second leases without changing the source values", () => {
     const value = {
       sample: { collected_at: timestamp, started_at: null },

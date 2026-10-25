@@ -107,6 +107,47 @@ class RegistryHTTPTests(unittest.TestCase):
         self.assertEqual(response.getheader("Access-Control-Allow-Headers"), "Authorization, Content-Type")
         self.assertIsNone(response.getheader("Access-Control-Allow-Credentials"))
 
+    def test_overview_layout_requires_auth_and_persists_across_registry_instances(self):
+        path = "/api/v1/preferences/overview"
+        for method in ("GET", "POST"):
+            response, _ = self.request(method, path, {} if method == "POST" else None)
+            self.assertEqual(response.status, 401)
+        token = self.login()
+        response, default = self.request("GET", path, token=token)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(default, {
+            "version": 1, "columns": [["interfaces", "gateways", "wireguard"], ["system", "counters"]],
+        })
+        layout = {"version": 1, "columns": [["counters", "interfaces"], ["system"]]}
+        response, saved = self.request("POST", path, layout, token)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(saved, layout)
+        reopened = DeviceRegistry(self.database_path, "a-secure-test-password-123", self.encryption_key)
+        self.assertEqual(reopened.get_overview_layout(), layout)
+        response, loaded = self.request("GET", path, token=token)
+        self.assertEqual(loaded, layout)
+        response, hidden = self.request("POST", path, {"version": 1, "columns": [[], []]}, token)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(hidden["columns"], [[], []])
+
+    def test_invalid_overview_layout_does_not_overwrite_saved_layout(self):
+        token = self.login()
+        invalid = [
+            {}, {"version": 2, "columns": [[], []]}, {"version": True, "columns": [[], []]},
+            {"version": 1, "columns": [["unknown"], []]},
+            {"version": 1, "columns": [["interfaces"], ["interfaces"]]},
+            {"version": 1, "columns": [[]]}, {"version": 1, "columns": [None, []]},
+            {"version": 1, "columns": [[{}], []]},
+            {"version": 1, "columns": [[], []], "extra": True},
+        ]
+        before = self.registry.get_overview_layout()
+        for value in invalid:
+            with self.subTest(layout=value):
+                response, payload = self.request("POST", "/api/v1/preferences/overview", value, token)
+                self.assertEqual(response.status, 400)
+                self.assertIn("error", payload)
+                self.assertEqual(self.registry.get_overview_layout(), before)
+
     def test_durable_session_restores_from_httponly_cookie_and_signs_out(self):
         origin = {"Origin": "http://localhost:3030"}
         response, payload = self.request("POST", "/api/v1/session", {"password": "a-secure-test-password-123"}, headers=origin)

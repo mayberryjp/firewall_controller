@@ -17,7 +17,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ change: [key: string, value: unknown]; cancel: []; stage: [] }>();
 const store = useControllerStore();
-const labels: Record<string, string> = { name: "Name", role: "Role", up: "Admin state", mtu: "MTU", addresses: "IPv4", ipv6_addresses: "IPv6" };
+const labels: Record<string, string> = { name: "Name", role: "Role", up: "Admin state", mtu: "MTU", address_mode: "Mode", addresses: "IPv4", ipv6_addresses: "IPv6" };
 const fields: Record<string, Field> = {
   display_name: { key: "display_name", label: "Display name", kind: "text" },
   addresses: { key: "addresses", label: "IPv4 addresses / prefixes", kind: "text" },
@@ -80,36 +80,24 @@ function value(key: string): unknown {
           {{ form.name }}
         </div>
       </template>
-      <template v-else-if="key === 'addresses'">
-        <div class="ipv4-fields">
-          <select
-            :value="form.address_mode"
-            :disabled="disabled"
-            aria-label="IPv4 configuration"
-            class="compact-select"
-            @change="mode(($event.target as HTMLSelectElement).value)"
-          >
-            <option value="dhcp">
-              DHCP
-            </option>
-            <option value="static">
-              Static
-            </option>
-          </select>
-          <FieldInput
-            :field="{ ...fields.addresses!, disabled: disabled || form.address_mode === 'dhcp' }"
-            :model-value="value('addresses')"
-            path="editor.addresses"
-            :errors="errors"
-            density="compact"
-            variant="outlined"
-            @update:model-value="change('addresses', $event)"
-          />
-        </div>
-      </template>
+      <select
+        v-else-if="key === 'address_mode'"
+        :value="form.address_mode"
+        :disabled="disabled"
+        aria-label="IPv4 configuration"
+        class="compact-select"
+        @change="mode(($event.target as HTMLSelectElement).value)"
+      >
+        <option value="dhcp">
+          DHCP
+        </option>
+        <option value="static">
+          Static
+        </option>
+      </select>
       <FieldInput
         v-else-if="fields[key]"
-        :field="{ ...fields[key]!, disabled }"
+        :field="{ ...fields[key]!, disabled: disabled || (key === 'addresses' && form.address_mode === 'dhcp') }"
         :model-value="value(key)"
         :path="`editor.${key}`"
         :errors="key === 'ipv6_addresses' ? { ...errors, 'editor.ipv6_addresses': errors['editor.addresses'] ?? [] } : errors"
@@ -194,7 +182,6 @@ function value(key: string): unknown {
 .interface-name { font-family: monospace; }
 .compact-cell-label { display: none; }
 .editor-actions { display: flex; flex-direction: column; gap: 4px; }
-.ipv4-fields { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: start; gap: 8px; }
 .physical-editor-row :deep(.v-input) { min-width: 0; }
 .physical-editor-row :deep(.v-field__input) { min-width: 0; padding-inline: 8px; font-size: 13px; }
 .physical-editor-row :deep(.v-field-label) { font-size: 12px; }

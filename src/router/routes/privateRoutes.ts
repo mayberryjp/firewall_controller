@@ -8,6 +8,8 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "networking-section": [
     { path: "/loopbacks", name: "loopbacks", component: () => import("@/views/LoopbacksView.vue") },
+    { path: "/blackhole", name: "blackhole", component: () => import("@/views/BlackholeView.vue") },
+    { path: "/tunnels", name: "tunnels", component: () => import("@/views/TunnelsView.vue") },
     { path: "/interfaces", name: "interfaces", component: () => import("@/views/InterfacesView.vue") },
     { path: "/interfaces/:name", name: "interface-detail", component: () => import("@/views/InterfaceDetailView.vue"), props: true, meta: { navigationPage: "interfaces" } },
     { path: "/vlans", name: "vlans", component: () => import("@/views/VLANsView.vue") },
@@ -29,8 +31,8 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/wireguard/:name", name: "wireguard-detail", component: () => import("@/views/WireGuardView.vue"), props: true, meta: { navigationPage: "wireguard" } },
   ],
   "services-section": [
-    { path: "/services/softflowd", name: "softflowd", component: () => import("@/views/SoftflowdView.vue") },
-    { path: "/services/softflowd/:name", name: "softflowd-detail", component: () => import("@/views/SoftflowdDetailView.vue"), props: true, meta: { navigationPage: "softflowd" } },
+    { path: "/services/netflow", name: "netflow", component: () => import("@/views/SoftflowdView.vue") },
+    { path: "/services/netflow/:name", name: "netflow-detail", component: () => import("@/views/SoftflowdDetailView.vue"), props: true, meta: { navigationPage: "netflow" } },
     { path: "/services/dhcp-relay", name: "dhcp-relay", component: () => import("@/views/DHCPRelayView.vue") },
     { path: "/services/ntp", name: "ntp", component: () => import("@/views/NTPView.vue") },
     { path: "/services/syslog", name: "syslog", component: () => import("@/views/SyslogView.vue") },
@@ -39,6 +41,9 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "settings-section": [
     { path: "/settings/general", name: "settings-general", component: () => import("@/views/SettingsView.vue") },
+    { path: "/settings/mqtt-streaming", name: "settings-mqtt-streaming", component: () => import("@/views/HomeAssistantView.vue") },
+    { path: "/settings/home-assistant", redirect: { name: "settings-mqtt-streaming" } },
+    { path: "/settings/dynamic-dns", name: "settings-dynamic-dns", component: () => import("@/views/DynamicDnsView.vue") },
   ],
   "config-section": [
     { path: "/config/changes", name: "changes", component: () => import("@/views/ChangesView.vue") },

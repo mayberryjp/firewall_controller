@@ -15,12 +15,14 @@ import InterfaceInventory from "@/components/feature/InterfaceInventory.vue";
 import PhysicalInterfaceEditor from "@/components/feature/PhysicalInterfaceEditor.vue";
 import InterfaceRowEditor from "@/components/feature/InterfaceRowEditor.vue";
 import ResourceRowEditor from "@/components/feature/ResourceRowEditor.vue";
-import { stableJson } from "@/services/configuration";
+import { cloneConfig, stableJson } from "@/services/configuration";
 import type { DiscoveredInterface } from "@/types/domain";
 
 const props = withDefaults(defineProps<{ section: Section; wireguard?: boolean; vlan?: boolean; loopbacks?: boolean; name?: string }>(), { wireguard: false, vlan: false, loopbacks: false, name: undefined });
 const store = useControllerStore();
-const inlineResource = computed(() => props.section === "routes" || props.section === "gateway_monitors");
+const inlineResource = computed(() => ["routes", "gateway_monitors", "nat", "softflowd"].includes(props.section));
+const inlineResourceTitle = computed(() => props.section === "routes" ? "Route" : props.section === "nat" ? "Masquerade" : props.section === "softflowd" ? "Export" : "Gateway monitor");
+const collapsibleOptions = computed(() => ["gateway_monitors", "softflowd"].includes(props.section));
 const inlineEditor = computed(() => props.vlan || props.loopbacks || inlineResource.value);
 const {
   dialog, form, editingIndex, renameAcknowledged, errors, formError, deletion,
@@ -47,6 +49,16 @@ function addResource(): void {
 function toggleMonitor(value: unknown, enabled: boolean): void {
   if (editingBlocked.value) return;
   if (dialog.value) { cancel(); if (dialog.value) return; }
+  if (props.section === "routes" || props.section === "softflowd") {
+    if (!selectedConfig.value) return;
+    const candidate = cloneConfig(selectedConfig.value);
+    const items: Array<{ enabled?: boolean }> = props.section === "routes" ? candidate.routes : candidate.softflowd;
+    const item = items.find(entry => stableJson(entry) === stableJson(value));
+    if (!item) return;
+    item.enabled = enabled;
+    store.stage(candidate);
+    return;
+  }
   open(value);
   change("enabled", enabled);
   stageForm();
@@ -58,6 +70,10 @@ function manageInterface(link: DiscoveredInterface): void {
 function deleteResource(row: { index: number; value: unknown }): void {
   if (dialog.value && (form.value.kind === "ethernet" || inlineEditor.value)) { cancel(); if (dialog.value) return; }
   deletion.value = row;
+}
+function moveResource(index: number, delta: number): void {
+  if (props.section === "nat" && dialog.value) cancel();
+  move(index, delta);
 }
 </script>
 
@@ -98,7 +114,7 @@ function deleteResource(row: { index: number; value: unknown }): void {
         :disabled="editingBlocked"
         @click="addResource"
       >
-        Add {{ loopbacks ? "loopback" : vlan ? "VLAN" : wireguard ? "tunnel" : section === "softflowd" ? "instance" : section === "gateway_monitors" ? "monitor" : section === "routes" ? "Static Route" : "rule" }}
+        Add {{ loopbacks ? "loopback" : vlan ? "VLAN" : wireguard ? "tunnel" : section === "softflowd" ? "export" : section === "gateway_monitors" ? "monitor" : section === "routes" ? "Static Route" : "rule" }}
       </v-btn>
     </div>
     <ResourceFilters
@@ -189,7 +205,7 @@ function deleteResource(row: { index: number; value: unknown }): void {
       :expanded-name="dialog && form.kind === 'ethernet' ? String(form.name) : undefined"
       @edit="editInterface"
       @delete="deleteResource"
-      @move="move"
+      @move="moveResource"
       @toggle="toggleMonitor"
     >
       <template #editing-row="{ row, columns, keys }">
@@ -223,8 +239,10 @@ function deleteResource(row: { index: number; value: unknown }): void {
         />
         <ResourceRowEditor
           v-else-if="inlineResource"
-          :collapse-options="section === 'gateway_monitors'"
-          :title="section === 'routes' ? 'Route' : 'Gateway monitor'"
+          :collapse-options="collapsibleOptions"
+          :wide="section === 'softflowd'"
+          :title="inlineResourceTitle"
+          :position="section === 'nat' ? editingIndex + 1 : undefined"
           :form="form"
           :fields="fields"
           :keys="keys"
@@ -255,8 +273,10 @@ function deleteResource(row: { index: number; value: unknown }): void {
         />
         <ResourceRowEditor
           v-if="inlineResource && dialog && editingIndex < 0"
-          :collapse-options="section === 'gateway_monitors'"
-          :title="section === 'routes' ? 'Route' : 'Gateway monitor'"
+          :collapse-options="collapsibleOptions"
+          :wide="section === 'softflowd'"
+          :title="inlineResourceTitle"
+          :position="section === 'nat' ? resourceItems(selectedConfig, section).length + 1 : undefined"
           :form="form"
           :fields="fields.filter(field => field.key !== 'metadata')"
           :keys="keys"
