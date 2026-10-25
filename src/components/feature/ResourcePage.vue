@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import type { Section } from "@/services/resourceForms";
 import { resourceItems, resourceTitles } from "@/services/resourceCollections";
 import { useControllerStore } from "@/stores/controller";
@@ -12,25 +12,57 @@ import ResourceEditorDialog from "@/components/feature/ResourceEditorDialog.vue"
 import ResourceDeleteDialog from "@/components/feature/ResourceDeleteDialog.vue";
 import FirewallPolicySettings from "@/components/feature/FirewallPolicySettings.vue";
 import InterfaceInventory from "@/components/feature/InterfaceInventory.vue";
+import PhysicalInterfaceEditor from "@/components/feature/PhysicalInterfaceEditor.vue";
+import InterfaceRowEditor from "@/components/feature/InterfaceRowEditor.vue";
+import ResourceRowEditor from "@/components/feature/ResourceRowEditor.vue";
+import { stableJson } from "@/services/configuration";
+import type { DiscoveredInterface } from "@/types/domain";
 
-const props = withDefaults(defineProps<{ section: Section; wireguard?: boolean; name?: string }>(), { wireguard: false, name: undefined });
+const props = withDefaults(defineProps<{ section: Section; wireguard?: boolean; vlan?: boolean; loopbacks?: boolean; name?: string }>(), { wireguard: false, vlan: false, loopbacks: false, name: undefined });
 const store = useControllerStore();
+const inlineResource = computed(() => props.section === "routes" || props.section === "gateway_monitors");
+const inlineEditor = computed(() => props.vlan || props.loopbacks || inlineResource.value);
 const {
   dialog, form, editingIndex, renameAcknowledged, errors, formError, deletion,
-  editingBlocked, allManaged, fields, relaySelection, impacts, renaming, renameImpacts,
+  editingBlocked, interfaceOptions, fields, impacts, renaming, renameImpacts,
   open, manage, change, cancel, stageForm, stageDelete, move,
-} = useResourceEditor(props.section, props.wireguard);
-const { filters, selectedConfig, rows } = useResourceCollection(props.section, props.wireguard, props.name);
+} = useResourceEditor(props.section, props.wireguard, props.vlan, props.loopbacks);
+const { filters, selectedConfig, rows } = useResourceCollection(props.section, props.wireguard, props.name, props.vlan);
 const showFilters = computed(() => !props.name && ((selectedConfig.value && resourceItems(selectedConfig.value, props.section).length > 20) ||
   Object.values(filters).some(value => value !== "" && value !== "All")));
-const inventory = ref<InstanceType<typeof InterfaceInventory> | null>(null);
-async function refreshInterfaces(): Promise<void> {
-  await Promise.all([store.refresh(), inventory.value?.refresh()]);
+const showInventory = computed(() => props.section === "interfaces" && !props.wireguard && !props.vlan && !props.name);
+function editInterface(value: unknown): void {
+  if (dialog.value && (form.value.kind === "ethernet" || inlineEditor.value)) {
+    const same = inlineResource.value ? editingIndex.value >= 0 && stableJson(value) === stableJson(rows.value.find(row => row.index === editingIndex.value)?.value) :
+      typeof value === "object" && value !== null && "name" in value && value.name === form.value.name;
+    cancel();
+    if (dialog.value || same) return;
+  }
+  open(value);
+}
+function addResource(): void {
+  if (dialog.value && inlineEditor.value) { cancel(); if (dialog.value) return; }
+  open();
+}
+function toggleMonitor(value: unknown, enabled: boolean): void {
+  if (editingBlocked.value) return;
+  if (dialog.value) { cancel(); if (dialog.value) return; }
+  open(value);
+  change("enabled", enabled);
+  stageForm();
+}
+function manageInterface(link: DiscoveredInterface): void {
+  if (dialog.value) { cancel(); if (dialog.value) return; }
+  manage(link);
+}
+function deleteResource(row: { index: number; value: unknown }): void {
+  if (dialog.value && (form.value.kind === "ethernet" || inlineEditor.value)) { cancel(); if (dialog.value) return; }
+  deletion.value = row;
 }
 </script>
 
 <template>
-  <section :aria-label="`${wireguard ? 'WireGuard' : resourceTitles[section]}${name ? ` · ${name}` : ''}`">
+  <section :aria-label="`${loopbacks ? 'Loopbacks' : vlan ? 'VLANs' : wireguard ? 'WireGuard' : resourceTitles[section]}${name ? ` · ${name}` : ''}`">
     <h1
       v-if="name"
       class="text-h6 mb-4"
@@ -42,12 +74,12 @@ async function refreshInterfaces(): Promise<void> {
       indeterminate
     />
     <v-alert
-      v-if="store.readOnlyReason"
+      v-if="store.readOnlyNotice"
       type="warning"
       variant="tonal"
       class="mb-4"
     >
-      {{ store.readOnlyReason }}
+      {{ store.readOnlyNotice }}
     </v-alert>
     <v-alert
       v-if="formError && !dialog"
@@ -56,31 +88,24 @@ async function refreshInterfaces(): Promise<void> {
     >
       {{ formError }}
     </v-alert>
-    <div class="d-flex flex-wrap align-center ga-3 mb-5">
+    <div
+      v-if="section !== 'interfaces' || wireguard || vlan || loopbacks"
+      class="d-flex flex-wrap align-center ga-3 mb-5"
+    >
       <v-btn
         prepend-icon="mdi-plus"
         color="primary"
         :disabled="editingBlocked"
-        @click="open()"
+        @click="addResource"
       >
-        Add {{ section === "interfaces" ? "interface" : section === "softflowd" ? "instance" : section === "gateway_monitors" ? "monitor" : "rule / route" }}
+        Add {{ loopbacks ? "loopback" : vlan ? "VLAN" : wireguard ? "tunnel" : section === "softflowd" ? "instance" : section === "gateway_monitors" ? "monitor" : section === "routes" ? "Static Route" : "rule" }}
       </v-btn>
-      <v-btn
-        v-if="section === 'interfaces' && !wireguard && !name"
-        icon="mdi-refresh"
-        variant="text"
-        aria-label="Refresh interfaces"
-        title="Refresh interfaces"
-        :loading="store.state.loading"
-        :disabled="store.busy"
-        @click="refreshInterfaces"
-      />
     </div>
     <ResourceFilters
       v-if="section !== 'interfaces' && showFilters"
       :model-value="filters"
       :section="section"
-      :interfaces="allManaged"
+      :interfaces="interfaceOptions"
     />
     <ResourceRuntime
       v-if="section !== 'interfaces'"
@@ -92,31 +117,165 @@ async function refreshInterfaces(): Promise<void> {
       :show-draft="Boolean(store.draft)"
       @error="formError = $event"
     />
+    <InterfaceInventory
+      v-if="showInventory"
+      :loopbacks="loopbacks"
+      :editing-row="loopbacks && dialog ? editingIndex : undefined"
+      :expanded-name="dialog && form.kind === 'ethernet' ? String(form.name) : undefined"
+      @manage="manageInterface"
+      @edit="editInterface"
+      @delete="deleteResource"
+    >
+      <template #editing-row="{ row, columns, keys }">
+        <PhysicalInterfaceEditor
+          v-if="dialog && form.kind === 'ethernet' && row.value.name === form.name"
+          :form="form"
+          :columns="columns"
+          :keys="keys"
+          :row="row"
+          :errors="errors"
+          :error="formError"
+          :disabled="Boolean(store.readOnlyReason)"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
+        />
+        <InterfaceRowEditor
+          v-else-if="loopbacks"
+          v-model:acknowledged="renameAcknowledged"
+          loopbacks
+          :form="form"
+          :fields="fields"
+          :columns="columns"
+          :errors="errors"
+          :error="formError"
+          :disabled="editingBlocked"
+          :renaming="renaming"
+          :rename-impacts="renameImpacts"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
+        />
+      </template>
+      <template #additional-rows="{ columns }">
+        <InterfaceRowEditor
+          v-if="loopbacks && dialog && editingIndex < 0"
+          v-model:acknowledged="renameAcknowledged"
+          loopbacks
+          :form="form"
+          :fields="fields"
+          :columns="columns"
+          :errors="errors"
+          :error="formError"
+          :disabled="editingBlocked"
+          :renaming="renaming"
+          :rename-impacts="renameImpacts"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
+        />
+      </template>
+    </InterfaceInventory>
     <ResourceTable
-      v-if="selectedConfig"
+      v-else-if="selectedConfig"
       :section="section"
       :rows="rows"
       :total="resourceItems(selectedConfig, section).length"
       :disabled="editingBlocked"
       :detail="Boolean(name)"
-      @edit="open"
-      @delete="deletion = $event"
+      :wireguard="wireguard"
+      :vlan="vlan"
+      :editing-row="(vlan || inlineResource) && dialog ? editingIndex : undefined"
+      :expanded-name="dialog && form.kind === 'ethernet' ? String(form.name) : undefined"
+      @edit="editInterface"
+      @delete="deleteResource"
       @move="move"
+      @toggle="toggleMonitor"
     >
-      <template #additional-rows="{ columns }">
-        <InterfaceInventory
-          v-if="section === 'interfaces' && !wireguard && !name"
-          ref="inventory"
+      <template #editing-row="{ row, columns, keys }">
+        <PhysicalInterfaceEditor
+          v-if="dialog && form.kind === 'ethernet' && row.value.name === form.name"
+          :form="form"
           :columns="columns"
-          @manage="manage"
+          :keys="keys"
+          :row="row"
+          :errors="errors"
+          :error="formError"
+          :disabled="Boolean(store.readOnlyReason)"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
+        />
+        <InterfaceRowEditor
+          v-else-if="vlan"
+          v-model:acknowledged="renameAcknowledged"
+          :form="form"
+          :fields="fields"
+          :columns="columns"
+          :errors="errors"
+          :error="formError"
+          :disabled="editingBlocked"
+          :renaming="renaming"
+          :rename-impacts="renameImpacts"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
+        />
+        <ResourceRowEditor
+          v-else-if="inlineResource"
+          :collapse-options="section === 'gateway_monitors'"
+          :title="section === 'routes' ? 'Route' : 'Gateway monitor'"
+          :form="form"
+          :fields="fields"
+          :keys="keys"
+          :columns="columns"
+          :errors="errors"
+          :error="formError"
+          :disabled="editingBlocked"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
+        />
+      </template>
+      <template #additional-rows="{ columns, keys }">
+        <InterfaceRowEditor
+          v-if="vlan && dialog && editingIndex < 0"
+          v-model:acknowledged="renameAcknowledged"
+          :form="form"
+          :fields="fields"
+          :columns="columns"
+          :errors="errors"
+          :error="formError"
+          :disabled="editingBlocked"
+          :renaming="renaming"
+          :rename-impacts="renameImpacts"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
+        />
+        <ResourceRowEditor
+          v-if="inlineResource && dialog && editingIndex < 0"
+          :collapse-options="section === 'gateway_monitors'"
+          :title="section === 'routes' ? 'Route' : 'Gateway monitor'"
+          :form="form"
+          :fields="fields.filter(field => field.key !== 'metadata')"
+          :keys="keys"
+          :columns="columns"
+          :errors="errors"
+          :error="formError"
+          :disabled="editingBlocked"
+          @change="change"
+          @cancel="cancel"
+          @stage="stageForm"
         />
       </template>
     </ResourceTable>
     <ResourceEditorDialog
+      v-if="!inlineEditor && form.kind !== 'ethernet'"
       v-model:acknowledged="renameAcknowledged"
       :open="dialog"
       :section="section"
-      :title="resourceTitles[section]"
+      :title="loopbacks ? 'Loopback' : vlan ? 'VLAN' : wireguard ? 'WireGuard' : resourceTitles[section]"
       :editing-index="editingIndex"
       :form="form"
       :fields="fields"
@@ -124,7 +283,6 @@ async function refreshInterfaces(): Promise<void> {
       :error="formError"
       :renaming="renaming"
       :rename-impacts="renameImpacts"
-      :relay-selection="relaySelection"
       :disabled="Boolean(store.readOnlyReason)"
       @change="change"
       @cancel="cancel"

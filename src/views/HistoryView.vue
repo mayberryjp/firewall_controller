@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import { formatTimestamp } from "@/services/timestamps";
 import { useControllerStore } from "@/stores/controller";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 const store = useControllerStore();
@@ -7,13 +8,13 @@ onMounted(() => { void store.refreshRevisions(); });
 </script>
 
 <template>
-  <section aria-label="Committed revisions">
+  <section aria-label="PUSH REQUESTS">
     <DatasetStatus
       :query="store.revisions"
       label="Revision history"
     />
     <v-table>
-      <thead><tr><th>Revision</th><th>Description</th><th>Submitted</th><th>Committed</th><th>Transaction</th></tr></thead>
+      <thead><tr><th>Revision</th><th>Description</th><th>Submitted (UTC)</th><th>Committed (UTC)</th><th>Commit</th></tr></thead>
       <tbody>
         <tr
           v-for="item in store.revisions.data"
@@ -22,22 +23,22 @@ onMounted(() => { void store.refreshRevisions(); });
           <td>
             <router-link
               class="mono"
-              :to="`/history/${item.revision}`"
+              :to="`/config/revisions/${item.revision}`"
             >
               {{ item.revision }}
             </router-link> {{ item.current ? "Current" : "" }}
           </td>
           <td>{{ item.description || "—" }}</td>
           <td :title="item.submitted_by">
-            {{ item.submitted_at || "—" }}
+            {{ formatTimestamp(item.submitted_at, "—") }}
           </td>
           <td :title="item.committed_by">
-            {{ item.committed_at || "—" }}
+            {{ formatTimestamp(item.committed_at, "—") }}
           </td>
           <td>
             <router-link
               v-if="item.transaction_id"
-              :to="`/transactions/${encodeURIComponent(item.transaction_id)}`"
+              :to="`/config/commits/${encodeURIComponent(item.transaction_id)}`"
             >
               {{ item.transaction_id }}
             </router-link>
@@ -48,7 +49,7 @@ onMounted(() => { void store.refreshRevisions(); });
         </tr>
         <tr v-if="store.revisions.data && !store.revisions.data.length">
           <td colspan="5">
-            No committed revisions returned.
+            No push requests returned.
           </td>
         </tr>
       </tbody>

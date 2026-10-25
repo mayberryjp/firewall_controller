@@ -1,38 +1,56 @@
-import { mount, flushPromises } from "@vue/test-utils";
+import { mount, flushPromises, type DOMWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import InterfacesView from "@/views/InterfacesView.vue";
+import LoopbacksView from "@/views/LoopbacksView.vue";
+import InterfaceDetailView from "@/views/InterfaceDetailView.vue";
+import VLANsView from "@/views/VLANsView.vue";
 import RoutesView from "@/views/RoutesView.vue";
+import NATView from "@/views/NATView.vue";
+import ConnectionsView from "@/views/ConnectionsView.vue";
 import FirewallView from "@/views/FirewallView.vue";
+import SettingsView from "@/views/SettingsView.vue";
 import FirewallInputView from "@/views/FirewallInputView.vue";
+import WireGuardView from "@/views/WireGuardView.vue";
 import DHCPRelayView from "@/views/DHCPRelayView.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
 import ServiceRepair from "@/components/feature/ServiceRepair.vue";
+import SystemUpgrade from "@/components/feature/SystemUpgrade.vue";
 import FieldInput from "@/components/base/FieldInput.vue";
+import PhysicalInterfaceEditor from "@/components/feature/PhysicalInterfaceEditor.vue";
+import ResourceRowEditor from "@/components/feature/ResourceRowEditor.vue";
+import ResourceFilters from "@/components/feature/ResourceFilters.vue";
+import DHCPRetryButton from "@/components/feature/DHCPRetryButton.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import NTPView from "@/views/NTPView.vue";
 import SyslogView from "@/views/SyslogView.vue";
 import VnStatView from "@/views/VnStatView.vue";
+import ServiceMaintenanceView from "@/views/ServiceMaintenanceView.vue";
+import SoftflowdView from "@/views/SoftflowdView.vue";
+import GatewayMonitorsView from "@/views/GatewayMonitorsView.vue";
 import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
 import InterfaceInventory from "@/components/feature/InterfaceInventory.vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 import * as api from "@/services/netcontrol";
+import { ApiFailure } from "@/services/api";
 import { useControllerStore } from "@/stores/controller";
 import { configSchema } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
-import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics } from "../fixtures";
+import { cloneConfig } from "@/services/configuration";
+import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections } from "../fixtures";
 import type { Component } from "vue";
 
 const box = { template: "<div><slot /></div>" };
 const stubs = {
   VAlert: box, VCard: box, VCardText: box, VCardActions: box, VTable: { template: "<table><slot /></table>" },
   VBtn: { props: ["disabled"], template: '<button :disabled="disabled"><slot /></button>' },
+  VChip: { props: ["color", "size", "variant"], template: '<span class="status-chip" :data-color="color"><slot /></span>' },
   VSwitch: { props: ["modelValue", "label", "disabled"], emits: ["update:modelValue"], template: '<label>{{ label }}<input type="checkbox" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)"></label>' },
   VDialog: { props: ["modelValue"], template: '<div v-if="modelValue" role="dialog"><slot /></div>' },
   VSelect: { props: ["modelValue", "label", "items", "disabled"], emits: ["update:modelValue"], template: '<label>{{ label }}<select :disabled="disabled" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option value="">Select</option><option v-for="item in items" :key="item.value ?? item" :value="item.value ?? item">{{ item.title ?? item }}</option></select></label>' },
-  VTextField: true, VTextarea: true, VCheckbox: true, VExpansionPanels: box, VExpansionPanel: box, VExpansionPanelTitle: box, VExpansionPanelText: box,
+  VTextField: true, VTextarea: true, VCheckbox: true, VCombobox: true, VBtnToggle: true, VIcon: true, VExpansionPanels: box, VExpansionPanel: box, VExpansionPanelTitle: box, VExpansionPanelText: box,
   DatasetStatus: true, JsonPanel: true, VProgressLinear: true,
 };
 beforeEach(() => {
@@ -40,14 +58,1093 @@ beforeEach(() => {
   const store = useControllerStore();
   store.connected = true; store.state.data = state(); store.runtime.data = runtime();
   vi.spyOn(api, "getGatewayStatistics").mockResolvedValue({ sample: statistics().sample, monitors: [] });
-  vi.spyOn(api, "getDiscoveredInterfaces").mockResolvedValue([]);
+  vi.spyOn(api, "getSystemUpgrade").mockResolvedValue({ enabled: false, repository: null, job: null, last_successful_version: null });
+  vi.spyOn(api, "getDiscoveredInterfaces").mockImplementation(async () => (store.state.data?.desired.interfaces ?? []).map((link, index) => ({ name: link.name, kind: link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: [...link.addresses], ownership: "managed" as const })));
 });
-async function render(component: Component, path: string) {
+async function render(component: Component, path: string, props: Record<string, unknown> = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component }] });
   await router.push(path); await router.isReady();
-  return mount(component, { global: { plugins: [router], stubs } });
+  const wrapper = mount(component, { props, global: { plugins: [router], stubs } });
+  await flushPromises();
+  return wrapper;
+}
+function cellValue(cell: Pick<DOMWrapper<Element>, "element">): string {
+  const content = cell.element.cloneNode(true) as Element;
+  content.querySelectorAll(".compact-cell-label").forEach(label => label.remove());
+  return (content.textContent ?? "").trim();
 }
 describe("October 17 frontend workflows", () => {
+  it("shows probe statistics without expanding the monitor and preserves zero and unavailable values", async () => {
+    const store = useControllerStore(); store.state.data!.desired.gateway_monitors = [monitor()];
+    const measured = { ...gatewayStatistics(), rtt_avg_ms: 0, rtt_variation_ms: null };
+    vi.mocked(api.getGatewayStatistics).mockResolvedValue({ sample: statistics().sample, monitors: [measured] });
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    try {
+      const summary = wrapper.get('[aria-label="uplink probe statistics"]');
+      const measurement = (name: string) => summary.findAll("dl > div").find(item => item.get("dt").text() === name)!.get("dd").text();
+      expect(measurement("Mean RTT")).toBe("0 ms"); expect(measurement("Stddev")).toBe("1.25 ms");
+      expect(measurement("RTT variation")).toBe("Unavailable"); expect(measurement("Loss")).toBe("33.333 %");
+      expect(summary.text()).not.toContain("no monitor sample");
+      expect(summary.findAll("dl > div").find(item => item.get("dt").text() === "Loss")!.get("dd").attributes("title")).toBe("33.333333333333336 %");
+      expect(measurement("Sent")).toBe("4"); expect(measurement("Received")).toBe("2");
+      expect(measurement("Lost")).toBe("1"); expect(measurement("Pending")).toBe("1");
+      expect(wrapper.find('[aria-label="uplink live statistics"]').exists()).toBe(false);
+      expect(wrapper.get('[aria-label="Live statistics for uplink"]').attributes("aria-expanded")).toBe("false");
+    } finally { wrapper.unmount(); }
+  });
+  it("rederives monitor paths when interfaces change and retains explicit IPv6 probing on DHCP interfaces", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces.push({ ...cloneConfig(desired).interfaces[0]!, name: "lab1" });
+    desired.interfaces[0]!.kind = "ethernet"; desired.interfaces[0]!.addresses = ["2001:db8::10/64"];
+    desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    desired.routes = [{ destination: "0.0.0.0/0", interface: "lab1", gateway: "192.0.2.1", table: 254, metric: 0 }, { destination: "::/0", interface: "lab0", gateway: "2001:db8::1", table: 254, metric: 0 }];
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+      const editor = wrapper.getComponent(ResourceRowEditor);
+      editor.vm.$emit("change", "target", "1.1.1.1"); editor.vm.$emit("change", "interface", "lab1"); await flushPromises();
+      expect(editor.props("form")).toMatchObject({ interface: "lab1", source_address: "192.0.2.10", gateway: "192.0.2.1", routing_table: 254 });
+      expect(editor.props("form")).not.toHaveProperty("mode");
+      editor.vm.$emit("change", "interface", "lab0"); await flushPromises();
+      expect(editor.props("form").mode).toBe("dhcp"); expect(editor.props("form")).not.toHaveProperty("source_address");
+      expect(editor.props("fields").find(field => field.key === "interface")?.choices?.map(choice => choice.value)).toEqual(["lab0", "lab1"]);
+      editor.vm.$emit("change", "target", "2001:db8::20"); await flushPromises();
+      expect(editor.props("form")).toMatchObject({ source_address: "2001:db8::10", gateway: "2001:db8::1", routing_table: 254 });
+      expect(editor.props("form")).not.toHaveProperty("mode");
+      editor.vm.$emit("change", "target", "1.1.1.1"); editor.vm.$emit("change", "interface", "lab1"); await flushPromises();
+      expect(editor.props("form")).not.toHaveProperty("mode"); expect(editor.props("form").source_address).toBe("192.0.2.10");
+    } finally { wrapper.unmount(); }
+  });
+  it("renders DHCP waiting and resolved paths read-only without reporting remote Down or inventing RTT", async () => {
+    const store = useControllerStore();
+    const automatic = configSchema.shape.gateway_monitors.parse([{ name: "wan-health", enabled: true, mode: "dhcp", interface: "lab0", target: "1.1.1.1" }])[0]!;
+    store.state.data!.desired.gateway_monitors = [automatic];
+    store.gatewayStatistics.stale = false;
+    store.gatewayStatistics.data = { sample: statistics().sample, monitors: [{ ...gatewayStatistics(), name: automatic.name, mode: "dhcp", interface: "lab0", process_state: "waiting", sample_status: "waiting_for_dhcp", health: "down", resolved_source_address: null, resolved_gateway: null, resolved_routing_table: null, reason: "waiting for DHCP lease", loss_percent: null, rtt_avg_ms: null }] };
+    const wrapper = await render(GatewayStatisticsPanel, "/gateway-monitors", { name: automatic.name });
+    try {
+      expect(wrapper.text()).toContain("Waiting for DHCP"); expect(wrapper.text()).toContain("waiting for DHCP lease");
+      expect(wrapper.text()).toContain("unknown"); expect(wrapper.text()).not.toContain("down");
+      const measurement = (name: string) => wrapper.findAll("dl > div").find(item => item.get("dt").text() === name)!.get("dd").text();
+      expect(measurement("Mean RTT")).toBe("Unavailable"); expect(measurement("Resolved source")).toBe("Unavailable");
+      store.gatewayStatistics.data = { ...store.gatewayStatistics.data!, monitors: [{ ...store.gatewayStatistics.data!.monitors[0]!, process_state: "running", sample_status: "warming_up", health: "unknown", resolved_source_address: "192.0.2.20", resolved_gateway: null, resolved_routing_table: 20000, reason: null }] };
+      await flushPromises();
+      expect(measurement("Resolved source")).toBe("192.0.2.20"); expect(measurement("Resolved gateway")).toBe("Direct");
+      expect(measurement("Resolved table")).toBe("20000"); expect(automatic).not.toHaveProperty("source_address");
+    } finally { wrapper.unmount(); }
+  });
+  it("derives DHCP monitor mode from the interface without a lease or mode choice", async () => {
+    const store = useControllerStore();
+    store.runtime.stale = false;
+    store.runtime.data!.capabilities = { gateway_monitor_modes: ["explicit", "dhcp"], dhcp_gateway_monitor_address_families: ["ipv4"] };
+    store.state.data!.desired.interfaces[0]!.kind = "ethernet"; store.state.data!.desired.interfaces[0]!.addresses = [];
+    store.state.data!.desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    store.state.data!.desired.routes = [];
+    const submit = vi.spyOn(api, "submitPackage"), wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+      const editor = wrapper.getComponent(ResourceRowEditor);
+      expect(editor.props("fields").some(field => field.key === "mode")).toBe(false);
+      for (const [key, value] of Object.entries({ name: "wan-health", interface: "lab0", target: "1.1.1.1" })) editor.vm.$emit("change", key, value);
+      await flushPromises();
+      expect(editor.props("fields").find(field => field.key === "interface")?.choices?.map(choice => choice.value)).toEqual(["lab0"]);
+      expect(editor.props("form").mode).toBe("dhcp");
+      expect(editor.props("form")).not.toHaveProperty("source_address");
+      editor.vm.$emit("stage"); await flushPromises();
+      expect(store.draft?.gateway_monitors[0]).toMatchObject({ name: "wan-health", mode: "dhcp", enabled: true, interface: "lab0", target: "1.1.1.1" });
+      for (const key of ["source_address", "gateway", "routing_table"]) expect(store.draft?.gateway_monitors[0]).not.toHaveProperty(key);
+      expect(submit).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+  it("hides DHCP mode without advertised capabilities and blocks imported DHCP monitor submissions", async () => {
+    const store = useControllerStore(), wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+      expect(wrapper.getComponent(ResourceRowEditor).props("fields").some(field => field.key === "mode")).toBe(false);
+      store.state.stale = false; store.state.lastSuccess = Date.now(); store.transactions.stale = false; store.transactions.data = {};
+      const candidate = cloneConfig(store.state.data!.desired);
+      candidate.gateway_monitors = [configSchema.shape.gateway_monitors.parse([{ name: "wan-health", enabled: true, mode: "dhcp", interface: "lab0", target: "1.1.1.1" }])[0]!];
+      store.stage(candidate);
+      expect(store.applyBlockedReason).toContain("advertise DHCP IPv4");
+      expect(store.canApply).toBe(false);
+    } finally { wrapper.unmount(); }
+  });
+  it.each([
+    { component: GatewayMonitorsView, path: "/gateway-monitors" },
+    { component: NTPView, path: "/ntp" },
+    { component: FirewallInputView, path: "/firewall/input" },
+    { component: SettingsView, path: "/settings" },
+  ])("keeps missing configuration warnings off $path without enabling writes", async ({ component, path }) => {
+    const store = useControllerStore();
+    store.state.data = null;
+    const wrapper = await render(component, path);
+    try {
+      expect(wrapper.text()).not.toContain("Committed desired configuration is unavailable");
+      expect(wrapper.text()).not.toContain("Committed configuration is unavailable.");
+      expect(store.readOnlyNotice).toBe("");
+      expect(store.readOnlyReason).toContain("Committed desired configuration is unavailable");
+      expect(store.canApply).toBe(false);
+      const save = wrapper.findAll("button").find(button => /^(Save|Add monitor)$/.test(button.text()));
+      if (save) expect(save.attributes("disabled")).toBeDefined();
+      store.state.incompatible = true;
+      await flushPromises();
+      expect(wrapper.text()).toContain("Incompatible API data");
+    } finally { wrapper.unmount(); }
+  });
+  it("requires explicit connection deletion and separate namespace flush confirmation without changing drafts", async () => {
+    const store = useControllerStore(), draft = config(); draft.routes[0]!.metric = 42; store.stage(draft);
+    const before = JSON.stringify(store.draft), sample = connections();
+    vi.spyOn(api, "getConnections").mockResolvedValue(sample);
+    vi.spyOn(api, "getState").mockResolvedValue(state()); vi.spyOn(api, "getTransactions").mockResolvedValue({});
+    const remove = vi.spyOn(api, "deleteConnection").mockResolvedValue({ status: "deleted", scope: sample.sample.scope });
+    const flush = vi.spyOn(api, "deleteAllConnections").mockResolvedValue({ status: "flushed", scope: sample.sample.scope });
+    const wrapper = await render(ConnectionsView, "/connections");
+    try {
+      await wrapper.get(`[aria-label="Delete connection ${sample.connections[0]!.id}"]`).trigger("click");
+      expect(remove).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled();
+      expect(wrapper.get('[role="dialog"]').text()).toContain("Management access and NAT sessions can be interrupted");
+      await wrapper.findAll("button").find(button => button.text() === "Delete state")!.trigger("click"); await flushPromises();
+      expect(remove).toHaveBeenCalledWith(sample.connections[0]); expect(flush).not.toHaveBeenCalled();
+      await wrapper.get('[aria-label="Flush all connection states"]').trigger("click");
+      expect(wrapper.get('[role="dialog"]').text()).toContain("Current filters and pagination do not limit this flush");
+      expect(wrapper.get('[role="dialog"]').text()).toContain("All IPv4 and IPv6");
+      await wrapper.findAll("button").find(button => button.text() === "Flush ALL states")!.trigger("click"); await flushPromises();
+      expect(flush).toHaveBeenCalledTimes(1); expect(flush).toHaveBeenCalledWith();
+      expect(JSON.stringify(store.draft)).toBe(before);
+    } finally { wrapper.unmount(); }
+  });
+  it.each([404, 504])("refreshes after connection deletion HTTP %s without destructive retries", async status => {
+    const sample = connections(), store = useControllerStore();
+    const read = vi.spyOn(api, "getConnections").mockResolvedValue(sample);
+    vi.spyOn(api, "getState").mockResolvedValue(state()); vi.spyOn(api, "getTransactions").mockResolvedValue({});
+    const remove = vi.spyOn(api, "deleteConnection").mockRejectedValue(new ApiFailure("rejected", status, undefined, status === 504));
+    const wrapper = await render(ConnectionsView, "/connections");
+    try {
+      await wrapper.get(`[aria-label="Delete connection ${sample.connections[0]!.id}"]`).trigger("click");
+      await wrapper.findAll("button").find(button => button.text() === "Delete state")!.trigger("click"); await flushPromises();
+      expect(remove).toHaveBeenCalledTimes(1); expect(read).toHaveBeenCalledTimes(2);
+      expect(wrapper.text()).toContain(status === 404 ? "expired or changed" : "Outcome uncertain");
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false); expect(store.draft).toBeNull();
+    } finally { wrapper.unmount(); }
+  });
+  it("confirms the exact signed-upgrade version and configured repository before submitting", async () => {
+    const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue(available); vi.spyOn(api, "getTransactions").mockResolvedValue({});
+    const install = vi.spyOn(api, "startSystemUpgrade").mockResolvedValue({ id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null });
+    const wrapper = await render(SystemUpgrade, "/services/maintenance");
+    try {
+      wrapper.getComponent({ name: "VTextField" }).vm.$emit("update:modelValue", "1.2.3"); await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Upgrade")!.trigger("click"); await flushPromises();
+      expect(install).not.toHaveBeenCalled(); expect(wrapper.get('[role="dialog"]').text()).toContain("operator/appliance");
+      expect(wrapper.get('[role="dialog"]').text()).toContain("interrupt management connectivity");
+      await wrapper.findAll("button").find(button => button.text() === "Install upgrade")!.trigger("click"); await flushPromises();
+      expect(install).toHaveBeenCalledWith("1.2.3"); expect(install).toHaveBeenCalledTimes(1);
+      expect(useControllerStore().upgrade.data?.job?.id).toBe("upgrade-1");
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    } finally { wrapper.unmount(); }
+  });
+  it.each(["add", "edit"])("collapses advanced probe settings on %s without discarding values", async mode => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const store = useControllerStore();
+    store.state.data!.desired.gateway_monitors = [{ ...monitor(), probe_interval_ms: 1500 }];
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    const open = async () => {
+      if (mode === "add") await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+      else await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
+    };
+    try {
+      await open();
+      const editor = wrapper.getComponent(ResourceRowEditor);
+      const options = editor.get(".resource-editor-options");
+      const toggle = editor.findAll("button").find(button => button.text() === "Show advanced")!;
+      expect(editor.get(".probe-target-controls").text()).toContain("Show advanced");
+      expect(editor.get(".probe-target-controls").findAllComponents(FieldInput)[0]!.props("field").key).toBe("target");
+      expect(toggle.attributes("append-icon")).toBe("mdi-chevron-down");
+      expect(editor.get(".editor-actions").text()).not.toContain("Show advanced");
+      expect(wrapper.text()).not.toContain("Following DHCP lease and gateway changes requires a backend update");
+      expect((options.element as HTMLElement).style.display).toBe("none");
+      expect(toggle.attributes("aria-expanded")).toBe("false");
+      expect(toggle.attributes("aria-controls")).toBe(options.attributes("id"));
+      expect(editor.props("form").probe_interval_ms).toBe(mode === "add" ? 1000 : 1500);
+      await toggle.trigger("click");
+      expect((options.element as HTMLElement).style.display).not.toBe("none");
+      expect(toggle.text()).toBe("Hide advanced");
+      expect(toggle.attributes("append-icon")).toBe("mdi-chevron-up");
+      const interval = editor.findAllComponents(FieldInput).find(field => field.props("field").key === "probe_interval_ms")!;
+      interval.vm.$emit("update:modelValue", 2000);
+      await flushPromises();
+      await toggle.trigger("click");
+      expect((options.element as HTMLElement).style.display).toBe("none");
+      expect(editor.props("form").probe_interval_ms).toBe(2000);
+      await toggle.trigger("click");
+      expect(interval.props("modelValue")).toBe(2000);
+      await editor.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+      await open();
+      expect(wrapper.getComponent(ResourceRowEditor).get(".resource-editor-options").isVisible()).toBe(false);
+      expect(store.draft).toBeNull();
+    } finally { wrapper.unmount(); }
+  });
+  it.each([
+    { component: RoutesView, path: "/routes", key: "interface" },
+    { component: NATView, path: "/nat", key: "out_interface" },
+    { component: SoftflowdView, path: "/softflowd", key: "interface" },
+    { component: GatewayMonitorsView, path: "/gateway-monitors", key: "interface" },
+    { component: VLANsView, path: "/vlans", key: "parent" },
+    { component: FirewallInputView, path: "/firewall/input", key: "interface" },
+  ])("shows reactive display names and interface identities in $path choices", async ({ component, path, key }) => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0] = {
+      ...config().interfaces[0]!, kind: "ethernet", metadata: { display_name: "WAN", description: "" },
+    };
+    store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [] }] };
+    const wrapper = await render(component, path);
+    await wrapper.findAll("button").find(button => button.text().startsWith(path === "/firewall/input" ? "Edit input policy" : "Add "))!.trigger("click");
+    const choiceField = () => wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === key)!;
+    expect(choiceField().props("field").choices).toContainEqual({ title: "WAN (lab0)", value: "lab0" });
+    await choiceField().get("select").setValue("lab0");
+    expect(choiceField().props("modelValue")).toBe("lab0");
+
+    store.draft = cloneConfig(store.state.data!.desired);
+    store.draft.interfaces[0]!.metadata = { display_name: "Office", description: "" };
+    await flushPromises();
+    expect(choiceField().props("field").choices).toContainEqual({ title: "Office (lab0)", value: "lab0" });
+    wrapper.unmount();
+  });
+  it("rejects unsupported DHCP monitor paths without changing DHCP configuration", async () => {
+    const store = useControllerStore();
+    const desired = store.state.data!.desired;
+    desired.interfaces[0] = { ...desired.interfaces[0]!, kind: "ethernet", addresses: [] };
+    desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    const before = cloneConfig(desired), submit = vi.spyOn(api, "submitPackage");
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    expect(wrapper.text()).not.toContain("DHCP-learned IPv4 addresses and routes are not supported");
+    await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    expect(editor.props("fields").some(field => field.key === "mode")).toBe(false);
+    for (const [key, value] of Object.entries({ name: "wan", interface: "lab0", target: "1.1.1.1" })) {
+      editor.vm.$emit("change", key, value);
+    }
+    await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.get('[role="alert"]').text()).toContain("does not advertise DHCP monitor support");
+    expect(store.draft).toBeNull();
+    expect(store.state.data!.desired).toEqual(before);
+    expect(submit).not.toHaveBeenCalled();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await editor.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+    expect(wrapper.text()).not.toContain("DHCP-learned IPv4 addresses and routes are not supported");
+    wrapper.unmount();
+  });
+  it("filters routes by interface identity while showing display names", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.metadata = { display_name: "WAN", description: "" };
+    store.state.data!.desired.routes = Array.from({ length: 21 }, () => ({ ...config().routes[0]! }));
+    const wrapper = await render(RoutesView, "/routes");
+    const filters = wrapper.getComponent(ResourceFilters);
+    const select = filters.findAll("select").find(select => select.text().includes("WAN (lab0)"))!;
+    expect(select.find('option[value="All"]').exists()).toBe(true);
+    await select.setValue("lab0");
+    expect(filters.props("modelValue").interface).toBe("lab0");
+    wrapper.unmount();
+  });
+  it.each([
+    { component: RoutesView, path: "/routes", section: "routes" as const, identity: "203.0.113.0/24", invalid: "metric", valid: 10,
+      values: { destination: "203.0.113.0/24", interface: "lab0", table: 10000, metric: 10 } },
+    { component: GatewayMonitorsView, path: "/gateway-monitors", section: "gateway_monitors" as const, identity: "backup", invalid: "probe_interval_ms", valid: 1000,
+      values: { name: "backup", interface: "lab0", target: "198.51.100.1", routing_table: 10001 } },
+  ])("adds and validates $section inline while protecting dirty input", async ({ component, path, section, identity, invalid, valid, values }) => {
+    const store = useControllerStore();
+    if (section === "gateway_monitors") {
+      store.state.data!.desired.routes.push({ ...store.state.data!.desired.routes[0]!, table: 254 });
+    }
+    const before = cloneConfig(store.state.data!.desired), submit = vi.spyOn(api, "submitPackage");
+    const wrapper = await render(component, path);
+    await wrapper.findAll("button").find(button => button.text().startsWith("Add "))!.trigger("click");
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    let editor = wrapper.getComponent(ResourceRowEditor);
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("metadata");
+    if (section === "gateway_monitors") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("routing_table");
+    if (section === "gateway_monitors") {
+      expect(editor.props("fields").map(field => field.key)).not.toContain("enabled");
+      expect(editor.props("fields").map(field => field.key)).not.toContain("source_address");
+      expect(editor.props("fields").map(field => field.key)).not.toContain("gateway");
+      expect(editor.props("form").enabled).toBe(true);
+    }
+    if (section === "routes") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("table");
+    if (section === "routes") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("gateway");
+    for (const [key, value] of Object.entries(values)) editor.vm.$emit("change", key, value);
+    editor.vm.$emit("change", invalid, -1);
+    await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(true);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true);
+    if (section === "gateway_monitors") {
+      expect(editor.get(".resource-editor-options").isVisible()).toBe(true);
+      expect(editor.findAll("button").find(button => button.text() === "Hide advanced")!.attributes("aria-expanded")).toBe("true");
+    }
+    expect(store.draft).toBeNull();
+    editor.vm.$emit("change", invalid, valid);
+    await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
+    expect(store.draft?.[section]).toHaveLength(before[section].length + 1);
+    if (section === "gateway_monitors") {
+      expect(store.draft?.gateway_monitors.at(-1)?.routing_table).toBe(254);
+      expect(store.draft?.gateway_monitors.at(-1)?.source_address).toBe("192.0.2.10");
+      expect(store.draft?.gateway_monitors.at(-1)?.enabled).toBe(true);
+      expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Enabled");
+      await wrapper.get('input[type="checkbox"]').setValue(false);
+      expect(store.draft?.gateway_monitors.at(-1)?.enabled).toBe(false);
+      await wrapper.get('input[type="checkbox"]').setValue(true);
+      expect(store.draft?.gateway_monitors.at(-1)?.enabled).toBe(true);
+      expect(store.draft?.gateway_monitors.slice(0, -1)).toEqual(before.gateway_monitors);
+    }
+    if (section === "routes") {
+      expect(store.draft?.routes.at(-1)?.table).toBe(254);
+      expect(store.draft?.routes.at(-1)?.gateway).toBeUndefined();
+      expect(store.draft?.routes.slice(0, -1)).toEqual(before.routes);
+    }
+    expect(store.draft?.interfaces).toEqual(before.interfaces);
+    expect(store.draft?.firewall).toEqual(before.firewall);
+    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Changes");
+    const saved = cloneConfig(store.draft!);
+    const row = wrapper.findAll("tbody tr").find(item => item.text().includes(identity))!;
+    await row.get('[aria-label="Edit / stage"]').trigger("click");
+    editor = wrapper.getComponent(ResourceRowEditor);
+    expect(editor.props("form")[invalid]).toBe(valid);
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).toContain("metadata");
+    if (section === "gateway_monitors") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).toContain("latency_threshold_ms");
+    editor.vm.$emit("change", invalid, valid + 1); await flushPromises();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await wrapper.findAll("button").find(button => button.text().startsWith("Add "))!.trigger("click");
+    expect(confirm).toHaveBeenCalled();
+    expect(wrapper.getComponent(ResourceRowEditor).props("form")[invalid]).toBe(valid + 1);
+    confirm.mockReturnValue(true);
+    await editor.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+    expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
+    expect(store.draft).toEqual(saved); expect(store.editorDirty).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("saves edited routes in table 254 regardless of their previous table", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.routes[0]!.gateway = "192.0.2.1";
+    const before = cloneConfig(store.state.data!.desired);
+    expect(before.routes[0]!.table).toBe(10000);
+    const wrapper = await render(RoutesView, "/routes");
+    await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("table");
+    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Table");
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("gateway");
+    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Gateway");
+    editor.vm.$emit("change", "table", 10001);
+    editor.vm.$emit("change", "metric", 42);
+    await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
+    expect(store.draft?.routes).toEqual([{ ...before.routes[0], table: 254, metric: 42 }, ...before.routes.slice(1)]);
+    expect(store.state.data!.desired).toEqual(before);
+    wrapper.unmount();
+  });
+  it("saves edited gateway monitors in table 254 without a routing table control", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.gateway_monitors = [monitor()];
+    store.state.data!.desired.routes.push({ ...store.state.data!.desired.routes[0]!, table: 254 });
+    const before = cloneConfig(store.state.data!.desired);
+    expect(before.gateway_monitors[0]!.routing_table).toBe(10000);
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("routing_table");
+    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Routing table");
+    editor.vm.$emit("change", "routing_table", 10001);
+    editor.vm.$emit("change", "latency_threshold_ms", 175);
+    await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
+    expect(store.draft?.gateway_monitors).toEqual([{ ...before.gateway_monitors[0], routing_table: 254, latency_threshold_ms: 175 }]);
+    expect(store.draft?.routes).toEqual(before.routes);
+    expect(store.state.data!.desired).toEqual(before);
+    wrapper.unmount();
+  });
+  it.each([
+    { target: "198.51.100.1", source: "192.0.2.10", network: "198.51.100.0/24", sourceNetwork: "192.0.2.0/24", via: undefined },
+    { target: "2001:db8:1::1", source: "2001:db8::10", network: "2001:db8:1::/64", sourceNetwork: "2001:db8::/64", via: undefined },
+    { target: "2001:db8:1::1", source: "2001:db8::10", network: "2001:db8:1::/64", sourceNetwork: "2001:db8::/64", via: "2001:db8::1" },
+  ])("derives the monitor source and gateway for $target through $via", async ({ target, source, network, via }) => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.addresses = ["2001:db8::10/64", "192.0.2.10/24"];
+    store.state.data!.desired.routes = [{ destination: network, interface: "lab0", table: 254, metric: 1, ...(via ? { gateway: via } : {}) }];
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    expect(editor.props("fields").map(field => field.key)).not.toContain("gateway");
+    expect(editor.props("fields").find(field => field.key === "target")?.label).toBe("Probe Target");
+    for (const [key, value] of Object.entries({ name: "automatic", interface: "lab0", target })) editor.vm.$emit("change", key, value);
+    await flushPromises();
+    expect(editor.props("form").source_address).toBe(source);
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
+    expect(store.draft?.gateway_monitors[0]).toMatchObject({ enabled: true, source_address: source, gateway: via ?? target, routing_table: 254 });
+    wrapper.unmount();
+  });
+  it("updates the monitor source on interface changes and reports missing addresses at Interface", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces.push({ ...store.state.data!.desired.interfaces[0]!, name: "empty0", addresses: [] });
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    for (const [key, value] of Object.entries({ name: "automatic", interface: "lab0", target: "198.51.100.1" })) editor.vm.$emit("change", key, value);
+    await flushPromises(); expect(editor.props("form").source_address).toBe("192.0.2.10");
+    editor.vm.$emit("change", "interface", "empty0"); await flushPromises();
+    expect(editor.props("form").source_address).toBe("");
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(editor.props("errors")["editor.interface"]).toEqual(["Select an interface with an address matching the probe target."]);
+    expect(store.draft).toBeNull();
+    editor.vm.$emit("change", "interface", "lab0"); await flushPromises();
+    expect(editor.props("form").source_address).toBe("192.0.2.10");
+    wrapper.unmount();
+  });
+  it("derives the monitor gateway by prefix length then metric on its selected interface and table", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces.push({ ...desired.interfaces[0]!, name: "other0", addresses: ["203.0.113.10/24"] });
+    desired.routes = [
+      { destination: "0.0.0.0/0", interface: "lab0", gateway: "192.0.2.1", table: 254, metric: 1 },
+      { destination: "198.51.100.0/24", interface: "lab0", gateway: "192.0.2.2", table: 254, metric: 20 },
+      { destination: "198.51.100.0/24", interface: "lab0", gateway: "192.0.2.3", table: 254, metric: 5 },
+      { destination: "198.51.100.1/32", interface: "lab0", gateway: "192.0.2.4", table: 10000, metric: 1 },
+      { destination: "198.51.100.1/32", interface: "other0", gateway: "203.0.113.1", table: 254, metric: 1 },
+    ];
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    for (const [key, value] of Object.entries({ name: "automatic", interface: "lab0", target: "198.51.100.1" })) editor.vm.$emit("change", key, value);
+    await flushPromises(); expect(editor.props("form").gateway).toBe("192.0.2.3");
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
+    expect(store.draft?.gateway_monitors[0]?.gateway).toBe("192.0.2.3");
+    wrapper.unmount();
+  });
+  it.each(["missing", "ambiguous"])("rejects a %s monitor route without changing the draft", async mode => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.routes = mode === "missing" ? [] : ["192.0.2.1", "192.0.2.2"].map(gateway => ({ destination: "198.51.100.0/24", interface: "lab0", gateway, table: 254, metric: 1 }));
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    for (const [key, value] of Object.entries({ name: "automatic", interface: "lab0", target: "198.51.100.1" })) editor.vm.$emit("change", key, value);
+    await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(editor.props("errors")["editor.target"]).toEqual(["Select a probe target with an unambiguous route in table 254 on this interface."]);
+    expect(store.draft).toBeNull();
+    wrapper.unmount();
+  });
+  it("preserves disabled monitor state and its suitable source, and validates the saved-row switch", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.addresses.push("192.0.2.20/24");
+    store.state.data!.desired.gateway_monitors = [{ ...monitor(), enabled: false, source_address: "192.0.2.20", routing_table: 254 }];
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    editor.vm.$emit("change", "latency_threshold_ms", 175); await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.gateway_monitors[0]).toMatchObject({ enabled: false, source_address: "192.0.2.20", latency_threshold_ms: 175 });
+    store.connected = false; await flushPromises();
+    expect(wrapper.get('input[type="checkbox"]').attributes("disabled")).toBeDefined();
+    store.connected = true; await flushPromises();
+    await wrapper.get('input[type="checkbox"]').setValue(true);
+    expect(store.draft?.gateway_monitors[0]?.enabled).toBe(false);
+    expect(wrapper.getComponent(ResourceRowEditor).props("error")).toContain("No unambiguous route");
+    expect(wrapper.text()).toContain("route in table 254");
+    wrapper.unmount();
+  });
+  it("separates physical inventory from dummy interfaces and read-only loopback", async () => {
+    useControllerStore().state.data!.desired.interfaces = [];
+    const link = { name: "eth0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: [] as string[], ownership: "unmanaged" as const };
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([link, { ...link, name: "dummy0", kind: "dummy" }, { ...link, name: "lo", kind: "loopback", ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] }]);
+    const physical = await render(InterfaceInventory, "/interfaces");
+    try {
+      expect(physical.findAll("tbody tr").map(row => cellValue(row.find("td")))).toEqual(["eth0"]);
+    } finally { physical.unmount(); }
+    const loopbacks = await render(InterfaceInventory, "/loopbacks", { loopbacks: true });
+    try {
+      expect(loopbacks.findAll("tbody tr").map(row => cellValue(row.find("td")))).toEqual(["dummy0", "lo"]);
+      expect(loopbacks.findAll("th").map(header => header.text())).not.toContain("Reload DHCP");
+      const loopback = loopbacks.findAll("tbody tr").find(row => row.text().includes("127.0.0.1/8"))!;
+      expect(loopback.text()).toContain("Read-only"); expect(loopback.find("button").exists()).toBe(false);
+    } finally { loopbacks.unmount(); }
+  });
+  it("edits dummy settings from Loopbacks without copying live addresses or writing to the firewall", async () => {
+    const store = useControllerStore(), before = config(), submit = vi.spyOn(api, "submitPackage");
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
+      { name: "lab0", kind: "dummy", index: 2, mac: null, mtu: 1500, up: true, addresses: ["203.0.113.99/32"], ownership: "managed" },
+      { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, addresses: ["127.0.0.1/8", "::1/128"], ownership: "loopback" },
+    ]);
+    const wrapper = await render(LoopbacksView, "/loopbacks");
+    try {
+      expect(wrapper.get("tbody").text()).toContain("203.0.113.99/32");
+      expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Name", "Role", "Admin state", "MTU", "Active Addresses", "Actions"]);
+      expect(wrapper.text()).not.toMatch(/dummy/i);
+      const loopback = wrapper.findAll("tbody tr").find(row => cellValue(row.find("td")) === "lo")!;
+      expect(loopback.find("button").exists()).toBe(false); expect(loopback.text()).toContain("Read-only");
+      await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
+      const fields = wrapper.findAllComponents(FieldInput);
+      expect(fields.map(field => field.props("field").key)).toEqual(["name", "role", "addresses"]);
+      expect(cellValue(wrapper.get('[aria-label="Loopback editor"]').findAll("td")[3]!)).toBe("1500");
+      expect(wrapper.find('input[type="checkbox"]').exists()).toBe(true);
+      expect(wrapper.text()).not.toContain("not carrier readiness");
+      expect(wrapper.text()).not.toMatch(/dummy/i);
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+      expect(wrapper.find('tbody tr[aria-label="Loopback editor"]').exists()).toBe(true);
+      expect(fields.find(field => field.props("field").key === "addresses")!.props("modelValue")).toBe("192.0.2.10/24");
+      fields.find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.10.0.1/32");
+      await flushPromises(); await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft?.interfaces[0]).toMatchObject({ name: "lab0", kind: "dummy", mtu: 1500, addresses: ["10.10.0.1/32", "2001:db8::10/64"] });
+      expect(store.state.data!.desired).toEqual(before); expect(store.draft?.routes).toEqual(before.routes);
+      expect(store.draft?.interfaces.some(link => link.name === "lo")).toBe(false); expect(submit).not.toHaveBeenCalled();
+      expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Changes");
+      expect(wrapper.find("tbody").text()).not.toContain("Unsaved");
+    } finally { wrapper.unmount(); }
+  });
+  it("creates staged dummy loopbacks even before discovery and refuses to manage lo", async () => {
+    const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([]);
+    const wrapper = await render(LoopbacksView, "/loopbacks");
+    try {
+      expect(wrapper.get("tbody").text()).toContain("lab0");
+      await wrapper.findAll("button").find(button => button.text() === "Add loopback")!.trigger("click");
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+      expect(wrapper.findAll('tbody tr[aria-label="Loopback editor"]')).toHaveLength(1);
+      const fields = wrapper.findAllComponents(FieldInput), name = fields.find(field => field.props("field").key === "name")!;
+      const admin = wrapper.get('input[type="checkbox"]');
+      expect((admin.element as HTMLInputElement).checked).toBe(true);
+      expect(fields.map(field => field.props("field").key)).toEqual(["name", "role", "addresses"]);
+      expect(cellValue(wrapper.get('[aria-label="Loopback editor"]').findAll("td")[3]!)).toBe("65535");
+      expect(wrapper.text()).not.toContain("not carrier readiness");
+      await admin.setValue(false);
+      name.vm.$emit("update:modelValue", "lo");
+      fields.find(field => field.props("field").key === "role")!.vm.$emit("update:modelValue", "unassigned");
+      await flushPromises(); await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("Only loopback interfaces other than lo");
+      name.vm.$emit("update:modelValue", "dummy1");
+      await flushPromises(); await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft?.interfaces[1]).toMatchObject({ name: "dummy1", kind: "dummy", role: "unassigned", mtu: 65535, up: false, addresses: [] });
+      expect(wrapper.get("tbody").text()).toContain("dummy1"); expect(submit).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+  it("adopts an unmanaged dummy through Loopbacks without treating live addresses as configuration", async () => {
+    const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "dummy1", kind: "dummy", index: 3, mac: null, mtu: 9000, up: false, addresses: ["203.0.113.99/32"], ownership: "unmanaged" }]);
+    const wrapper = await render(LoopbacksView, "/loopbacks");
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Manage this interface")!.trigger("click");
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+      expect(wrapper.findAll('tbody tr[aria-label="Loopback editor"]')).toHaveLength(1);
+      expect(wrapper.findAllComponents(FieldInput).some(field => field.props("field").key === "mtu")).toBe(false);
+      expect(cellValue(wrapper.get('[aria-label="Loopback editor"]').findAll("td")[3]!)).toBe("9000");
+      expect(wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!.props("modelValue")).toBe("");
+      await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft?.interfaces.find(link => link.name === "dummy1")).toMatchObject({ kind: "dummy", role: "unassigned", mtu: 9000, up: false, addresses: [] });
+      expect(submit).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+  it("keeps loopback validation inline and protects unstaged input when switching rows", async () => {
+    const store = useControllerStore(), before = config();
+    const wrapper = await render(LoopbacksView, "/loopbacks");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      const add = wrapper.findAll("button").find(button => button.text() === "Add loopback")!;
+      await add.trigger("click");
+      const field = (key: string) => wrapper.findAllComponents(FieldInput).find(input => input.props("field").key === key)!;
+      field("name").vm.$emit("update:modelValue", "dummy1");
+      field("addresses").vm.$emit("update:modelValue", "invalid");
+      await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(wrapper.get('[role="alert"]').text()).not.toBe("");
+      expect(store.draft).toBeNull();
+      await add.trigger("click");
+      await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
+      await wrapper.get('[aria-label="Delete"]').trigger("click");
+      expect(confirm).toHaveBeenCalledTimes(3);
+      expect(field("name").props("modelValue")).toBe("dummy1");
+      field("addresses").vm.$emit("update:modelValue", "2001:db8::1/64");
+      await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(wrapper.get('[role="alert"]').text()).toContain("Enter IPv4");
+      field("addresses").vm.$emit("update:modelValue", "10.10.0.1/32, 10.10.0.2/32");
+      await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft?.interfaces[1]).toMatchObject({ name: "dummy1", addresses: ["10.10.0.1/32", "10.10.0.2/32"] });
+      expect(store.state.data!.desired).toEqual(before);
+      await add.trigger("click");
+      field("name").vm.$emit("update:modelValue", "dummy2");
+      await flushPromises();
+      confirm.mockReturnValue(true);
+      await wrapper.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+      expect(wrapper.find('[aria-label="Loopback editor"]').exists()).toBe(false);
+      expect(store.editorDirty).toBe(false);
+    } finally { confirm.mockRestore(); wrapper.unmount(); }
+  });
+  it("inserts a single loopback editor in an empty inventory even when discovery fails", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces = [];
+    vi.mocked(api.getDiscoveredInterfaces).mockRejectedValue(new Error("Discovery failed"));
+    const wrapper = await render(LoopbacksView, "/loopbacks");
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Add loopback")!.trigger("click");
+      expect(wrapper.text()).toContain("Discovery failed");
+      expect(wrapper.findAll('tbody tr[aria-label="Loopback editor"]')).toHaveLength(1);
+      expect(wrapper.text()).not.toContain("No discovered interfaces");
+      wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "name")!.vm.$emit("update:modelValue", "dummy1");
+      await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft?.interfaces).toHaveLength(1);
+      expect(store.draft?.interfaces[0]).toMatchObject({ name: "dummy1", kind: "dummy", role: "unassigned", up: true });
+    } finally { wrapper.unmount(); }
+  });
+  it("shows exact read-only connection counters and NAT details and resets paging on filter changes", async () => {
+    const store = useControllerStore(), draft = config(); draft.routes[0]!.metric = 42; store.stage(draft);
+    const before = JSON.stringify(store.draft), submit = vi.spyOn(api, "submitPackage");
+    const read = vi.spyOn(api, "getConnections").mockImplementation(async (query = {}) => ({ ...connections(), offset: query.offset ?? 0, next_offset: query.offset ? null : 100 }));
+    const wrapper = await render(ConnectionsView, "/connections");
+    try {
+      expect(wrapper.get(".connection-bytes").attributes("title")).toBe("18446744073709551615 bytes");
+      expect(wrapper.get(".connection-bytes").text()).toBe("18.4 EB"); expect(wrapper.text()).toContain("9007199254740993");
+      expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Protocol", "Source", "Destination", "State", "Sent packets", "Received packets", "Sent bytes", "Received bytes", "Timeout"]);
+      expect(wrapper.get('[data-label="Received packets"]').text()).toBe("Unavailable");
+      expect(wrapper.get('[data-label="Received bytes"]').text()).toBe("Unavailable");
+      expect(wrapper.findAll(".status-chip").map(chip => [chip.text(), chip.attributes("data-color")])).toContainEqual(["TCP", "info"]);
+      expect(wrapper.findAll(".status-chip").map(chip => [chip.text(), chip.attributes("data-color")])).toContainEqual(["ESTABLISHED", "success"]);
+      expect(wrapper.text()).toContain("SNAT");
+      expect(wrapper.get('[data-label="Source"]').text()).toBe("192.0.2.10");
+      expect(wrapper.find('[title^="Source port"]').exists()).toBe(false);
+      expect(wrapper.get('[data-label="Destination"] [title="Destination port 443"]').text()).toBe("443");
+      expect(wrapper.find('[aria-label^="Connection details"]').exists()).toBe(false);
+      expect(wrapper.find(".connection-details").exists()).toBe(false);
+      await wrapper.get('[aria-label="Next connections page"]').trigger("click"); await flushPromises();
+      expect(read).toHaveBeenLastCalledWith({ limit: 100, offset: 100 }, expect.any(AbortSignal));
+      await wrapper.get('[aria-label="More filters"]').trigger("click");
+      await wrapper.findAll("select").find(select => select.element.parentElement?.textContent?.startsWith("Family"))!.setValue("ipv6");
+      await wrapper.get('form[aria-label="Connection filters"]').trigger("submit"); await flushPromises();
+      expect(read).toHaveBeenLastCalledWith(expect.objectContaining({ family: "ipv6", offset: 0 }), expect.any(AbortSignal));
+      expect(JSON.stringify(store.draft)).toBe(before); expect(submit).not.toHaveBeenCalled();
+      expect(localStorage.getItem("connections")).toBeNull();
+    } finally { wrapper.unmount(); }
+  });
+  it("filters connection states locally while preserving sorting, paging and refresh selection", async () => {
+    const sample = connections(), original = sample.connections[0]!;
+    const rows = [original, { ...original, id: "43", state: "UNREPLIED" }, { ...original, id: "44", state: "ESTABLISHED", original_counters: { packets: "2", bytes: "1000" } }];
+    const read = vi.spyOn(api, "getConnections").mockResolvedValue({ ...sample, connections: rows, summary: { ...sample.summary, returned: 3, matched: 3 }, next_offset: 100 });
+    const wrapper = await render(ConnectionsView, "/connections");
+    const stateSelect = wrapper.findAll("select").find(select => select.element.parentElement?.textContent?.startsWith("State"))!;
+    try {
+      expect(stateSelect.text()).toContain("All states"); expect(stateSelect.text()).toContain("UNREPLIED");
+      await stateSelect.setValue("ESTABLISHED");
+      expect(wrapper.findAll(".connection-row")).toHaveLength(2); expect(wrapper.text()).toContain("2 shown");
+      await wrapper.findAll("th").find(header => header.text() === "Sent packets")!.get("button").trigger("click");
+      expect(wrapper.findAll('[data-label="Sent packets"]').map(cell => cell.text())).toEqual(["2", "9007199254740993"]);
+      expect(read).toHaveBeenCalledTimes(1);
+      read.mockResolvedValue({ ...sample, connections: [{ ...original, state: "CUSTOM_STATE" }] });
+      await wrapper.get('[aria-label="Next connections page"]').trigger("click"); await flushPromises();
+      expect(read).toHaveBeenLastCalledWith({ limit: 100, offset: 100 }, expect.any(AbortSignal));
+      expect(wrapper.findAll(".connection-row")).toHaveLength(0);
+      expect(wrapper.text()).toContain("No ESTABLISHED connections on this page."); expect(wrapper.text()).toContain("0 shown");
+      expect(stateSelect.element.value).toBe("ESTABLISHED"); expect(stateSelect.text()).toContain("CUSTOM_STATE");
+      await stateSelect.setValue(""); expect(wrapper.findAll(".connection-row")).toHaveLength(1);
+      await stateSelect.setValue("CUSTOM_STATE");
+      await wrapper.get('[aria-label="Refresh connections"]').trigger("click"); await flushPromises();
+      expect(stateSelect.element.value).toBe("CUSTOM_STATE"); expect(wrapper.findAll(".connection-row")).toHaveLength(1);
+      expect(read).toHaveBeenCalledTimes(3);
+    } finally { wrapper.unmount(); }
+  });
+  it("sorts connection headers both ways with exact counters, natural addresses and unavailable values last", async () => {
+    const sample = connections(), original = sample.connections[0]!;
+    const rows = [
+      { ...original, id: "1", protocol_name: "udp" as const, state: "UNREPLIED", original: { ...original.original, source: "192.0.2.10", destination: "198.51.100.20" }, original_counters: { packets: "9007199254740993", bytes: "9007199254740993" }, reply_counters: { packets: "9007199254740992", bytes: "9007199254740992" }, timeout_seconds: 120 },
+      { ...original, id: "2", protocol_name: "tcp" as const, state: "ESTABLISHED", original: { ...original.original, source: "192.0.2.2", destination: "198.51.100.3" }, original_counters: { packets: "9007199254740992", bytes: "9007199254740992" }, reply_counters: { packets: "9007199254740993", bytes: "9007199254740993" }, timeout_seconds: 9 },
+      { ...original, id: "3", protocol_name: "icmp" as const, state: "NEW", original_counters: null, timeout_seconds: null },
+    ];
+    const read = vi.spyOn(api, "getConnections").mockResolvedValue({ ...sample, connections: rows });
+    const wrapper = await render(ConnectionsView, "/connections");
+    const packets = () => wrapper.findAll('.connection-row [data-label="Sent packets"]').map(cell => cell.text());
+    const header = (label: string) => wrapper.findAll("th").find(cell => cell.text() === label)!;
+    try {
+      expect(wrapper.get('[data-label="Received bytes"]').attributes("title")).toBe("9007199254740992 bytes");
+      expect(wrapper.get('[data-label="Received packets"]').text()).toBe("9007199254740992");
+      for (const label of ["Sent packets", "Sent bytes", "Timeout"]) {
+        await header(label).get("button").trigger("click");
+        expect(header(label).attributes("aria-sort")).toBe("ascending");
+        expect(packets()).toEqual(["9007199254740992", "9007199254740993", "Unavailable"]);
+        await header(label).get("button").trigger("click");
+        expect(header(label).attributes("aria-sort")).toBe("descending");
+        expect(packets()).toEqual(["9007199254740993", "9007199254740992", "Unavailable"]);
+      }
+      for (const label of ["Received packets", "Received bytes"]) {
+        await header(label).get("button").trigger("click");
+        expect(header(label).attributes("aria-sort")).toBe("ascending");
+        expect(packets()).toEqual(["9007199254740993", "9007199254740992", "Unavailable"]);
+        await header(label).get("button").trigger("click");
+        expect(header(label).attributes("aria-sort")).toBe("descending");
+        expect(packets()).toEqual(["9007199254740992", "9007199254740993", "Unavailable"]);
+      }
+      for (const label of ["Source", "Destination", "State"]) {
+        await header(label).get("button").trigger("click");
+        expect(packets()[0]).toBe("9007199254740992");
+      }
+      await header("Protocol").get("button").trigger("click");
+      expect(packets()).toEqual(["Unavailable", "9007199254740992", "9007199254740993"]);
+      await header("Sent packets").get("button").trigger("click");
+      await wrapper.get('[aria-label="Refresh connections"]').trigger("click"); await flushPromises();
+      expect(packets()).toEqual(["9007199254740992", "9007199254740993", "Unavailable"]);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(rows.map(row => row.id)).toEqual(["1", "2", "3"]);
+    } finally { wrapper.unmount(); }
+  });
+  it("does not overlap connection reads, backs off on 503, and pauses when hidden or unmounted", async () => {
+    vi.useFakeTimers();
+    let finish!: (value: ReturnType<typeof connections>) => void;
+    const read = vi.spyOn(api, "getConnections").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const wrapper = await render(ConnectionsView, "/connections");
+    try {
+      await vi.advanceTimersByTimeAsync(20000); expect(read).toHaveBeenCalledTimes(1);
+      finish(connections()); await flushPromises();
+      read.mockRejectedValue(new ApiFailure("HTTP 503: kernel unavailable", 503));
+      await vi.advanceTimersByTimeAsync(5000); await flushPromises();
+      expect(read).toHaveBeenCalledTimes(2); expect(wrapper.text()).toContain("Stale snapshot");
+      expect(wrapper.get(".connection-bytes").attributes("title")).toBe("18446744073709551615 bytes");
+      await vi.advanceTimersByTimeAsync(9999); expect(read).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1); expect(read).toHaveBeenCalledTimes(3);
+      visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(60000); expect(read).toHaveBeenCalledTimes(3);
+      read.mockResolvedValue(connections()); visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange")); await flushPromises();
+      expect(read).toHaveBeenCalledTimes(4);
+      wrapper.unmount(); await vi.advanceTimersByTimeAsync(60000); expect(read).toHaveBeenCalledTimes(4);
+    } finally { wrapper.unmount(); visibility.mockRestore(); vi.useRealTimers(); }
+  });
+  it("shows simulated connections as unmeasured and clears snapshots on disconnect", async () => {
+    vi.spyOn(api, "getConnections").mockResolvedValue({ ...connections(), connections: [], next_offset: null, sample: { ...connections().sample, status: "simulated" }, summary: { total: null, matched: null, returned: 0, accounting_unavailable: null } });
+    const wrapper = await render(ConnectionsView, "/connections");
+    expect(wrapper.text()).toContain("Simulated; no measured connections"); expect(wrapper.text()).toContain("Total: Unavailable");
+    useControllerStore().connected = false; await flushPromises(); expect(wrapper.find("table").exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it("reloads only committed DHCP interfaces without changing the shared draft", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.kind = "ethernet";
+    store.state.data!.desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    store.transactions.data = {}; store.transactions.stale = false;
+    const draft = config(); draft.routes[0]!.metric = 42; store.stage(draft);
+    const before = JSON.stringify(store.draft), refresh = vi.spyOn(store, "refreshRuntime").mockResolvedValue();
+    let finish!: (value: { interface: string; status: "retrying" }) => void;
+    const retry = vi.spyOn(api, "retryDHCP").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const wrapper = mount(DHCPRetryButton, { props: { name: "lab0" }, global: { stubs } });
+    await wrapper.get("button").trigger("click"); await wrapper.get("button").trigger("click");
+    await flushPromises();
+    expect(retry).toHaveBeenCalledTimes(1); expect(retry).toHaveBeenCalledWith("lab0");
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    finish({ interface: "lab0", status: "retrying" }); await flushPromises();
+    expect(wrapper.text()).toContain("awaiting a lease update"); expect(refresh).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(store.draft)).toBe(before);
+    store.state.data = { ...store.state.data!, desired: { ...store.state.data!.desired, interfaces: store.state.data!.desired.interfaces.map(link => ({ ...link, up: false })) } }; await flushPromises();
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    store.state.data = { ...store.state.data!, desired: { ...store.state.data!.desired, dhcp_clients: {} } }; await flushPromises();
+    expect(wrapper.find("button").exists()).toBe(false); wrapper.unmount();
+  });
+  it("keeps DHCP retry errors inline and does not retry the action automatically", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    store.transactions.data = {}; store.transactions.stale = false;
+    vi.spyOn(store, "refreshRuntime").mockResolvedValue();
+    const retry = vi.spyOn(api, "retryDHCP").mockRejectedValue(new Error("HTTP 503: simulator unsupported"));
+    const wrapper = mount(DHCPRetryButton, { props: { name: "lab0" }, global: { stubs } });
+    await wrapper.get("button").trigger("click"); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("HTTP 503"); expect(retry).toHaveBeenCalledOnce();
+    expect(store.draft).toBeNull(); wrapper.unmount();
+  });
+  it("edits physical settings with compact dropdowns and preserves hidden settings", async () => {
+    const store = useControllerStore(), base = { ...config().interfaces[0]!, kind: "ethernet" as const, metadata: { display_name: "", description: "Saved interface notes" } };
+    store.state.data!.desired.interfaces = [base];
+    store.state.data!.desired.dns = { lab0: { servers: ["192.0.2.53"], domains: [] } };
+    const wrapper = await render(InterfacesView, "/interfaces");
+    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("DHCP");
+    expect(wrapper.findComponent(DHCPRetryButton).exists()).toBe(false);
+    expect(wrapper.find('a[href="/interfaces/lab0"]').exists()).toBe(false);
+    await wrapper.find("tbody tr").trigger("click");
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Changing a management NIC");
+    const editor = wrapper.getComponent(PhysicalInterfaceEditor);
+    expect(editor.findComponent(DHCPRetryButton).exists()).toBe(false);
+    expect(editor.findAll("td")).toHaveLength(wrapper.findAll("th").length);
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).toEqual(["display_name", "mtu", "addresses", "ipv6_addresses"]);
+    expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+    expect(editor.find("td[colspan]").exists()).toBe(false);
+    expect(editor.findAll("select")).toHaveLength(3);
+    const headers = wrapper.findAll("th").map(header => header.text());
+    for (const [heading, key] of [["Name", "display_name"], ["MTU", "mtu"], ["IPv4", "addresses"], ["IPv6", "ipv6_addresses"]]) {
+      expect(editor.findAll("td")[headers.indexOf(heading!)]!.getComponent(FieldInput).props("field").key).toBe(key);
+    }
+    expect(wrapper.text()).not.toContain("Saved interface notes");
+    expect(editor.findAllComponents(FieldInput).every(field => field.props("field").kind !== "lines")).toBe(true);
+    await editor.get('select[aria-label="Role"]').setValue("wan");
+    const admin = editor.get('select[aria-label="Admin state"]');
+    expect((admin.element as HTMLSelectElement).value).toBe("true");
+    await admin.setValue("false");
+    editor.findAllComponents(FieldInput).find(field => field.props("field").key === "display_name")!.vm.$emit("update:modelValue", "Office uplink");
+    editor.vm.$emit("change", "mtu", 1450);
+    editor.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.10.0.1/24");
+    await flushPromises(); await editor.get("form").trigger("submit");
+    expect(store.draft?.interfaces[0]).toEqual({ ...base, role: "wan", up: false, metadata: { display_name: "Office uplink", description: "Saved interface notes" }, mtu: 1450, addresses: ["10.10.0.1/24", "2001:db8::10/64"] });
+    expect(wrapper.find("tbody").text()).toContain("1450");
+    expect(store.state.data!.desired.interfaces[0]!.up).toBe(true);
+    expect(store.draft?.dns).toEqual(store.state.data!.desired.dns);
+    expect(wrapper.findComponent(PhysicalInterfaceEditor).exists()).toBe(false);
+    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Changes");
+    expect(wrapper.find("tbody").text()).not.toContain("Unsaved");
+    expect(wrapper.find("tbody tr").findAll("td")).toHaveLength(7);
+  });
+  it("switches inline IPv4 to DHCP without removing IPv6 or existing client options", async () => {
+    const store = useControllerStore(); store.state.data!.desired.interfaces[0]!.kind = "ethernet";
+    const wrapper = await render(InterfacesView, "/interfaces");
+    await wrapper.find("tbody tr").trigger("click");
+    const editor = wrapper.getComponent(PhysicalInterfaceEditor);
+    await editor.get('select[aria-label="IPv4 configuration"]').setValue("dhcp");
+    const address = editor.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!;
+    expect(address.props("modelValue")).toBe("DHCP");
+    expect(address.props("field").disabled).toBe(true);
+    await flushPromises(); await editor.get("form").trigger("submit");
+    expect(store.draft?.interfaces[0]!.addresses).toEqual(["2001:db8::10/64"]);
+    expect(store.draft?.dhcp_clients?.lab0).toMatchObject({ route_metric: 0, use_domains: "no" });
+    expect(store.draft?.interfaces[0]!.role).toBe("lan");
+    expect(wrapper.find("tbody").text()).toContain("DHCP");
+  });
+  it("edits IPv6 in its own cell, validates in place, and cancels without a popup", async () => {
+    const store = useControllerStore(); store.state.data!.desired.interfaces[0]!.kind = "ethernet";
+    const confirm = vi.spyOn(window, "confirm");
+    const wrapper = await render(InterfacesView, "/interfaces");
+    await wrapper.find("tbody tr").trigger("click");
+    const editor = wrapper.getComponent(PhysicalInterfaceEditor);
+    const ipv6 = editor.findAllComponents(FieldInput).find(field => field.props("field").key === "ipv6_addresses")!;
+    ipv6.vm.$emit("update:modelValue", "2001:db8::20/64");
+    await flushPromises(); await editor.get("form").trigger("submit");
+    expect(store.draft?.interfaces[0]!.addresses).toEqual(["192.0.2.10/24", "2001:db8::20/64"]);
+    await wrapper.find("tbody tr").trigger("click");
+    const invalid = wrapper.getComponent(PhysicalInterfaceEditor);
+    invalid.vm.$emit("change", "mtu", 1);
+    await flushPromises(); await invalid.get("form").trigger("submit");
+    expect(wrapper.get('[role="alert"]').text()).not.toBe("");
+    expect(store.draft?.interfaces[0]!.mtu).toBe(1500);
+    await invalid.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(wrapper.findComponent(PhysicalInterfaceEditor).exists()).toBe(false);
+    expect(store.editorDirty).toBe(false);
+    wrapper.unmount();
+  });
+  it("excludes managed and unmanaged VLANs and dummy links from Physical interfaces", async () => {
+    const store = useControllerStore(), base = config().interfaces[0]!;
+    store.state.data!.desired.interfaces.push(
+      { ...base, name: "eth0", kind: "ethernet" },
+      { ...base, name: "vlan30", kind: "vlan", vlan: { parent: "eth0", id: 30 } },
+      { ...base, name: "wg0", kind: "wireguard", wireguard: { key_ref: "key", listen_port: 51820, peers: [] } },
+    );
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
+      ...store.state.data!.desired.interfaces.map((link, index) => ({ name: link.name, kind: link.name === "vlan30" ? "unknown" : link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: link.addresses, ownership: "managed" as const })),
+      { name: "unmanaged20", kind: "vlan", index: 20, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged" },
+    ]);
+    const wrapper = await render(InterfacesView, "/interfaces");
+    expect(wrapper.findAll("tbody tr")).toHaveLength(2);
+    expect(wrapper.find("tbody").text()).toContain("eth0");
+    expect(wrapper.find("tbody").text()).toContain("wg0");
+    for (const name of ["lab0", "vlan30", "unmanaged20"]) expect(wrapper.find("tbody").text()).not.toContain(name);
+    expect(wrapper.findAll("button").some(button => button.text() === "Add interface")).toBe(false);
+    expect(wrapper.find('button[aria-label="Edit / stage"]').exists()).toBe(true);
+  });
+  it("creates VLANs on their dedicated page without altering other interfaces", async () => {
+    const store = useControllerStore(), before = config(), submit = vi.spyOn(api, "submitPackage");
+    before.interfaces[0] = { ...before.interfaces[0]!, name: "eth0", kind: "ethernet" };
+    store.state.data!.desired.interfaces = before.interfaces;
+    const wrapper = await render(VLANsView, "/vlans");
+    expect(wrapper.text()).not.toContain("lab0");
+    await wrapper.findAll("button").find(button => button.text() === "Add VLAN")!.trigger("click");
+    const fields = wrapper.findAllComponents(FieldInput);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.find('tbody tr[aria-label="VLAN editor"]').exists()).toBe(true);
+    expect(wrapper.text()).not.toContain("No configured resources.");
+    expect(fields.map(field => field.props("field").key)).toEqual(["name", "id", "mtu", "parent", "addresses"]);
+    fields.find(field => field.props("field").key === "name")!.vm.$emit("update:modelValue", "vlan30");
+    fields.find(field => field.props("field").key === "id")!.vm.$emit("update:modelValue", 30);
+    await flushPromises();
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "parent")!.vm.$emit("update:modelValue", "eth0");
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.interfaces).toHaveLength(2);
+    expect(store.draft?.interfaces[0]).toEqual(before.interfaces[0]);
+    expect(store.draft?.interfaces[1]).toMatchObject({ name: "vlan30", kind: "vlan", role: "unassigned", mtu: 1500, up: true, addresses: [], vlan: { parent: "eth0", id: 30 } });
+    expect(store.draft?.routes).toEqual(before.routes);
+    expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Name", "VLAN ID", "MTU", "Parent", "IPv4", "Actions"]);
+    expect(wrapper.findAll("tbody td").map(cellValue)).toContain("30");
+    expect(wrapper.find('a[href="/vlans/vlan30"]').exists()).toBe(false);
+    expect(cellValue(wrapper.get("tbody tr td"))).toBe("vlan30");
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.30.0.1/24");
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.interfaces[1]!.addresses).toEqual(["10.30.0.1/24"]);
+    expect(wrapper.find("tbody").text()).toContain("10.30.0.1/24");
+    expect(submit).not.toHaveBeenCalled();
+  });
+  it("offers only physical Ethernet interfaces as VLAN parents", async () => {
+    const store = useControllerStore(), base = config().interfaces[0]!;
+    store.draft = config();
+    store.draft!.interfaces.push(
+      { ...base, name: "eth0", kind: "ethernet" },
+      { ...base, name: "vlan30", kind: "vlan", vlan: { parent: "eth0", id: 30 } },
+      { ...base, name: "wg0", kind: "wireguard", wireguard: { key_ref: "key", listen_port: 51820, peers: [] } },
+    );
+    store.runtime.data!.parent_interfaces = [
+      { name: "eth0", kind: "ethernet", available: true },
+      { name: "eth1", kind: "ethernet", available: true },
+      { name: "eth2", kind: "ethernet", available: false },
+      { name: "lo", kind: "loopback", available: true },
+      { name: "veth0", kind: "veth", available: true },
+      { name: "runtime-vlan", kind: "vlan", available: true },
+      { name: "unknown0", available: true },
+      { name: "lab0", kind: "ethernet", available: true },
+    ];
+    const wrapper = await render(VLANsView, "/vlans");
+    await wrapper.findAll("button").find(button => button.text() === "Add VLAN")!.trigger("click");
+    const parent = wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "parent")!;
+    expect(parent.props("field").choices).toEqual([
+      { title: "eth0", value: "eth0" },
+      { title: "eth1", value: "eth1" },
+    ]);
+    expect(parent.findAll("option").map(option => option.attributes("value"))).toEqual(["", "eth0", "eth1"]);
+    wrapper.unmount();
+  });
+  it("keeps the global repair action only on service maintenance", async () => {
+    for (const page of [DHCPRelayView, NTPView, SyslogView, VnStatView, SoftflowdView, GatewayMonitorsView]) {
+      const wrapper = await render(page, "/services/test");
+      expect(wrapper.findComponent(ServiceRepair).exists()).toBe(false);
+      wrapper.unmount();
+    }
+    const wrapper = await render(ServiceMaintenanceView, "/services/maintenance");
+    expect(wrapper.findAllComponents(ServiceRepair)).toHaveLength(1);
+    expect(wrapper.text()).toContain("Reconcile all managed services");
+  });
+  it("edits VLAN behavior at its original shared-config index and retains immutable identity", async () => {
+    const store = useControllerStore(), base = config().interfaces[0]!;
+    const metadata = { display_name: "Guest network", description: "Saved VLAN notes" };
+    store.state.data!.desired.interfaces.push({ ...base, name: "vlan30", kind: "vlan", addresses: ["2001:db8:30::1/64"], vlan: { parent: "lab0", id: 30 }, metadata });
+    const wrapper = await render(VLANsView, "/vlans");
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    const fields = wrapper.findAllComponents(FieldInput);
+    expect(fields.map(field => field.props("field").key)).toEqual(["name", "id", "mtu", "parent", "addresses"]);
+    expect(fields.filter(field => ["id", "parent"].includes(field.props("field").key)).every(field => field.props("field").disabled)).toBe(true);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.findAll('tbody tr')).toHaveLength(1);
+    expect(wrapper.text()).not.toContain("Saved VLAN notes");
+    fields.find(field => field.props("field").key === "mtu")!.vm.$emit("update:modelValue", 1450);
+    fields.find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.30.0.1/24, 10.30.0.2/24");
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.interfaces[0]).toEqual(base);
+    expect(store.draft?.interfaces[1]).toEqual({ ...store.state.data!.desired.interfaces[1], mtu: 1450, addresses: ["10.30.0.1/24", "10.30.0.2/24", "2001:db8:30::1/64"] });
+  });
+  it("keeps VLAN IPv4 validation inline without changing saved settings", async () => {
+    const store = useControllerStore(), base = config().interfaces[0]!;
+    store.state.data!.desired.interfaces.push({ ...base, name: "vlan30", kind: "vlan", addresses: ["2001:db8:30::1/64"], vlan: { parent: "lab0", id: 30 } });
+    const wrapper = await render(VLANsView, "/vlans");
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    const address = wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!;
+    expect(address.props("field").disabled).toBeFalsy();
+    address.vm.$emit("update:modelValue", "invalid");
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.get('[role="alert"]').text()).not.toBe("");
+    expect(store.draft).toBeNull();
+    address.vm.$emit("update:modelValue", "2001:db8::1/64");
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.get('[role="alert"]').text()).toContain("Enter IPv4");
+    address.vm.$emit("update:modelValue", "10.30.0.1/24");
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.dhcp_clients?.vlan30).toBeUndefined();
+    expect(store.draft?.interfaces[1]!.addresses).toEqual(["10.30.0.1/24", "2001:db8:30::1/64"]);
+    expect(store.state.data!.desired.interfaces[1]!.addresses).toEqual(["2001:db8:30::1/64"]);
+    wrapper.unmount();
+  });
+  it("warns about VLAN deletion dependencies without silently removing them", async () => {
+    const store = useControllerStore(), base = config().interfaces[0]!, submit = vi.spyOn(api, "submitPackage");
+    store.state.data!.desired.interfaces.push(
+      { ...base, name: "vlan30", kind: "vlan", addresses: [], vlan: { parent: "lab0", id: 30 } },
+      { ...base, name: "vlan40", kind: "vlan", addresses: [], vlan: { parent: "vlan30", id: 40 } },
+    );
+    store.state.data!.desired.routes.push({ destination: "10.30.0.0/24", interface: "vlan30", table: 10000, metric: 1 });
+    store.state.data!.desired.dns = { vlan30: { servers: ["192.0.2.53"], domains: [] } };
+    const wrapper = await render(VLANsView, "/vlans");
+    await wrapper.findAll("tbody tr").find(row => row.text().includes("vlan30"))!.get('button[aria-label="Delete"]').trigger("click");
+    expect(wrapper.text()).toContain("Child VLAN vlan40");
+    expect(wrapper.text()).toContain("Route 10.30.0.0/24");
+    await wrapper.findAll("button").find(button => button.text() === "Stage deletion")!.trigger("click");
+    expect(store.draft?.interfaces.map(link => link.name)).toEqual(["lab0", "vlan40"]);
+    expect(store.draft?.routes).toEqual(store.state.data!.desired.routes);
+    expect(store.draft?.dns?.vlan30).toBeUndefined();
+    expect(store.validation.length).toBeGreaterThan(0);
+    expect(store.state.data!.desired.interfaces).toHaveLength(3);
+    expect(submit).not.toHaveBeenCalled();
+  });
+  it("protects unstaged inline VLAN input when adding again or cancelling", async () => {
+    const wrapper = await render(VLANsView, "/vlans");
+    const add = wrapper.findAll("button").find(button => button.text() === "Add VLAN")!;
+    await add.trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "name")!.vm.$emit("update:modelValue", "vlan30");
+    await flushPromises();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await add.trigger("click");
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "name")!.props("modelValue")).toBe("vlan30");
+      confirm.mockReturnValue(true);
+      await wrapper.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+      expect(wrapper.find('[aria-label="VLAN editor"]').exists()).toBe(false);
+      expect(useControllerStore().draft).toBeNull();
+      expect(useControllerStore().editorDirty).toBe(false);
+    } finally { confirm.mockRestore(); wrapper.unmount(); }
+  });
+  it("keeps WireGuard protocol settings on WireGuard while Interfaces preserves them", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces.push({ name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: ["10.0.0.1/24"], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "tunnel-key", listen_port: 51820, peers: [] } });
+    const wrapper = await render(InterfaceDetailView, "/interfaces/wg0", { name: "wg0" });
+    expect(wrapper.get('button[aria-label="Edit WireGuard wg0"]').attributes("to")).toBe("/wireguard/wg0");
+    await wrapper.findAll("tbody tr").find(row => row.text().includes("wg0"))!.get('button[aria-label="Edit / stage"]').trigger("click");
+    const fields = wrapper.findAllComponents(FieldInput);
+    expect(fields.some(field => field.props("field").key === "wireguard")).toBe(false);
+    expect(fields.some(field => field.props("field").key === "dhcp_relay")).toBe(false);
+    fields.find(field => field.props("field").key === "mtu")!.vm.$emit("update:modelValue", 1450);
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.interfaces.find(link => link.kind === "wireguard")).toMatchObject({ mtu: 1450, wireguard: { key_ref: "tunnel-key", listen_port: 51820, peers: [] } });
+  });
+  it("edits only tunnel protocol settings on the WireGuard page", async () => {
+    const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
+    const tunnel = { name: "wg0", kind: "wireguard" as const, role: "wan" as const, mtu: 1420, up: true, addresses: ["10.0.0.1/24"], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "tunnel-key", listen_port: 51820, peers: [] } };
+    store.state.data!.desired.interfaces.push(tunnel);
+    store.state.data!.desired.dns = { wg0: { servers: ["192.0.2.53"], domains: [] } };
+    const wrapper = await render(WireGuardView, "/wireguard");
+    expect(wrapper.findAll("th").map(header => header.text())).toContain("Listen port");
+    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("MTU");
+    expect(wrapper.find('button[aria-label="Delete"]').exists()).toBe(false);
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    const fields = wrapper.findAllComponents(FieldInput);
+    for (const key of ["mtu", "role", "addresses", "resolver_enabled", "dhcp_relay"]) expect(fields.some(field => field.props("field").key === key)).toBe(false);
+    fields.find(field => field.props("field").key === "wireguard")!.vm.$emit("update:modelValue", { ...tunnel.wireguard, listen_port: 51821 });
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.interfaces.find(link => link.name === "wg0")).toEqual({ ...tunnel, wireguard: { ...tunnel.wireguard, listen_port: 51821 } });
+    expect(store.draft?.dns).toEqual(store.state.data!.desired.dns);
+    expect(store.editorDirty).toBe(false); expect(submit).not.toHaveBeenCalled();
+  });
   it("stages host-input rules separately while preserving forwarding and other settings", async () => {
     const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
     store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ protocol: "udp", destination_ports: [68], action: "accept" }] }] };
@@ -59,7 +1156,7 @@ describe("October 17 frontend workflows", () => {
       { interface: "lab0", rules: [{ protocol: "tcp", destination_ports: ["443", "80"], action: "accept" }, { action: "drop" }] },
     ]);
     await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Stage changes")!.trigger("click");
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(store.draft?.firewall.input?.interfaces[0]!.rules).toEqual([
       { protocol: "tcp", destination_ports: [443, 80], action: "accept" }, { action: "drop" },
     ]);
@@ -74,7 +1171,7 @@ describe("October 17 frontend workflows", () => {
     await wrapper.findAll("button").find(button => button.text() === "Edit input policy")!.trigger("click");
     wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "interfaces")!.vm.$emit("update:modelValue", [{ interface: "missing0", rules: [] }]);
     await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Stage changes")!.trigger("click");
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("unique managed ingress interface");
     expect(store.editorDirty).toBe(true);
   });
@@ -105,19 +1202,98 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.findAll("button").filter(button => button.text() === "Manage this interface")).toHaveLength(1);
     await wrapper.findAll("button").find(button => button.text() === "Manage this interface")!.trigger("click");
     const fields = wrapper.findAllComponents(FieldInput);
-    expect(fields.find(field => field.props("field").key === "addresses")!.props("modelValue")).toEqual([]);
-    expect(fields.find(field => field.props("field").key === "role")!.props("modelValue")).toBeUndefined();
-    fields.find(field => field.props("field").key === "role")!.vm.$emit("update:modelValue", "unassigned");
-    fields.find(field => field.props("field").key === "address_mode")!.vm.$emit("update:modelValue", "dhcp");
-    fields.find(field => field.props("field").key === "resolver_enabled")!.vm.$emit("update:modelValue", true);
-    fields.find(field => field.props("field").key === "resolver")!.vm.$emit("update:modelValue", { servers: ["192.0.2.53"], domains: [{ name: ".", route_only: true }] });
+    expect(fields.find(field => field.props("field").key === "addresses")!.props("modelValue")).toBe("");
+    expect(wrapper.getComponent(PhysicalInterfaceEditor).props("form").addresses).toEqual([]);
+    expect((wrapper.get('select[aria-label="Role"]').element as HTMLSelectElement).value).toBe("unassigned");
+    await wrapper.get('select[aria-label="IPv4 configuration"]').setValue("dhcp");
     await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Stage changes")!.trigger("click");
+    await wrapper.getComponent(PhysicalInterfaceEditor).get("form").trigger("submit");
     expect(store.draft?.interfaces.find(item => item.name === "eth0")).toMatchObject({ kind: "ethernet", role: "unassigned", addresses: [] });
     expect(store.draft?.dhcp_clients?.eth0).toMatchObject({ use_domains: "no", route_metric: 0 });
-    expect(store.draft?.dns?.eth0?.servers).toEqual(["192.0.2.53"]);
+    expect(store.draft?.dns?.eth0).toBeUndefined();
     expect(store.state.data!.desired.interfaces).toHaveLength(1);
     expect(submit).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("shows physical inventory without lo and never stages discovered DHCP addresses", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0] = { ...config().interfaces[0]!, kind: "ethernet", addresses: [], metadata: { display_name: "Office", description: "" } };
+    store.state.data!.desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    const link = { name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: ["192.0.2.99/24", "2001:db8::99/64"], ownership: "managed" as const };
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
+      link,
+      { ...link, name: "lo", kind: "loopback", ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] },
+      { ...link, name: "spare0", ownership: "unmanaged", up: false, addresses: [] },
+      { ...link, name: "br0", kind: "bridge", ownership: "unmanaged", addresses: ["198.51.100.1/24"] },
+    ]);
+    const wrapper = await render(InterfacesView, "/interfaces");
+    expect(wrapper.find("select").exists()).toBe(false);
+    expect(wrapper.find('[aria-label="Refresh interfaces"]').exists()).toBe(false);
+    const headers = wrapper.findAll("th").map(header => header.text());
+    const active = headers.indexOf("IPv4");
+    expect(headers).toEqual(["Name", "Role", "Admin state", "MTU", "IPv4", "IPv6", "DHCP", "Actions"]);
+    const rows = wrapper.findAll("tbody tr"); expect(rows).toHaveLength(3);
+    expect(rows[0]!.text()).toContain("Office"); expect(rows[0]!.text()).toContain("lab0");
+    expect(rows[0]!.findAll("td")[active]!.text()).toContain("192.0.2.99/24");
+    expect(rows[0]!.findAll("td")[active]!.text()).not.toContain("2001:db8::99/64");
+    expect(rows[0]!.findAll(".status-chip").map(chip => [chip.text(), chip.attributes("data-color")])).toEqual([
+      ["LAN", "info"], ["Up", "success"],
+    ]);
+    expect(wrapper.find("tbody").text()).not.toContain("127.0.0.1/8");
+    expect(rows[1]!.text()).toContain("Down"); expect(rows[1]!.text()).toContain("Manage this interface");
+    expect(rows[1]!.findAll(".status-chip").map(chip => [chip.text(), chip.attributes("data-color")])).toEqual([
+      ["—", "default"], ["Down", "error"],
+    ]);
+    expect(rows[1]!.findAll("td")[active]!.text()).toBe("None");
+    expect(rows[2]!.find("td").attributes("title")).toContain("Bridge"); expect(rows[2]!.find("button").exists()).toBe(false);
+    await rows[0]!.trigger("click");
+    const editor = wrapper.getComponent(PhysicalInterfaceEditor);
+    expect(editor.props("form").addresses).toEqual([]);
+    const address = editor.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!;
+    expect(address.props("modelValue")).toBe("192.0.2.99/24");
+    expect(address.props("field").disabled).toBe(true);
+    address.vm.$emit("update:modelValue", "198.51.100.2/24");
+    await flushPromises();
+    expect(editor.props("form").addresses).toEqual([]);
+    editor.vm.$emit("change", "display_name", "Updated office"); await flushPromises();
+    await editor.get("form").trigger("submit");
+    expect(store.draft?.interfaces[0]!.addresses).toEqual([]);
+    expect(store.draft?.interfaces[0]!.metadata).toEqual({ display_name: "Updated office", description: "" });
+    expect(store.draft?.dhcp_clients?.lab0).toEqual(store.state.data!.desired.dhcp_clients.lab0);
+    wrapper.unmount();
+  });
+  it("shows live addresses instead of configured static addresses and distinguishes interface role chips", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.role = "wan";
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{
+      name: "lab0", kind: "dummy", index: 2, mac: null, mtu: 1500, up: true,
+      addresses: ["192.0.2.99/24"], ownership: "managed",
+    }]);
+    const wrapper = await render(LoopbacksView, "/loopbacks");
+    try {
+      expect(wrapper.get("tbody").text()).toContain("192.0.2.99/24");
+      expect(wrapper.get("tbody").text()).not.toContain("192.0.2.10/24");
+      expect(wrapper.get("tbody").text()).not.toContain("2001:db8::10/64");
+      expect(wrapper.findAll(".status-chip").find(chip => chip.text() === "WAN")!.attributes("data-color")).toBe("secondary");
+      const draft = config(); draft.interfaces[0]!.role = "unassigned"; store.stage(draft);
+      await flushPromises();
+      expect(wrapper.findAll(".status-chip").find(chip => chip.text() === "Unassigned")!.attributes("data-color")).toBe("default");
+      expect(store.draft!.interfaces[0]!.addresses).toEqual(config().interfaces[0]!.addresses);
+    } finally { wrapper.unmount(); }
+  });
+  it("keeps discovered inventory visible without configuration or runtime and retains stale rows", async () => {
+    const store = useControllerStore();
+    store.state.data = null; store.state.error = "Configuration denied";
+    store.runtime.data = null; store.runtime.error = "Runtime denied";
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] }]);
+    const wrapper = await render(LoopbacksView, "/loopbacks");
+    expect(wrapper.find("tbody").text()).toContain("::1/128");
+    expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+    vi.mocked(api.getDiscoveredInterfaces).mockRejectedValue(new Error("Discovery failed"));
+    await wrapper.getComponent(InterfaceInventory).vm.refresh(); await flushPromises();
+    expect(wrapper.text()).toContain("inventory stale");
+    expect(wrapper.find("tbody").text()).toContain("127.0.0.1/8");
+    expect(wrapper.text()).not.toContain("No discovered interfaces match");
     wrapper.unmount();
   });
   it("preserves discovery errors without repeating DHCP lease diagnostics", async () => {
@@ -141,7 +1317,7 @@ describe("October 17 frontend workflows", () => {
     fields.find(item => item.props("field").key === "enabled")!.vm.$emit("update:modelValue", true);
     fields.find(item => item.props("field").key === "servers")!.vm.$emit("update:modelValue", ["clock.example", "::1"]);
     await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Stage service changes")!.trigger("click");
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(store.draft?.ntp).toEqual({ enabled: true, servers: ["clock.example", "::1"] });
     expect(store.draft?.interfaces).toEqual(config().interfaces);
     expect(store.draft?.syslog).toEqual(config().syslog);
@@ -153,7 +1329,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).not.toContain("Operator prerequisites");
     wrapper.findAllComponents(FieldInput).find(item => item.props("field").key === "servers")!.vm.$emit("update:modelValue", [{ host: "UPPER.example", transport: "tls", port: 6514 }]);
     await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Stage service changes")!.trigger("click");
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("lowercase ASCII DNS");
   });
   it("renders both vnStat scopes as diagnostic paths, not traffic history", async () => {
@@ -164,6 +1340,29 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.find("tbody").text()).toContain("vnstat-host"); expect(wrapper.find("tbody").text()).toContain("vnstat-managed");
     expect(wrapper.text()).toContain("/host-db"); expect(wrapper.text()).toContain("/managed-db");
     expect(wrapper.text()).toContain("inventory failed"); expect(wrapper.text()).not.toContain("Operator prerequisites");
+  });
+  it("uses one monitor table with expandable active statistics and a single empty state", async () => {
+    const store = useControllerStore();
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+    expect(wrapper.findAll("table")).toHaveLength(1);
+    expect(wrapper.text()).toContain("No configured resources.");
+    expect(wrapper.text()).not.toContain("No gateway monitor records available.");
+    const sample = gatewayStatistics(); sample.collected_at = new Date().toISOString();
+    vi.mocked(api.getGatewayStatistics).mockResolvedValue({ sample: statistics().sample, monitors: [sample] });
+    store.stage({ ...config(), gateway_monitors: [monitor()] });
+    await store.refreshGatewayStatistics(); await flushPromises();
+    const toggle = wrapper.get('[aria-label="Live statistics for uplink"]');
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find('[aria-label="uplink live statistics"]').exists()).toBe(false);
+    await toggle.trigger("click");
+    expect(wrapper.findAll("table")).toHaveLength(1);
+    expect(wrapper.get('[aria-label="uplink live statistics"]').text()).toContain("Mean RTT");
+    expect(wrapper.get('[aria-label="uplink live statistics"]').text()).toContain("unknown");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    await toggle.trigger("click");
+    expect(wrapper.find('[aria-label="uplink live statistics"]').exists()).toBe(false);
+    expect(store.gatewayMonitoring).toBe(true);
+    wrapper.unmount(); expect(store.gatewayMonitoring).toBe(false);
   });
   it("keeps missing gateway samples unknown and old cached health stale", async () => {
     const store = useControllerStore(), sample = gatewayStatistics();
@@ -206,19 +1405,22 @@ describe("October 17 frontend workflows", () => {
     await wrapper.findAll("button").find(button => button.text() === "Reconcile all managed services")!.trigger("click");
     for (const permission of ["gateway_monitors.write", "ntp.write", "syslog.write", "vnstat.write"]) expect(wrapper.text()).toContain(permission);
   });
-  it("stages explicit false in both firewall modes without adding implicit rows", async () => {
+  it("stages global ICMP from General settings in both firewall modes without adding implicit rows", async () => {
     const store = useControllerStore();
     for (const policyMode of [false, true]) {
       store.draft = null; store.baseline = null;
       store.state.data = state();
       if (policyMode) { store.state.data.desired.firewall.rules = []; store.state.data.desired.firewall.policies = { hosts: [], interfaces: [] }; }
-      const wrapper = await render(FirewallView, "/firewall");
+      const firewall = await render(FirewallView, "/firewall");
+      expect(firewall.text()).not.toContain("Allow all IPv4 ICMP");
+      firewall.unmount();
+      const wrapper = await render(SettingsView, "/settings/general");
       expect(wrapper.text()).not.toContain("Displayed committed ICMP exception");
-      const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.props("label") === "Allow all IPv4 ICMP");
+      const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-icmp");
       expect(toggle).toBeDefined();
       toggle!.vm.$emit("update:modelValue", false);
       await wrapper.get("button").trigger("blur");
-      await wrapper.findAll("button").find(button => button.text() === "Stage ICMP change")!.trigger("click");
+      await wrapper.get("form").trigger("submit");
       const staged = configSchema.parse(store.draft);
       expect(staged.firewall.allow_all_icmp).toBe(false);
       expect(staged.firewall.policies).toEqual(store.state.data.desired.firewall.policies);
@@ -226,35 +1428,132 @@ describe("October 17 frontend workflows", () => {
       wrapper.unmount();
     }
   });
-  it("shows all labeled roles without filters and requires explicit create selection", async () => {
-    const store = useControllerStore(), initial = config().interfaces[0]!;
-    store.state.data!.desired.interfaces.push({ ...initial, name: "edge0", role: "wan" });
+  it("preserves an existing shared draft when staging general settings", async () => {
+    const store = useControllerStore(), draft = config();
+    draft.routes[0]!.metric = 42;
+    store.stage(draft);
+    const submit = vi.spyOn(api, "submitPackage");
+    const wrapper = await render(SettingsView, "/settings/general");
+    await wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-icmp")!.vm.$emit("update:modelValue", false);
+    await wrapper.get("form").trigger("submit");
+    expect(store.draft?.routes[0]?.metric).toBe(42);
+    expect(store.draft?.firewall.allow_all_icmp).toBe(false);
+    expect(store.state.data!.desired.firewall.allow_all_icmp).toBe(true);
+    expect(submit).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("disables general settings without configuration or while writes are frozen and surfaces staging errors", async () => {
+    const store = useControllerStore();
+    const wrapper = await render(SettingsView, "/settings/general");
+    store.busy = true; await flushPromises();
+    expect(wrapper.findComponent(stubs.VSwitch).props("disabled")).toBe(true);
+    expect(wrapper.text()).toContain("frozen");
+    store.busy = false;
+    vi.spyOn(store, "stage").mockImplementation(() => { throw new Error("Unable to stage test setting"); });
+    await flushPromises();
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.text()).toContain("Unable to stage test setting");
+    store.state.data = null; await flushPromises();
+    expect(wrapper.findComponent(stubs.VSwitch).props("disabled")).toBe(true);
+    expect(wrapper.text()).toContain(store.readOnlyReason);
+    wrapper.unmount();
+  });
+  it("saves the global IPv6 setting above ICMP and preserves other draft settings", async () => {
+    const store = useControllerStore(), initial = config();
+    initial.interfaces.forEach(link => { link.addresses = link.addresses.filter(address => !address.includes(":")); });
+    store.state.data!.desired = initial;
+    const draft = structuredClone(initial); draft.routes[0]!.metric = 42; store.stage(draft);
+    const submit = vi.spyOn(api, "submitPackage");
+    const wrapper = await render(SettingsView, "/settings/general");
+    const toggles = wrapper.findAllComponents(stubs.VSwitch);
+    expect(toggles.map(toggle => toggle.attributes("id"))).toEqual(["general-ipv6", "general-icmp"]);
+    expect(wrapper.get('label[for="general-ipv6"]').text()).toBe("Enable IPv6");
+    expect(wrapper.get('label[for="general-icmp"]').text()).toBe("Allow all IPv4 ICMP");
+    expect(store.ipv6Enabled).toBe(true);
+    toggles[0]!.vm.$emit("update:modelValue", false);
+    await wrapper.get("form").trigger("submit");
+    expect(store.draft?.ipv6_enabled).toBe(false); expect(store.ipv6Enabled).toBe(false);
+    expect(store.draft?.routes[0]?.metric).toBe(42);
+    expect(store.state.data!.desired.ipv6_enabled).toBeUndefined();
+    expect(submit).not.toHaveBeenCalled();
+    toggles[0]!.vm.$emit("update:modelValue", true);
+    await wrapper.get("form").trigger("submit");
+    expect(store.ipv6Enabled).toBe(true);
+    wrapper.unmount();
+  });
+  it("keeps IPv6 enabled when disabling would invalidate saved IPv6 settings", async () => {
+    const store = useControllerStore(), before = structuredClone(store.state.data!.desired);
+    const wrapper = await render(SettingsView, "/settings/general");
+    wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-ipv6")!.vm.$emit("update:modelValue", false);
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.text()).toContain("Remove IPv6 settings before disabling IPv6");
+    expect(store.draft).toBeNull(); expect(store.ipv6Enabled).toBe(true);
+    expect(store.state.data!.desired).toEqual(before);
+    wrapper.unmount();
+  });
+  it("hides IPv6 columns and discovered addresses globally and restores them when enabled", async () => {
+    const store = useControllerStore(), initial = config(), original = initial.interfaces[0]!;
+    initial.ipv6_enabled = false;
+    initial.interfaces = [{ ...original, kind: "ethernet", addresses: original.addresses.filter(address => !address.includes(":")) }];
+    store.state.data!.desired = initial;
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
+      { name: original.name, kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, ownership: "managed", addresses: ["192.0.2.99/24", "fe80::1/64"] },
+      { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] },
+    ]);
+    const physical = await render(InterfacesView, "/interfaces");
+    expect(physical.findAll("th").map(header => header.text())).not.toContain("IPv6");
+    await physical.get('[aria-label="Edit / stage"]').trigger("click");
+    expect(physical.getComponent(PhysicalInterfaceEditor).findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("ipv6_addresses");
+    store.stage({ ...initial, ipv6_enabled: true }); await flushPromises();
+    expect(physical.findAll("th").map(header => header.text())).toContain("IPv6");
+    expect(physical.getComponent(PhysicalInterfaceEditor).findAllComponents(FieldInput).map(field => field.props("field").key)).toContain("ipv6_addresses");
+    physical.unmount();
+    store.draft = null;
+    const loopbacks = await render(LoopbacksView, "/loopbacks");
+    expect(loopbacks.text()).toContain("127.0.0.1/8"); expect(loopbacks.text()).not.toContain("::1/128");
+    loopbacks.unmount();
+  });
+  it("shows physical interface roles without filters or an Add interface action", async () => {
+    const store = useControllerStore(), initial = { ...config().interfaces[0]!, kind: "ethernet" as const };
+    store.state.data!.desired.interfaces = [initial, { ...initial, name: "edge0", role: "wan" }];
     const wrapper = await render(InterfacesView, "/interfaces");
     expect(wrapper.text()).toContain("LAN"); expect(wrapper.text()).toContain("WAN");
     expect(wrapper.findAllComponents(stubs.VSelect).some(item => item.props("label") === "Role")).toBe(false);
     expect(wrapper.find("tbody").text()).toContain("edge0");
     expect(wrapper.find("tbody").text()).toContain("lab0");
-    await wrapper.findAll("button").find(button => button.text() === "Add interface")!.trigger("click");
-    const role = wrapper.findAllComponents(FieldInput).find(item => item.props("field").key === "role")!;
-    expect(role.props("modelValue")).toBeUndefined();
-    await wrapper.findAll("button").find(button => button.text() === "Stage changes")!.trigger("click");
-    expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("editor.role");
+    expect(wrapper.findAll("button").some(button => button.text() === "Add interface")).toBe(false);
+  });
+  it("keeps VLAN validation inline without requiring additional settings", async () => {
+    const store = useControllerStore(), wrapper = await render(VLANsView, "/vlans");
+    await wrapper.findAll("button").find(button => button.text() === "Add VLAN")!.trigger("click");
+    expect(wrapper.findAllComponents(FieldInput).some(item => item.props("field").key === "role")).toBe(false);
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft).toBeNull();
+    expect(wrapper.find('tbody [role="alert"]').exists()).toBe(true);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.findAllComponents(FieldInput).find(item => item.props("field").key === "name")!.props("errors")?.["editor.name"]).toBeDefined();
   });
   it("shows unsaved interfaces automatically without duplicate discovery, headers, or JSON", async () => {
     const store = useControllerStore(), draft = config();
+    store.state.data!.desired.interfaces[0]!.kind = "ethernet";
+    draft.interfaces[0]!.kind = "ethernet";
     draft.interfaces[0]!.addresses = ["10.10.0.1/24"];
     store.stage(draft);
-    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lab0", kind: "dummy", index: 2, mac: null, mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed" }]);
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed" }]);
     const wrapper = await render(InterfacesView, "/interfaces"); await flushPromises();
     expect(wrapper.findAll("table")).toHaveLength(1);
     expect(wrapper.findAll("h1")).toHaveLength(0);
-    expect(wrapper.find("tbody").text()).toContain("10.10.0.1/24");
-    expect(wrapper.find("tbody").text()).not.toContain("192.0.2.10/24");
+    const cells = wrapper.find("tbody tr").findAll("td"), headers = wrapper.findAll("th").map(header => header.text());
+    expect(cells[headers.indexOf("IPv4")]!.text()).toBe("10.10.0.1/24");
+    expect(headers).not.toContain("Active Addresses");
+    expect(wrapper.text()).not.toContain("192.0.2.10/24");
     expect(wrapper.find("tbody").text()).toContain("Unsaved");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
     expect(wrapper.text()).not.toMatch(/Show staged draft|Start \/ show|Discovered interfaces|DHCPv4 leases|Full configured|Staged state/);
     expect(wrapper.find("tbody").text()).not.toContain("[");
     expect(wrapper.find("tbody").text()).not.toContain("{");
+    await wrapper.get("tbody tr").trigger("click");
+    expect(wrapper.getComponent(PhysicalInterfaceEditor).props("form").addresses).toEqual(["10.10.0.1/24"]);
   });
   it("uses the shared unsaved configuration automatically on other resource pages", async () => {
     const store = useControllerStore(), draft = config(); draft.routes[0]!.metric = 42;
@@ -270,12 +1569,12 @@ describe("October 17 frontend workflows", () => {
     expect(displayResourceValue({ enabled: false, servers: [] }, "dhcp_relay")).toBe("enabled: No; servers: None");
     expect(displayResourceValue("unassigned", "role")).toBe("Unassigned");
   });
-  it("shows selected relay prefix and shared-process disruption in the interface editor", async () => {
+  it("does not duplicate relay settings in the physical interface editor", async () => {
+    useControllerStore().state.data!.desired.interfaces[0]!.kind = "ethernet";
     const wrapper = await render(InterfacesView, "/interfaces");
     await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
-    expect(wrapper.text()).toContain("Selected DHCP relay address/subnet: 192.0.2.10/24");
-    expect(wrapper.text()).toContain("restart the shared relay process");
-    expect(wrapper.findAllComponents(FieldInput).some(item => item.props("field").key === "dhcp_relay")).toBe(true);
+    expect(wrapper.text()).not.toContain("Selected DHCP relay address/subnet");
+    expect(wrapper.findAllComponents(FieldInput).some(item => item.props("field").key === "dhcp_relay")).toBe(false);
   });
   it("highlights metadata-only role changes without needing expansion", () => {
     const before = config(), after = config(); after.interfaces[0]!.role = "wan";
@@ -304,6 +1603,69 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.find("tbody").text()).toContain("Exited");
     expect(wrapper.text()).toContain("198.51.100.1, 198.51.100.2");
     expect(store.state.data!.desired.interfaces[0]!.dhcp_relay.enabled).toBe(true);
+  });
+  it("edits DHCP relay only on its owning page and preserves the interface", async () => {
+    const store = useControllerStore(), original = structuredClone(config()), submit = vi.spyOn(api, "submitPackage");
+    const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
+    const fields = wrapper.findAllComponents(FieldInput);
+    fields.find(field => field.props("field").key === "enabled")!.vm.$emit("update:modelValue", true);
+    fields.find(field => field.props("field").key === "servers")!.vm.$emit("update:modelValue", ["198.51.100.10", "198.51.100.20"]);
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.interfaces[0]).toEqual({ ...original.interfaces[0], dhcp_relay: { enabled: true, servers: ["198.51.100.10", "198.51.100.20"] } });
+    expect(store.draft?.routes).toEqual(original.routes);
+    expect(store.state.data!.desired.interfaces[0]!.dhcp_relay).toEqual(original.interfaces[0]!.dhcp_relay);
+    expect(store.editorDirty).toBe(false); expect(submit).not.toHaveBeenCalled();
+  });
+  it("preserves relay settings when editing interface properties", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.kind = "ethernet";
+    store.state.data!.desired.interfaces[0]!.dhcp_relay = { enabled: true, servers: ["198.51.100.10"] };
+    const wrapper = await render(InterfacesView, "/interfaces");
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "mtu")!.vm.$emit("update:modelValue", 1450);
+    await flushPromises();
+    await wrapper.getComponent(PhysicalInterfaceEditor).get("form").trigger("submit");
+    expect(store.draft?.interfaces[0]!.dhcp_relay).toEqual({ enabled: true, servers: ["198.51.100.10"] });
+  });
+  it.each(["invalid-server", "missing-ipv4", "dhcp-client"])("rejects %s in the dedicated relay editor without staging", async scenario => {
+    const store = useControllerStore();
+    if (scenario !== "invalid-server") store.state.data!.desired.interfaces[0]!.addresses = [];
+    if (scenario === "dhcp-client") store.state.data!.desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
+    const fields = wrapper.findAllComponents(FieldInput);
+    fields.find(field => field.props("field").key === "enabled")!.vm.$emit("update:modelValue", true);
+    fields.find(field => field.props("field").key === "servers")!.vm.$emit("update:modelValue", [scenario === "invalid-server" ? "127.0.0.1" : "198.51.100.10"]);
+    await flushPromises();
+    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(true);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+    expect(wrapper.get('[role="alert"]').text()).not.toBe("");
+  });
+  it("guards relay cancellation and never stages discarded input", async () => {
+    const store = useControllerStore(), confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "servers")!.vm.$emit("update:modelValue", ["198.51.100.10"]);
+    await flushPromises();
+    const cancel = wrapper.findAll("button").find(button => button.text() === "Cancel")!;
+    await cancel.trigger("click");
+    expect(confirm).toHaveBeenCalledOnce(); expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+    expect(store.editorDirty).toBe(true);
+    confirm.mockReturnValue(true); await cancel.trigger("click");
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(false);
+    confirm.mockRestore();
+  });
+  it("blocks relay edits when the controller becomes read-only", async () => {
+    const store = useControllerStore(), wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
+    store.connected = false; await flushPromises();
+    expect(wrapper.findAll("button").find(button => button.text() === "Save")!.attributes("disabled")).toBeDefined();
+    expect(wrapper.findAllComponents(FieldInput).every(field => field.props("field").disabled)).toBe(true);
+    expect(store.draft).toBeNull();
   });
   it("requires explicit repair and shows permissions from pending settings, not draft", async () => {
     const store = useControllerStore(), pending = transaction();

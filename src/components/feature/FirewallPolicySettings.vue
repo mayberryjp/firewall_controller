@@ -10,43 +10,26 @@ const emit = defineEmits<{ staged: []; error: [message: string] }>();
 const store = useControllerStore();
 const editingConfig = computed(() => props.selectedConfig);
 const policyMode = computed(() => Boolean(editingConfig.value?.firewall.policies));
-const policy = ref<"accept" | "drop">("accept"), allowICMP = ref(true);
+const policy = ref<"accept" | "drop">("accept");
 watch(() => editingConfig.value?.firewall.policy, value => { if (value) policy.value = value; }, { immediate: true });
-watch(() => editingConfig.value?.firewall.allow_all_icmp, value => { if (value !== undefined) allowICMP.value = value; }, { immediate: true });
-function stage(field: "policy" | "allow_all_icmp"): void {
+function stage(): void {
   if (!editingConfig.value) return;
   try {
     const candidate = cloneConfig(editingConfig.value);
-    if (field === "policy") candidate.firewall.policy = policy.value;
-    else candidate.firewall.allow_all_icmp = allowICMP.value;
+    candidate.firewall.policy = policy.value;
     store.stage(candidate); emit("staged");
   } catch (error) { emit("error", error instanceof Error ? error.message : "Unable to stage firewall setting"); }
 }
 </script>
 
 <template>
-  <div class="d-flex flex-wrap ga-3 align-center mb-4">
-    <v-switch
-      v-model="allowICMP"
-      label="Allow all IPv4 ICMP"
-      :disabled="Boolean(store.readOnlyReason)"
-      hide-details
-      color="primary"
-    />
-    <v-btn
-      :disabled="Boolean(store.readOnlyReason)"
-      @click="stage('allow_all_icmp')"
-    >
-      Stage ICMP change
-    </v-btn>
-  </div>
   <v-alert
     v-if="policyMode"
     type="info"
     variant="tonal"
     class="mb-4"
   >
-    Host/interface policy mode is active. Policies are read-only; the ICMP setting remains editable.
+    Host/interface policy mode is active. Policies are read-only.
   </v-alert>
   <JsonPanel
     v-if="policyMode"
@@ -62,9 +45,9 @@ function stage(field: "policy" | "allow_all_icmp"): void {
     />
     <v-btn
       :disabled="Boolean(store.readOnlyReason) || policyMode"
-      @click="stage('policy')"
+      @click="stage"
     >
-      Stage policy change
+      Save
     </v-btn>
   </div>
   <v-alert

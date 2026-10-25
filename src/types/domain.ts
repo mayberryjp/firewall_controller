@@ -8,15 +8,23 @@ export const revisionSchema = z.string().regex(/^(0|[1-9]\d*)$/)
 const timestamp = z.string().datetime({ offset: true });
 const optionalText = z.string().optional();
 const stringMap = z.record(z.string()).nullable().transform((value) => value ?? {});
+export const objectMetadataSchema = z.object({
+  display_name: z.string().default("").refine(value => [...value].length <= 128 && !/[\p{Cc}\uD800-\uDFFF]/u.test(value) && (value === "" || /[^\p{White_Space}]/u.test(value)), "Display name must be empty or 1..128 Unicode characters without controls or whitespace-only text"),
+  description: z.string().default("").refine(value => [...value].length <= 2048 && !/[\p{Cc}\uD800-\uDFFF]/u.test(value.replace(/[\n\t]/g, "")), "Description must contain at most 2048 Unicode characters; only newline and tab controls are allowed"),
+}).strict().transform(value => value.display_name || value.description ? value : undefined);
+const annotation = { metadata: objectMetadataSchema.optional() };
 export const kernelSchema = z.object({ namespace: stringMap, host: stringMap }).strict();
 export const peerSchema = z.object({
+  ...annotation,
   public_key: z.string(), endpoint: optionalText, allowed_ips: list(z.string()),
   persistent_keepalive_seconds: integer,
 }).strict();
 export const dhcpRelaySchema = z.object({
+  ...annotation,
   enabled: z.boolean().default(false), servers: list(z.string()).default([]),
 }).strict().default({ enabled: false, servers: [] });
 const interfaceFields = {
+  ...annotation,
   name: z.string(), role: z.enum(["wan", "lan", "unassigned"]), mtu: integer, up: z.boolean(), addresses: list(z.string()),
   dhcp_relay: dhcpRelaySchema,
 };
@@ -33,18 +41,22 @@ export const discoveredInterfacesSchema = z.array(z.object({
   mtu: integer, up: z.boolean(), addresses: z.array(z.string()), ownership: z.enum(["managed", "unmanaged", "loopback"]),
 }));
 export type DiscoveredInterface = z.infer<typeof discoveredInterfacesSchema>[number];
+export const dhcpRetrySchema = z.object({ interface: z.string(), status: z.literal("retrying") }).strict();
 export const routeSchema = z.object({
+  ...annotation,
   destination: z.string(), gateway: optionalText, interface: z.string(), table: integer, metric: integer,
 }).strict();
-export const policySchema = z.object({ priority: integer, source: z.string(), table: integer }).strict();
 export const filterSchema = z.object({
+  ...annotation,
   source: optionalText, destination: optionalText, action: z.enum(["accept", "drop"]),
 }).strict();
 export const masqueradeSchema = z.object({
+  ...annotation,
   family: z.enum(["ipv4", "ipv6"]), source: optionalText, out_interface: z.string(),
 }).strict();
 export const timeoutNames = ["general", "tcp", "tcp.rst", "tcp.fin", "udp", "icmp", "maxlife", "expint"] as const;
 export const softflowdSchema = z.object({
+  ...annotation,
   name: z.string(), enabled: z.boolean(), interface: z.string(), collector: z.string(),
   export_version: z.union([z.literal(1), z.literal(5), z.literal(9), z.literal(10)]),
   sampling_rate: integer, max_flows: integer, snaplen: integer, promiscuous: z.boolean(),
@@ -52,6 +64,7 @@ export const softflowdSchema = z.object({
   timeouts: z.record(z.enum(timeoutNames), integer).nullable().transform((value) => value ?? {}),
 }).strict();
 const hostPolicyRuleSchema = z.object({
+  ...annotation,
   out_interface: optionalText,
   destination_host: optionalText, destination: optionalText, protocol: z.enum(["", "tcp", "udp"]).optional(),
   destination_ports: list(integer).optional(), action: z.enum(["accept", "drop"]),
@@ -59,8 +72,10 @@ const hostPolicyRuleSchema = z.object({
 export const inputFirewallSchema = z.object({
   policy: z.enum(["accept", "drop"]),
   interfaces: z.array(z.object({
+    ...annotation,
     interface: z.string(),
     rules: z.array(z.object({
+      ...annotation,
       destination: z.string().optional(), protocol: z.enum(["", "tcp", "udp"]).optional(),
       destination_ports: z.array(integer).optional(), action: z.enum(["accept", "drop"]),
       out_interface: z.literal("").optional(), destination_host: z.literal("").optional(),
@@ -69,40 +84,58 @@ export const inputFirewallSchema = z.object({
 }).strict();
 export const firewallPoliciesSchema = z.object({
   hosts: list(z.object({
+    ...annotation,
     id: z.string(), name: z.string(), addresses: list(z.string()), policy: z.enum(["accept", "drop"]),
     rules: list(hostPolicyRuleSchema),
   }).strict()),
-  interfaces: list(z.object({ interface: z.string(), rules: list(hostPolicyRuleSchema) }).strict()),
+  interfaces: list(z.object({ ...annotation, interface: z.string(), rules: list(hostPolicyRuleSchema) }).strict()),
 }).strict();
 const defaultInteger = (fallback: number) => integer.default(fallback).transform(value => value === 0 ? fallback : value);
-export const gatewayMonitorSchema = z.object({
-  name: z.string(), enabled: z.boolean(), interface: z.string(),
-  source_address: z.string(), gateway: z.string(), target: z.string(), routing_table: integer,
+const gatewayMonitorSettings = {
+  ...annotation,
+  name: z.string(), enabled: z.boolean(), interface: z.string(), target: z.string(),
   probe_interval_ms: defaultInteger(1000), loss_timeout_ms: defaultInteger(2000), window_ms: defaultInteger(30000),
   latency_threshold_ms: defaultInteger(150), loss_threshold_percent: defaultInteger(20),
   rtt_variation_threshold_ms: integer.default(0), failure_hold_ms: defaultInteger(3000), recovery_hold_ms: defaultInteger(5000),
-}).strict();
+};
+const explicitGatewayMonitorSchema = z.object({
+  ...gatewayMonitorSettings, mode: z.literal("explicit").optional(),
+  source_address: z.string(), gateway: z.string(), routing_table: integer,
+}).strict().transform(value => { const result = { ...value }; delete result.mode; return result; });
+const dhcpGatewayMonitorSchema = z.object({
+  ...gatewayMonitorSettings, mode: z.literal("dhcp"),
+  source_address: z.literal("").optional(), gateway: z.literal("").optional(), routing_table: z.literal(0).optional(),
+}).strict().transform(value => {
+  const result = { ...value }; delete result.source_address; delete result.gateway; delete result.routing_table; return result;
+});
+export const gatewayMonitorSchema = z.union([explicitGatewayMonitorSchema, dhcpGatewayMonitorSchema]);
 export const ntpSchema = z.object({
+  ...annotation,
   enabled: z.boolean().default(false), servers: list(z.string()).default([]),
 }).strict().default({ enabled: false, servers: [] });
 export const syslogServerSchema = z.object({
+  ...annotation,
   host: z.string(), port: integer, transport: z.enum(["udp", "tcp", "tls"]),
 }).strict();
 export const syslogSchema = z.object({
+  ...annotation,
   enabled: z.boolean().default(false), servers: list(syslogServerSchema).default([]),
 }).strict().default({ enabled: false, servers: [] });
-export const vnstatSchema = z.object({ enabled: z.boolean().default(false) }).strict().default({ enabled: false });
+export const vnstatSchema = z.object({ ...annotation, enabled: z.boolean().default(false) }).strict().default({ enabled: false });
 export const dhcpClientSchema = z.object({
+  ...annotation,
   client_id: z.string().default(""), hostname: z.string().default(""),
   route_metric: integer.min(0).max(4294967295).default(0), use_mtu: z.boolean().default(false),
   use_domains: z.enum(["no", "route", "yes"]).default("no"),
 }).strict();
 export const dnsConfigSchema = z.object({
+  ...annotation,
   servers: z.array(z.string()).default([]),
-  domains: z.array(z.object({ name: z.string(), route_only: z.boolean() }).strict()).default([]),
+  domains: z.array(z.object({ ...annotation, name: z.string(), route_only: z.boolean() }).strict()).default([]),
 }).strict();
 export const configSchema = z.object({
-  interfaces: list(interfaceSchema), routes: list(routeSchema), policy_rules: list(policySchema),
+  ipv6_enabled: z.boolean().optional(),
+  interfaces: list(interfaceSchema), routes: list(routeSchema),
   firewall: z.object({
     allow_all_icmp: z.boolean().default(true),
     policy: z.enum(["accept", "drop"]), rules: list(filterSchema),
@@ -160,6 +193,9 @@ export const dhcpRelayStatusPageSchema = z.object({
 const metric = z.number().finite().nonnegative().nullable();
 export const gatewayStatisticsSchema = z.object({
   name: z.string(), process_state: z.string(), sample_status: z.string(), health: z.string(),
+  mode: z.enum(["explicit", "dhcp"]).optional(), interface: z.string().optional(),
+  resolved_source_address: z.string().nullable().optional(), resolved_gateway: z.string().nullable().optional(),
+  resolved_routing_table: integer.nullable().optional(), reason: z.string().nullable().optional(),
   started_at: timestamp.nullable(), collected_at: timestamp.nullable(),
   health_changed_at: timestamp.nullable(), last_success_at: timestamp.nullable(),
   sent: integer.nonnegative(), received: integer.nonnegative(), lost: integer.nonnegative(),
@@ -169,7 +205,7 @@ export const gatewayStatisticsSchema = z.object({
   rtt_p50_ms: metric, rtt_p95_ms: metric, rtt_variation_ms: metric, error: optionalText,
 });
 const sampleSchema = z.object({
-  scope: z.string(), started_at: timestamp, collected_at: timestamp, status: z.string(),
+  scope: z.string(), started_at: timestamp.nullable(), collected_at: timestamp, status: z.string(),
 });
 export const gatewayStatisticsPageSchema = z.object({ sample: sampleSchema, monitors: list(gatewayStatisticsSchema) });
 export const gatewayStatisticsDetailSchema = z.object({ sample: sampleSchema, monitor: gatewayStatisticsSchema });
@@ -187,9 +223,17 @@ export const runtimeSchema = z.preprocess(value => {
   }
   return value;
 }, z.object({
+  capabilities: z.object({
+    gateway_monitor_modes: z.array(z.string()).optional(),
+    dhcp_gateway_monitor_address_families: z.array(z.string()).optional(),
+  }).optional(),
   parent_interfaces: list(parentSchema), softflowd: list(serviceStatusSchema), error: optionalText,
   dhcp_relay: list(dhcpRelayStatusSchema),
   gateway_monitors: list(gatewayStatisticsSchema), appliance_services: list(applianceStatusSchema),
+  ipv6: z.object({
+    enabled: z.boolean(), status: z.enum(["measured", "simulated"]),
+    disable_ipv6: z.record(z.enum(["0", "1"])).nullable(), drift: z.boolean().nullable(),
+  }).strict().optional(),
   dhcp_clients: z.object({
     leases: z.record(z.object({
       client: dhcpClientSchema, address: z.string(), server: z.string(),
@@ -228,7 +272,6 @@ export const statisticsSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 export type ManagedInterface = z.infer<typeof interfaceSchema>;
 export type Route = z.infer<typeof routeSchema>;
-export type PolicyRule = z.infer<typeof policySchema>;
 export type FilterRule = z.infer<typeof filterSchema>;
 export type MasqueradeRule = z.infer<typeof masqueradeSchema>;
 export type SoftflowdConfig = z.infer<typeof softflowdSchema>;
@@ -242,8 +285,43 @@ export type Revision = z.infer<typeof revisionDetailSchema>;
 export type RevisionMetadata = z.infer<typeof revisionMetadataSchema>;
 export type Statistics = z.infer<typeof statisticsSchema>;
 export type GatewayMonitor = z.infer<typeof gatewayMonitorSchema>;
+export type ExplicitGatewayMonitor = z.infer<typeof explicitGatewayMonitorSchema>;
 export type GatewayStatistics = z.infer<typeof gatewayStatisticsSchema>;
 export type GatewayStatisticsPage = z.infer<typeof gatewayStatisticsPageSchema>;
+const connectionCount = z.number().int().nonnegative();
+const connectionPort = connectionCount.max(65535).nullable();
+const connectionTupleSchema = z.object({
+  source: z.string(), destination: z.string(), source_port: connectionPort, destination_port: connectionPort,
+  icmp_id: connectionPort, icmp_type: connectionCount.max(255).nullable(), icmp_code: connectionCount.max(255).nullable(), zone: connectionPort,
+}).strict();
+const connectionCountersSchema = z.object({ packets: z.string().regex(/^(0|[1-9]\d*)$/), bytes: z.string().regex(/^(0|[1-9]\d*)$/) }).strict().nullable();
+export const connectionsPageSchema = z.object({
+  schema: z.literal("netcontrol-connections/v1"),
+  sample: z.object({ scope: z.string(), started_at: timestamp, collected_at: timestamp, status: z.enum(["available", "partial", "simulated"]) }).strict(),
+  summary: z.object({ total: connectionCount.nullable(), matched: connectionCount.nullable(), returned: connectionCount, accounting_unavailable: connectionCount.nullable() }).strict(),
+  limit: connectionCount.min(1).max(1000), offset: connectionCount.max(1000000), next_offset: connectionCount.max(1000000).nullable(),
+  connections: z.array(z.object({
+    id: z.string().regex(/^(0|[1-9]\d*)$/).nullable(), zone: connectionCount.max(65535), family: z.enum(["ipv4", "ipv6"]),
+    protocol: connectionCount.max(255), protocol_name: z.enum(["tcp", "udp", "icmp", "icmpv6", "sctp", "other"]),
+    state: z.string(), tcp_state: connectionCount.max(255).nullable(), status: connectionCount.max(4294967295),
+    seen_reply: z.boolean(), assured: z.boolean(), source_nat: z.boolean(), destination_nat: z.boolean(), mark: connectionCount.max(4294967295),
+    timeout_seconds: connectionCount.nullable(), original: connectionTupleSchema, reply: connectionTupleSchema,
+    original_counters: connectionCountersSchema, reply_counters: connectionCountersSchema,
+  }).strict()),
+}).strict();
+export type ConnectionsPage = z.infer<typeof connectionsPageSchema>;
+export type Connection = ConnectionsPage["connections"][number];
+export const connectionDeletionSchema = z.object({ status: z.enum(["deleted", "flushed"]), scope: z.string() }).strict();
+export const upgradeVersionSchema = z.string().max(80).regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/, "Use a version such as 1.2.3 or 1.2.3-rc.1, without v or build metadata");
+export const upgradeJobSchema = z.object({
+  id: z.string(), version: z.string(), status: z.string(), created_at: timestamp, updated_at: timestamp,
+  error: z.string().nullable(), last_successful_version: z.string().nullable(),
+}).strict();
+export const upgradeStatusSchema = z.object({
+  enabled: z.boolean(), repository: z.string().nullable(), job: upgradeJobSchema.nullable(), last_successful_version: z.string().nullable(),
+}).strict();
+export type UpgradeJob = z.infer<typeof upgradeJobSchema>;
+export type UpgradeStatus = z.infer<typeof upgradeStatusSchema>;
 export type ApplianceService = "ntp" | "syslog" | "vnstat";
 export type RepairService = "softflowd" | "dhcp-relay" | "gateway-monitoring" | ApplianceService;
 export interface PackageRequest {

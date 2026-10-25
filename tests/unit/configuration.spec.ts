@@ -48,6 +48,24 @@ describe("lossless boundary and import", () => {
   });
 });
 describe("semantic configuration comparison", () => {
+  it("preserves the global IPv6 flag and treats omitted values as enabled", () => {
+    const before = config(), after = { ...config(), ipv6_enabled: false };
+    expect(configSchema.parse(after).ipv6_enabled).toBe(false);
+    expect(configSchema.safeParse({ ...before, ipv6_enabled: "false" }).success).toBe(false);
+    expect(equalConfig(before, { ...before, ipv6_enabled: true })).toBe(true);
+    expect(differences(before, after)).toContainEqual({ area: "ipv6", identity: "Enable IPv6", kind: "modified", before: true, after: false });
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "kernel.namespace.write"]);
+    expect(validateConfig(after).some(issue => issue.message.includes("IPv6 is disabled globally"))).toBe(true);
+  });
+  it("normalizes empty annotations but retains metadata changes and owning permissions", () => {
+    const before = config(), after = config();
+    after.interfaces[0]!.metadata = { display_name: "", description: "" };
+    expect(equalConfig(before, after)).toBe(true);
+    after.interfaces[0]!.metadata = { display_name: "Office", description: "Notes" };
+    expect(differences(before, after)).toEqual([expect.objectContaining({ area: "interfaces", identity: "lab0", kind: "modified" })]);
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "interfaces.write"]);
+    expect(before.interfaces[0]!.metadata).toBeUndefined();
+  });
   it("normalizes host-input entries and ports without reordering rules", () => {
     const before = config();
     before.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [
@@ -141,11 +159,10 @@ describe("inclusive validation limits and dependencies", () => {
     const candidate = config(); candidate.interfaces[0]!.mtu = value;
     expect(validateConfig(candidate).some(issue => issue.path.endsWith(".mtu"))).toBe(value < 1280 || value > 65535);
   });
-  it.each([9999, 10000, 19999, 20000])("checks route table and policy bounds %s", value => {
-    const candidate = config(); candidate.routes[0]!.table = value; candidate.policy_rules[0]!.priority = value;
+  it.each([9999, 10000, 19999, 20000])("checks route table bounds %s", value => {
+    const candidate = config(); candidate.routes[0]!.table = value;
     const errors = validateConfig(candidate);
     expect(errors.some(issue => issue.path === "routes.0.table")).toBe(value < 10000 || value > 19999);
-    expect(errors.some(issue => issue.path === "policy_rules.0.priority")).toBe(value < 10000 || value > 19999);
   });
   it.each([0, 1, 2147483647, 2147483648])("checks route metric %s", value => {
     const candidate = config(); candidate.routes[0]!.metric = value;
@@ -190,6 +207,15 @@ describe("inclusive validation limits and dependencies", () => {
     if (candidate.interfaces[1]?.kind === "vlan") candidate.interfaces[1].vlan.id = 2;
     expect(validateConfig(candidate, [], baseline).some(issue => issue.message.includes("immutable"))).toBe(true);
   });
+  it("links VLAN and VLAN resolver validation to the dedicated detail route", () => {
+    const candidate = config();
+    candidate.interfaces.push({ ...candidate.interfaces[0]!, name: "vlan30", kind: "vlan", mtu: 1279, vlan: { parent: "lab0", id: 0 } });
+    candidate.dns = { vlan30: { servers: ["not-an-address"], domains: [] } };
+    const issues = validateConfig(candidate);
+    for (const path of ["interfaces.1.mtu", "interfaces.1.vlan.id", "dns.vlan30.servers.0"]) {
+      expect(issues.find(issue => issue.path === path)?.page).toBe("/vlans/vlan30");
+    }
+  });
   it.each([0, 1, 4094, 4095])("checks inclusive VLAN ID %s", value => {
     const candidate = config();
     candidate.interfaces.push({ name: "vlan0", kind: "vlan", role: "lan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1500, up: false, addresses: [], vlan: { parent: "lab0", id: value } });
@@ -230,13 +256,11 @@ describe("inclusive validation limits and dependencies", () => {
   });
   it("checks protected parent collisions, duplicate identities and family-correct NAT", () => {
     const candidate = config(); candidate.routes.push({ ...candidate.routes[0]! });
-    candidate.policy_rules.push({ ...candidate.policy_rules[0]! });
     candidate.interfaces[0]!.addresses = ["192.0.2.10/24"];
     candidate.firewall.nat.masquerade[0]!.family = "ipv6";
     const issues = validateConfig(candidate, [{ name: "lab0", kind: "dummy", index: 1, mac: "", mtu: 1500, up: true, available: true }]);
     expect(issues.some(issue => issue.message.includes("protected"))).toBe(true);
     expect(issues.some(issue => issue.message.includes("Duplicate table"))).toBe(true);
-    expect(issues.some(issue => issue.message.includes("Priority must be unique"))).toBe(true);
     expect(issues.some(issue => issue.message.includes("selected family"))).toBe(true);
   });
   it("checks immutable existing kinds, private addresses and rejects nonglobal addresses", () => {
@@ -261,9 +285,10 @@ describe("inclusive validation limits and dependencies", () => {
     candidate.interfaces.push({ name: "wg0", kind: "wireguard", role: "wan", dhcp_relay: { enabled: false, servers: [] }, mtu: 1420, up: false, addresses: [], wireguard: { key_ref: "a".repeat(length), listen_port: 51820, peers: [] } });
     expect(validateConfig(candidate).some(issue => issue.path.endsWith(".key_ref"))).toBe(length < 1 || length > 64);
   });
-  it.each([9999, 10000, 19999, 20000])("checks source-policy table %s", table => {
-    const candidate = config(); candidate.policy_rules[0]!.table = table;
-    expect(validateConfig(candidate).some(issue => issue.path === "policy_rules.0.table")).toBe(table < 10000 || table > 19999);
+  it.each([{ rules: [] }, { rules: null }, { rules: [{ priority: 10000, source: "192.0.2.0/24", table: 254 }] }])("rejects removed policy rules $rules without silently discarding them", ({ rules }) => {
+    const candidate = { ...config(), policy_rules: rules };
+    expect(configSchema.safeParse(candidate).success).toBe(false);
+    expect(() => importConfig(JSON.stringify(candidate))).toThrow();
   });
   it.each([0, 1, 604800, 604801])("checks general timeout %s", value => {
     const candidate = config(); candidate.softflowd[0]!.timeouts.general = value;

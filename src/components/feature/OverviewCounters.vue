@@ -14,32 +14,35 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
 <template>
   <OverviewWidget
     title="Interface counters"
-    to="/interfaces"
     :note="note"
     :detail="store.statistics.error ?? undefined"
   >
     <v-table density="compact">
       <thead>
         <tr>
-          <th>Counter</th><th
-            v-for="item in store.statistics.data?.interfaces"
-            :key="item.name"
+          <th scope="col">
+            Interface
+          </th>
+          <th
+            v-for="counter in counters"
+            :key="counter.key"
+            scope="col"
           >
-            {{ item.name }}
+            {{ counter.label }}
           </th>
         </tr>
       </thead>
       <tbody v-if="store.statistics.data?.interfaces.length">
         <tr
-          v-for="counter in counters"
-          :key="counter.key"
+          v-for="item in store.statistics.data.interfaces"
+          :key="item.name"
         >
           <th scope="row">
-            {{ counter.label }}
+            {{ item.name }}
           </th>
           <td
-            v-for="item in store.statistics.data.interfaces"
-            :key="item.name"
+            v-for="counter in counters"
+            :key="counter.key"
             class="mono"
           >
             {{ item.counters?.[counter.key] ?? "Unavailable" }}
@@ -47,7 +50,11 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
         </tr>
       </tbody>
       <tbody v-else>
-        <tr><td>No interface counters available.</td></tr>
+        <tr>
+          <td :colspan="counters.length + 1">
+            No interface counters available.
+          </td>
+        </tr>
       </tbody>
     </v-table>
   </OverviewWidget>

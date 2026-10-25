@@ -2,7 +2,6 @@
 import { useControllerStore } from "@/stores/controller";
 import type { Section } from "@/services/resourceForms";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
-import ServiceRepair from "@/components/feature/ServiceRepair.vue";
 import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
 defineProps<{ section: Section }>();
 const store = useControllerStore();
@@ -10,8 +9,7 @@ const store = useControllerStore();
 
 <template>
   <template v-if="section === 'gateway_monitors'">
-    <ServiceRepair service="gateway-monitoring" />
-    <GatewayStatisticsPanel />
+    <GatewayStatisticsPanel status-only />
   </template>
   <template v-if="section === 'interfaces' || section === 'softflowd'">
     <DatasetStatus
@@ -25,9 +23,5 @@ const store = useControllerStore();
     >
       {{ store.runtime.data.error }}
     </v-alert>
-    <ServiceRepair
-      v-if="section === 'softflowd'"
-      service="softflowd"
-    />
   </template>
 </template>

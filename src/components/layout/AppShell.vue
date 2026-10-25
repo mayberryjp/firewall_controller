@@ -4,6 +4,7 @@ import { useControllerStore } from "@/stores/controller";
 import AppHeader from "@/components/layout/AppHeader.vue";
 import SafetyBanner from "@/components/layout/SafetyBanner.vue";
 import DisconnectDialog from "@/components/layout/DisconnectDialog.vue";
+import ConnectionBubble from "@/components/layout/ConnectionBubble.vue";
 const store = useControllerStore();
 const disconnectDialog = ref(false);
 </script>
@@ -13,7 +14,7 @@ const disconnectDialog = ref(false);
       class="skip-link"
       href="#main-content"
     >Skip to main content</a>
-    <AppHeader @disconnect="disconnectDialog = true" />
+    <AppHeader />
     <v-main
       id="main-content"
       tabindex="-1"
@@ -23,6 +24,7 @@ const disconnectDialog = ref(false);
         <slot />
       </div>
     </v-main>
+    <ConnectionBubble @disconnect="disconnectDialog = true" />
     <DisconnectDialog v-model="disconnectDialog" />
   </v-app>
 </template>

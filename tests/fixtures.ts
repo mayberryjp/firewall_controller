@@ -1,5 +1,18 @@
-import type { Config, StateView, Transaction, RuntimeState, Statistics, GatewayMonitor, GatewayStatistics } from "@/types/domain";
-export function monitor(): GatewayMonitor {
+import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage } from "@/types/domain";
+export function connections(): ConnectionsPage {
+  return {
+    schema: "netcontrol-connections/v1", sample: { scope: "test:namespace", started_at: "2026-10-24T12:00:00Z", collected_at: "2026-10-24T12:00:01Z", status: "partial" },
+    summary: { total: 1, matched: 1, returned: 1, accounting_unavailable: 1 }, limit: 100, offset: 0, next_offset: null,
+    connections: [{
+      id: "42", zone: 0, family: "ipv4", protocol: 6, protocol_name: "tcp", state: "ESTABLISHED", tcp_state: 3, status: 22,
+      seen_reply: true, assured: true, source_nat: true, destination_nat: false, mark: 0, timeout_seconds: 120,
+      original: { source: "192.0.2.10", destination: "198.51.100.20", source_port: 40000, destination_port: 443, icmp_id: null, icmp_type: null, icmp_code: null, zone: null },
+      reply: { source: "198.51.100.20", destination: "203.0.113.10", source_port: 443, destination_port: 50000, icmp_id: null, icmp_type: null, icmp_code: null, zone: null },
+      original_counters: { packets: "9007199254740993", bytes: "18446744073709551615" }, reply_counters: null,
+    }],
+  };
+}
+export function monitor(): ExplicitGatewayMonitor {
   return {
     name: "uplink", enabled: true, interface: "lab0", source_address: "192.0.2.10", gateway: "198.51.100.1", target: "198.51.100.1",
     routing_table: 10000, probe_interval_ms: 1000, loss_timeout_ms: 2000, window_ms: 30000,
@@ -20,7 +33,6 @@ export function config(): Config {
   return {
     interfaces: [{ name: "lab0", kind: "dummy", role: "lan", mtu: 1500, up: true, addresses: ["192.0.2.10/24", "2001:db8::10/64"], dhcp_relay: { enabled: false, servers: [] } }],
     routes: [{ destination: "198.51.100.0/24", interface: "lab0", table: 10000, metric: 1 }],
-    policy_rules: [{ source: "192.0.2.0/24", priority: 10000, table: 10000 }],
     firewall: { allow_all_icmp: true, policy: "accept", rules: [{ source: "192.0.2.0/24", action: "accept" }], nat: { masquerade: [{ family: "ipv4", out_interface: "lab0" }] } },
     softflowd: [{ name: "capture", enabled: false, interface: "lab0", collector: "127.0.0.1:2055", export_version: 9, sampling_rate: 1, max_flows: 8192, snaplen: 128, promiscuous: false, timeouts: {} }],
     kernel: { namespace: { "net.ipv4.tcp_syncookies": "1" }, host: {} },

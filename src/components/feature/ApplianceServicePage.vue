@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatTimestamp } from "@/services/timestamps";
 import { computed, onUnmounted, ref, watch, toRef } from "vue";
 import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
@@ -7,7 +8,7 @@ import { record, type Field } from "@/types/forms";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import FieldInput from "@/components/base/FieldInput.vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
-import ServiceRepair from "@/components/feature/ServiceRepair.vue";
+import { metadataFields } from "@/services/resourceForms";
 const props = defineProps<{ service: ApplianceService }>();
 const store = useControllerStore();
 const service = toRef(props, "service");
@@ -15,7 +16,7 @@ const titles = { ntp: "Appliance NTP", syslog: "Appliance syslog", vnstat: "Dual
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
 const editing = computed(() => store.draft ?? stored.value);
 const form = ref<Record<string, unknown>>({}), initial = ref(""), error = ref(""), errors = ref<Record<string, string[]>>({});
-const fields = computed<Field[]>(() => [
+const fields = computed<Field[]>(() => metadataFields([
   { key: "enabled", label: "Desired enabled", kind: "switch" },
   ...(service.value === "ntp" ? [{ key: "servers", label: "NTP server hosts", kind: "lines" as const, hint: "One canonical IP or lowercase ASCII DNS host per line; 1..8 when enabled, 0..8 disabled. Lists remain validated and retained." }] : []),
   ...(service.value === "syslog" ? [{
@@ -27,7 +28,7 @@ const fields = computed<Field[]>(() => [
       { key: "transport", label: "Explicit transport", kind: "select" as const, choices: ["udp", "tcp", "tls"].map(value => ({ title: value.toUpperCase(), value })) },
     ],
   }] : []),
-]);
+ ]));
 function reset(): void {
   form.value = record(JSON.parse(JSON.stringify(editing.value?.[service.value] ?? { enabled: false, ...(service.value === "vnstat" ? {} : { servers: [] }) })));
   initial.value = stableJson(form.value); store.editorDirty = false; error.value = ""; errors.value = {};
@@ -84,11 +85,11 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
       {{ store.runtime.data.error }}
     </v-alert>
     <v-alert
-      v-if="store.readOnlyReason"
+      v-if="store.readOnlyNotice"
       type="warning"
       class="mb-4"
     >
-      {{ store.readOnlyReason }}
+      {{ store.readOnlyNotice }}
     </v-alert>
     <v-table class="mb-5">
       <thead>
@@ -108,7 +109,7 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
           <td>{{ name }}</td>
           <td>{{ status?.scope ?? "Unknown" }}</td>
           <td>{{ status ? statusLabels[status.state] ?? `Unknown (${status.state})` : "Unknown" }}</td>
-          <td :title="status?.started_at ?? undefined">
+          <td :title="status?.started_at ? `Started ${formatTimestamp(status.started_at)} UTC` : undefined">
             {{ status?.pid ?? "—" }}
           </td>
           <td
@@ -126,7 +127,6 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
         </tr>
       </tbody>
     </v-table>
-    <ServiceRepair :service="service" />
     <v-alert
       v-if="error"
       type="error"
@@ -150,7 +150,7 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
         :disabled="Boolean(store.readOnlyReason)"
         @click="stage"
       >
-        Stage service changes
+        Save
       </v-btn>
       <v-btn
         :disabled="!store.editorDirty"
@@ -159,10 +159,10 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
         Discard unstaged input
       </v-btn>
       <v-btn
-        to="/changes"
+        to="/config/changes"
         variant="text"
       >
-        Review changes
+        SAVE
       </v-btn>
     </div>
   </section>

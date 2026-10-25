@@ -5,7 +5,7 @@ import * as api from "@/services/netcontrol";
 import {
   configSchema, knownStatuses, terminal,
   type Config, type StateView, type RuntimeState, type Transaction,
-  type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService,
+  type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
@@ -30,6 +30,10 @@ export const useControllerStore = defineStore("controller", () => {
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
   const transactions = dataset<Record<string, Transaction>>(), statistics = dataset<Statistics>();
   const gatewayStatistics = dataset<GatewayStatisticsPage>();
+  const upgrade = dataset<UpgradeStatus>();
+  const upgradePending = ref(false), upgradeUncertain = ref(false), upgradeNeedsRefresh = ref(false);
+  const acceptedUpgradeID = ref(""), requestedUpgradeVersion = ref(""), previousUpgradeID = ref("");
+  const upgradeNotice = ref("");
   const revisions = dataset<RevisionMetadata[]>(), revisionDetail = dataset<Revision>();
   const comparisonRevision = dataset<Revision>();
   const nextRevision = ref<string | undefined>(), currentRevisionID = ref("");
@@ -38,6 +42,10 @@ export const useControllerStore = defineStore("controller", () => {
   const busy = ref(false), actionError = ref<string | null>(null), notice = ref<string | null>(null);
   const uncertain = ref<{ operation: string; id?: string; priorIDs: string[]; base: string | null; startedAt: string } | null>(null);
   const editorDirty = ref(false), monitoring = ref(false), gatewayMonitoring = ref(false);
+  const ipv6Enabled = computed(() => (draft.value ?? state.data?.active_transaction?.candidate ?? state.data?.desired)?.ipv6_enabled !== false);
+  const supportsDhcpGatewayMonitors = computed(() => !runtime.stale && !runtime.error &&
+    runtime.data?.capabilities?.gateway_monitor_modes?.includes("dhcp") === true &&
+    runtime.data.capabilities.dhcp_gateway_monitor_address_families?.includes("ipv4") === true);
   let epoch = 0;
   const flights = new Map<object, Promise<void>>();
   const aborts = new Set<AbortController>();
@@ -45,7 +53,16 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, revisions, revisionDetail, comparisonRevision];
+  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, revisions, revisionDetail, comparisonRevision, upgrade];
+  const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
+  const upgradeBlockedReason = computed(() => {
+    if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
+    if (acceptedUpgradeID.value && upgrade.data?.job?.id !== acceptedUpgradeID.value) return "The latest upgrade job differs from the accepted job. Its outcome needs operator verification.";
+    if (upgradeActive.value) return `System upgrade ${upgrade.data?.job?.id}: ${upgrade.data?.job?.status}. Writes are blocked; recovery_required needs console recovery.`;
+    if (upgradeNeedsRefresh.value) return "Refreshing committed state after upgrade. Local changes are retained.";
+    if (upgrade.data?.enabled && upgrade.stale) return "Upgrade status is unavailable. Refresh before writing.";
+    return "";
+  });
   const activeTransactions = computed(() => {
     const items = new Map<string, Transaction>(Object.values(transactions.data ?? {}).map((item) => [item.id, item]));
     const active = state.data?.active_transaction;
@@ -60,18 +77,31 @@ export const useControllerStore = defineStore("controller", () => {
   const validation = computed(() => draft.value ? validateConfig(draft.value, runtime.data?.parent_interfaces, baseline.value ?? undefined) : []);
   const freshState = computed(() => Boolean(connected.value && state.data && !state.stale && !state.error && !transactions.stale &&
     state.lastSuccess && Date.now() - state.lastSuccess < 20_000));
-  const canApply = computed(() => freshState.value && !incompatible.value && !busy.value && !uncertain.value &&
-    activeTransactions.value.length === 0 && !state.data?.drift && !draftStale.value &&
-    draft.value !== null && diff.value.length > 0 && validation.value.length === 0 && !submitted.value);
   const sortedTransactions = computed(() => Object.values(transactions.data ?? {}).sort((a, b) =>
     (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || a.id.localeCompare(b.id)));
-  const readOnlyReason = computed(() => {
+  const readOnlyNotice = computed(() => {
     if (!connected.value) return "Sign in and select a registered firewall.";
+    if (upgradePending.value || upgradeBlockedReason.value) return upgradeBlockedReason.value || "Submitting system upgrade. Writes are blocked.";
     if (incompatible.value) return "Incompatible API data or unknown lifecycle state. Editing is disabled; retain diagnostics.";
     if (busy.value || submitted.value || uncertain.value) return "A submitted snapshot or uncertain write is frozen. Reconcile its server outcome first.";
-    if (!state.data) return "Committed desired configuration is unavailable. Recovery remains accessible.";
     return "";
   });
+  const readOnlyReason = computed(() => readOnlyNotice.value ||
+    (!state.data ? "Committed desired configuration is unavailable. Recovery remains accessible." : ""));
+  const applyBlockedReason = computed(() => {
+    if (readOnlyReason.value) return readOnlyReason.value;
+    if (activeTransactions.value.length) return `An active commit blocks applying: ${activeTransactions.value.map(item => `${item.id} (${item.status})`).join(", ")}. Review it in Commits before applying another configuration.`;
+    if (state.data?.drift) return "Modeled drift blocks applying: live configuration differs from expected state. Inspect the comparison on Overview; refreshing does not repair drift.";
+    if (draftStale.value) return `Draft base revision ${baseRevision.value} differs from committed revision ${state.data?.revision}. Compare the revisions before discarding changes and starting over.`;
+    if (state.error) return `Unable to check the current firewall configuration: ${state.error}. Try Commit & push again.`;
+    if (transactions.error) return `Unable to check existing commits: ${transactions.error}. Try Commit & push again.`;
+    if (!freshState.value) return "Current firewall state will be checked before pushing. Your changes are retained.";
+    if (!draft.value || !diff.value.length) return "No changes to apply.";
+    if (draft.value.gateway_monitors.some(monitor => monitor.mode === "dhcp") && !supportsDhcpGatewayMonitors.value) return "Refresh runtime capabilities: the selected backend must advertise DHCP IPv4 gateway monitoring before applying.";
+    if (validation.value.length) return "Resolve validation errors before applying.";
+    return "";
+  });
+  const canApply = computed(() => !applyBlockedReason.value);
 
   function invalidateReads(): void {
     epoch++;
@@ -113,6 +143,55 @@ export const useControllerStore = defineStore("controller", () => {
   }
   const refreshState = () => load(state, api.getState);
   const refreshRuntime = () => load(runtime, api.getRuntime);
+  async function refreshUpgrade(): Promise<void> {
+    const session = epoch;
+    await load(upgrade, api.getSystemUpgrade);
+    if (session !== epoch || upgrade.stale || !upgrade.data) return;
+    const job = upgrade.data.job;
+    if (upgradeUncertain.value && job && job.id !== previousUpgradeID.value && job.version === requestedUpgradeVersion.value) {
+      acceptedUpgradeID.value = job.id; upgradeUncertain.value = false;
+    }
+    if (acceptedUpgradeID.value && job?.id !== acceptedUpgradeID.value) {
+      upgradeNotice.value = `Accepted job ${acceptedUpgradeID.value}; latest job ${job?.id ?? "unavailable"}. The earlier outcome is not established.`;
+      return;
+    }
+    if (upgradeNeedsRefresh.value && !upgradeActive.value && !upgradeUncertain.value) {
+      await Promise.all([refreshState(), refreshTransactions()]);
+      if (session === epoch && !state.stale && !transactions.stale) upgradeNeedsRefresh.value = false;
+    }
+  }
+  async function checkMaintenance(): Promise<void> {
+    if (upgradePending.value) throw new Error("System upgrade submission is pending");
+    await refreshUpgrade();
+    if (upgrade.stale || !upgrade.data || upgradeBlockedReason.value) throw new Error(upgradeBlockedReason.value || upgrade.error || "Upgrade status is unavailable");
+  }
+  async function startUpgrade(version: string, expectedRepository: string): Promise<void> {
+    if (upgradePending.value) return;
+    const session = epoch;
+    upgradePending.value = true; upgradeNotice.value = "";
+    try {
+      await Promise.all([refreshUpgrade(), refreshTransactions()]);
+      if (upgrade.data?.repository !== expectedRepository) throw new Error("Configured repository changed. Review the upgrade again.");
+      if (session !== epoch || !connected.value || upgrade.stale || !upgrade.data?.enabled || !upgrade.data.repository || upgradeBlockedReason.value ||
+          busy.value || uncertain.value || submitted.value || transactions.stale || activeTransactions.value.length) {
+        throw new Error(upgradeBlockedReason.value || "Upgrade requires configured trust, fresh status and no active or uncertain write");
+      }
+      requestedUpgradeVersion.value = version; previousUpgradeID.value = upgrade.data.job?.id ?? "";
+      try {
+        const job = await api.startSystemUpgrade(version);
+        if (session !== epoch) return;
+        queryAborts.get(upgrade)?.abort();
+        versions.set(upgrade, (versions.get(upgrade) ?? 0) + 1); flights.delete(upgrade);
+        upgrade.loading = false; upgrade.delayed = false; upgrade.stale = false; upgrade.error = null; upgrade.lastSuccess = Date.now();
+        upgradeNotice.value = "";
+        upgrade.data = { ...upgrade.data, job }; acceptedUpgradeID.value = job.id;
+        upgradeNeedsRefresh.value = true;
+      } catch (error) {
+        if (session === epoch && error instanceof ApiFailure && error.uncertain) { upgradeUncertain.value = true; upgradeNeedsRefresh.value = true; }
+        throw error;
+      }
+    } finally { if (session === epoch) upgradePending.value = false; }
+  }
   async function refreshTransactions(): Promise<void> {
     await load(transactions, api.getTransactions);
     if (uncertain.value?.id && connected.value) await readTransaction(uncertain.value.id);
@@ -142,7 +221,7 @@ export const useControllerStore = defineStore("controller", () => {
     }
     connected.value = true; connecting.value = false;
     rememberRegistryDevice(deviceId);
-    void Promise.all([refreshState(), refreshRuntime(), refreshRevisions()]).then(settleSubmitted);
+    void Promise.all([refreshState(), refreshRuntime(), refreshRevisions(), refreshUpgrade()]).then(settleSubmitted);
     return connected.value;
   }
   function disconnect(): void {
@@ -153,6 +232,8 @@ export const useControllerStore = defineStore("controller", () => {
     uncertain.value = null; actionError.value = null; notice.value = null; authError.value = null;
     nextRevision.value = undefined; currentRevisionID.value = ""; editorDirty.value = false;
     revisionCache.clear();
+    upgradePending.value = false; upgradeUncertain.value = false; upgradeNeedsRefresh.value = false;
+    acceptedUpgradeID.value = ""; requestedUpgradeVersion.value = ""; previousUpgradeID.value = ""; upgradeNotice.value = "";
   }
   function stage(config: Config): void {
     if (readOnlyReason.value) throw new Error(readOnlyReason.value);
@@ -185,7 +266,7 @@ export const useControllerStore = defineStore("controller", () => {
       if (draft.value && equalConfig(draft.value, pending.config)) {
         draft.value = null; baseline.value = null; baseRevision.value = null;
       }
-      notice.value = `Server verified committed transaction ${transaction.id}.`;
+      notice.value = null;
     } else {
       if (!draft.value) {
         draft.value = cloneConfig(pending.config);
@@ -265,9 +346,9 @@ export const useControllerStore = defineStore("controller", () => {
   }
   async function apply(seconds: number, description: string): Promise<Transaction | null> {
     const trimmed = validateWindow(seconds, description);
-    if (!canApply.value || !draft.value || baseRevision.value === null) throw new Error("Resolve validation, stale state, drift, active transactions, and unknown outcomes before applying");
+    if (!canApply.value || !draft.value || baseRevision.value === null) throw new Error(applyBlockedReason.value || "Draft base revision is unavailable");
     const captured = cloneConfig(draft.value), capturedBase = baseRevision.value;
-    await Promise.all([refreshState(), refreshTransactions()]);
+    await Promise.all([refreshState(), refreshTransactions(), checkMaintenance()]);
     if (!canApply.value || state.data?.revision !== capturedBase || !draft.value || !equalConfig(captured, draft.value)) throw new Error("Pre-submit state changed; review again");
     const request = { base_revision: capturedBase, config: captured, confirm_timeout_seconds: seconds, description: trimmed };
     if (utf8Size(encodeJson(request)) > 1_048_576) throw new Error("Complete request exceeds 1 MiB");
@@ -275,6 +356,7 @@ export const useControllerStore = defineStore("controller", () => {
     return mutate("Apply package", () => api.submitPackage(request));
   }
   async function lifecycle(id: string, action: "confirm" | "rollback"): Promise<Transaction | null> {
+    await checkMaintenance();
     if (incompatible.value) throw new Error("Incompatible server state; lifecycle assumptions disabled");
     const transaction = await readTransaction(id);
     if (!transaction || !knownStatuses.includes(transaction.status)) throw new Error("Unable to obtain a compatible fresh transaction");
@@ -285,6 +367,7 @@ export const useControllerStore = defineStore("controller", () => {
   }
   async function restore(revision: string, seconds: number, description: string): Promise<Transaction | null> {
     const trimmed = validateWindow(seconds, description);
+    await checkMaintenance();
     await Promise.all([refreshState(), refreshTransactions()]);
     if (!freshState.value || incompatible.value || busy.value || uncertain.value || draft.value ||
       submitted.value || activeTransactions.value.length || !state.data || state.data.drift) throw new Error("Restore requires fresh drift-free state, no draft, and no active/uncertain write");
@@ -301,6 +384,7 @@ export const useControllerStore = defineStore("controller", () => {
     }));
   }
   async function reconcile(service: RepairService = "softflowd"): Promise<void> {
+    await checkMaintenance();
     if (incompatible.value || uncertain.value || activeTransactions.value.some((item) =>
       ["applying", "rolling_back", "recovery_failed"].includes(item.status))) throw new Error("Service reconciliation is blocked by safety state");
     await mutate("Reconcile managed services", () => api.reconcileServices(service));
@@ -355,7 +439,9 @@ export const useControllerStore = defineStore("controller", () => {
     connected, connecting, authError, state, runtime, transactions, statistics, gatewayStatistics, revisions, revisionDetail,
     nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, uncertain, editorDirty,
     monitoring, gatewayMonitoring, activeTransactions, unknownStatus, incompatible, draftStale, diff, validation, freshState,
-    canApply, sortedTransactions, readOnlyReason,
+    canApply, applyBlockedReason, sortedTransactions, readOnlyReason, readOnlyNotice, ipv6Enabled,
+    upgrade, upgradePending, upgradeUncertain, upgradeActive, upgradeBlockedReason, upgradeNotice, acceptedUpgradeID,
+    refreshUpgrade, checkMaintenance, startUpgrade, supportsDhcpGatewayMonitors,
     connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics, refreshGatewayStatistics,
     refreshRevisions, loadRevision, compareRevision, clearComparison, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
     readTransaction, resolveUncertainty,

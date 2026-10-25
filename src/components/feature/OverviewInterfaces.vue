@@ -14,7 +14,6 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
 <template>
   <OverviewWidget
     title="Interfaces"
-    to="/interfaces"
     :note="note"
     :detail="store.statistics.error ?? undefined"
   >
@@ -25,11 +24,7 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
           v-for="row in rows"
           :key="row.name"
         >
-          <td>
-            <router-link :to="row.sample?.ownership === 'managed' || store.state.data?.desired.interfaces.some(item => item.name === row.name) ? `/interfaces/${encodeURIComponent(row.name)}` : '/parents'">
-              {{ row.name }}
-            </router-link>
-          </td>
+          <td>{{ row.name }}</td>
           <td>
             <OverviewInterfaceStatus
               :sample="row.sample"

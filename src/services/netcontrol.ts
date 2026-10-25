@@ -1,20 +1,54 @@
 import { request } from "@/services/api";
+import { numericAddress } from "@/services/configuration";
 import {
-  stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema,
+  stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
   revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
   applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema,
   gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
+  connectionDeletionSchema, upgradeVersionSchema, upgradeJobSchema, upgradeStatusSchema, type Connection,
 } from "@/types/domain";
 
 const id = encodeURIComponent;
 export const getState = (signal?: AbortSignal) => request("GET", "/state", stateSchema, undefined, signal);
 export const getRuntime = (signal?: AbortSignal) => request("GET", "/runtime", runtimeSchema, undefined, signal);
 export const getDiscoveredInterfaces = (signal?: AbortSignal) => request("GET", "/interfaces/discovered", discoveredInterfacesSchema, undefined, signal);
+export const retryDHCP = (name: string) => request("POST", `/interfaces/${id(name)}/dhcp/retry`, dhcpRetrySchema);
 export const getTransactions = (signal?: AbortSignal) => request("GET", "/transactions",
   transactionsSchema, undefined, signal);
 export const getTransaction = (value: string) => request("GET", `/transactions/${id(value)}`, transactionSchema);
 export const getStatistics = (signal?: AbortSignal) => request("GET", "/statistics", statisticsSchema, undefined, signal);
+export interface ConnectionsQuery { family?: "ipv4" | "ipv6"; protocol?: string; address?: string; port?: number; zone?: number; limit?: number; offset?: number }
+export function getConnections(query: ConnectionsQuery = {}, signal?: AbortSignal) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== "") params.set(key, String(value));
+  return request("GET", `/statistics/connections${params.size ? `?${params}` : ""}`, connectionsPageSchema, undefined, signal);
+}
+export function connectionSelector(row: Connection) {
+  if (row.id === null || !/^(0|[1-9]\d*)$/.test(row.id) || BigInt(row.id) > 4294967295n ||
+      (row.original.zone !== null && row.original.zone !== row.zone) || (row.reply.zone !== null && row.reply.zone !== row.zone)) return null;
+  const original = row.original;
+  try {
+    if (numericAddress(original.source).kind() !== row.family || numericAddress(original.destination).kind() !== row.family) return null;
+  } catch { return null; }
+  if ([6, 17, 132].includes(row.protocol)) {
+    if (original.source_port === null || original.destination_port === null || [original.icmp_id, original.icmp_type, original.icmp_code].some(value => value !== null)) return null;
+  } else if ((row.protocol === 1 && row.family === "ipv4") || (row.protocol === 58 && row.family === "ipv6")) {
+    if ([original.icmp_id, original.icmp_type, original.icmp_code].some(value => value === null) || original.source_port !== null || original.destination_port !== null) return null;
+  } else return null;
+  return { family: row.family, protocol: row.protocol, zone: row.zone, original: { ...original } };
+}
+export function deleteConnection(row: Connection) {
+  const selector = connectionSelector(row);
+  if (!selector || row.id === null) throw new Error("This snapshot row has no supported complete deletion identity");
+  return request("DELETE", `/connections/${id(row.id)}`, connectionDeletionSchema.extend({ status: connectionDeletionSchema.shape.status.extract(["deleted"]) }), selector);
+}
+export const deleteAllConnections = () => request("DELETE", "/connections", connectionDeletionSchema.extend({ status: connectionDeletionSchema.shape.status.extract(["flushed"]) }), { confirm: true });
+export const getSystemUpgrade = (signal?: AbortSignal) => request("GET", "/system/upgrade", upgradeStatusSchema, undefined, signal);
+export function startSystemUpgrade(version: string) {
+  const canonical = upgradeVersionSchema.parse(version);
+  return request("POST", "/system/upgrade", upgradeJobSchema.refine(job => job.version === canonical, "Upgrade response version does not match the requested version"), { version: canonical });
+}
 export const getRevisions = (before?: string) => request("GET",
   `/revisions?limit=50${before === undefined ? "" : `&before_revision=${id(before)}`}`, revisionPageSchema);
 export const getRevision = (revision: string) => request("GET", `/revisions/${id(revision)}`, revisionDetailSchema);

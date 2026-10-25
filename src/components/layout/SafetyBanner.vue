@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
+import { formatTimestamp } from "@/services/timestamps";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 const store = useControllerStore();
 const reconciliation = ref(false), error = ref("");
+const visible = computed(() => store.incompatible || store.uncertain ||
+  store.activeTransactions.some(item => item.status !== "pending_confirmation") ||
+  store.state.data?.drift || store.draftStale || store.actionError ||
+  (store.notice && !store.activeTransactions.some(item => item.status === "pending_confirmation")));
 const candidates = computed(() => store.uncertain ? store.sortedTransactions.filter(item =>
   !store.uncertain!.priorIDs.includes(item.id)) : []);
 function resolve(): void {
@@ -14,6 +19,7 @@ function resolve(): void {
 </script>
 <template>
   <section
+    v-if="visible"
     aria-label="Global safety state"
     class="mb-6"
   >
@@ -33,18 +39,18 @@ function resolve(): void {
     >
       <strong>Outcome unknown: {{ store.uncertain.operation }}.</strong>
       Do not replay the write. A browser disconnect or timeout does not cancel durable intent.
-      <p>Started {{ store.uncertain.startedAt }} · base {{ store.uncertain.base ?? "Unknown" }}</p>
+      <p>Started {{ formatTimestamp(store.uncertain.startedAt) }} UTC · base {{ store.uncertain.base ?? "Unknown" }}</p>
       <p>New transaction records are correlation hints, not proof of ownership.</p>
       <v-btn
         v-if="store.uncertain.id"
         class="my-2"
-        :to="`/transactions/${encodeURIComponent(store.uncertain.id)}`"
+        :to="`/config/commits/${encodeURIComponent(store.uncertain.id)}`"
       >
-        Inspect known transaction
+        Inspect known commit
       </v-btn>
       <JsonPanel
         :value="candidates"
-        label="Plausible new transactions (operator reconciliation required)"
+        label="Plausible new commits (operator reconciliation required)"
       />
       <v-checkbox
         v-model="reconciliation"
@@ -64,7 +70,7 @@ function resolve(): void {
       </p>
     </v-alert>
     <v-alert
-      v-for="transaction in store.activeTransactions"
+      v-for="transaction in store.activeTransactions.filter(item => item.status !== 'pending_confirmation')"
       :key="transaction.id"
       :type="transaction.status === 'recovery_failed' ? 'error' : 'warning'"
       variant="tonal"
@@ -81,27 +87,6 @@ function resolve(): void {
         {{ transaction.error }}
       </p>
       <TransactionActions :transaction="transaction" />
-    </v-alert>
-    <v-alert
-      v-if="store.state.error || store.state.stale || store.transactions.stale"
-      type="warning"
-      variant="tonal"
-      class="mb-3"
-    >
-      Committed observation or transaction discovery is unavailable/stale. New applies and restores are blocked.
-      <p v-if="store.state.error">
-        {{ store.state.error }}
-      </p>
-      <p v-if="store.transactions.error">
-        {{ store.transactions.error }}
-      </p>
-      <p>Last committed read: {{ store.state.lastSuccess ? new Date(store.state.lastSuccess).toLocaleString() : "Unknown" }}.</p>
-      <v-btn
-        variant="text"
-        to="/transactions"
-      >
-        Recovery diagnostics
-      </v-btn>
     </v-alert>
     <v-alert
       v-if="store.state.data?.drift"
@@ -134,7 +119,7 @@ function resolve(): void {
       {{ store.actionError }}
     </v-alert>
     <v-alert
-      v-if="store.notice"
+      v-if="store.notice && !store.activeTransactions.some(item => item.status === 'pending_confirmation')"
       type="info"
       variant="tonal"
       class="mb-3"
@@ -145,3 +130,4 @@ function resolve(): void {
     </v-alert>
   </section>
 </template>
+

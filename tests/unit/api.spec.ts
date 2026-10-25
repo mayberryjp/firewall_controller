@@ -5,7 +5,8 @@ import { registryApiBaseUrl, setRegistrySessionToken } from "@/services/registry
 import * as net from "@/services/netcontrol";
 import { z } from "zod";
 import { decodeJson, encodeJson } from "@/services/json";
-import { config, state, runtime, transaction, statistics, gatewayStatistics } from "../fixtures";
+import { gatewayMonitorSchema, upgradeVersionSchema } from "@/types/domain";
+import { config, state, runtime, transaction, statistics, gatewayStatistics, connections } from "../fixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -18,6 +19,72 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("preserves DHCP monitor variants through full state, transaction reads and package writes without lease pins", async () => {
+    const candidate = config();
+    candidate.interfaces[0]!.kind = "ethernet"; candidate.interfaces[0]!.addresses = []; candidate.routes = [];
+    candidate.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+    candidate.gateway_monitors = [gatewayMonitorSchema.parse({ name: "wan-health", enabled: true, mode: "dhcp", interface: "lab0", target: "1.1.1.1" })];
+    const pending = { ...transaction(), candidate, previous: candidate };
+    body = encodeJson({ ...state(), desired: candidate, active_transaction: pending });
+    expect((await net.getState()).active_transaction?.candidate).toEqual(candidate);
+    body = encodeJson({ [pending.id]: pending });
+    expect((await net.getTransactions())[pending.id]?.previous.gateway_monitors).toEqual(candidate.gateway_monitors);
+    body = encodeJson(pending);
+    expect((await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 })).candidate).toEqual(candidate);
+    const sent = decodeJson(String(captured?.data)) as { config: { gateway_monitors: unknown[] } };
+    expect(sent.config.gateway_monitors).toEqual(candidate.gateway_monitors);
+    for (const key of ["source_address", "gateway", "routing_table"]) expect(sent.config.gateway_monitors[0]).not.toHaveProperty(key);
+  });
+  it("deletes only a complete projected connection identity and never falls back to a flush", async () => {
+    const row = connections().connections[0]!;
+    row.id = "123"; row.zone = 0; row.original.zone = null; row.reply.zone = null;
+    body = encodeJson({ status: "deleted", scope: "host" });
+    await net.deleteConnection(row);
+    expect(captured?.url).toBe("/connections/123"); expect(captured?.method).toBe("delete");
+    expect(decodeJson(String(captured?.data))).toEqual({ family: row.family, protocol: row.protocol, zone: row.zone, original: row.original });
+    expect(net.connectionSelector({ ...row, id: null })).toBeNull();
+    expect(net.connectionSelector({ ...row, id: "01" })).toBeNull();
+    expect(net.connectionSelector({ ...row, protocol: 255 })).toBeNull();
+    expect(() => net.deleteConnection({ ...row, id: null })).toThrow("complete deletion identity");
+    expect(adapter).toHaveBeenCalledTimes(1);
+    body = encodeJson({ status: "flushed", scope: "host" }); await net.deleteAllConnections();
+    expect(captured?.url).toBe("/connections"); expect(decodeJson(String(captured?.data))).toEqual({ confirm: true });
+  });
+  it("treats uncertain DELETE outcomes as writes without retrying", async () => {
+    adapter.mockRejectedValueOnce(new AxiosError("timeout", "ETIMEDOUT"));
+    await expect(net.deleteAllConnections()).rejects.toMatchObject({ uncertain: true });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it("reads disabled self-upgrade setup and submits only an explicit canonical version", async () => {
+    body = encodeJson({ enabled: false, repository: null, job: null, last_successful_version: null });
+    expect((await net.getSystemUpgrade()).enabled).toBe(false);
+    status = 202;
+    body = encodeJson({ id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null });
+    const accepted = await net.startSystemUpgrade("1.2.3"); expect(accepted.id).toBe("upgrade-1");
+    expect(captured?.url).toBe("/system/upgrade"); expect(decodeJson(String(captured?.data))).toEqual({ version: "1.2.3" });
+    for (const version of ["v1.2.3", "01.2.3", "1.2.3+build", "1.2.3-01", "https://example.test"]) expect(upgradeVersionSchema.safeParse(version).success).toBe(false);
+    expect(upgradeVersionSchema.safeParse("1.2.3-rc.1").success).toBe(true);
+    body = encodeJson({ ...accepted, version: "2.0.0" });
+    await expect(net.startSystemUpgrade("1.2.3")).rejects.toMatchObject({ uncertain: true, incompatible: true });
+  });
+  it("reads filtered connection snapshots with exact nullable counters and strict schema", async () => {
+    body = encodeJson(connections());
+    const result = await net.getConnections({ address: "2001:db8::1", protocol: "tcp", port: 0, zone: 0, limit: 100, offset: 0 });
+    expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
+    expect(captured?.url).toBe("/statistics/connections?address=2001%3Adb8%3A%3A1&protocol=tcp&port=0&zone=0&limit=100&offset=0");
+    expect(result.connections[0]!.original_counters?.bytes).toBe("18446744073709551615");
+    expect(result.connections[0]!.reply_counters).toBeNull();
+    body = encodeJson({ ...connections(), schema: "unsupported" });
+    await expect(net.getConnections()).rejects.toThrow("Incompatible API response");
+  });
+  it("retries one DHCP interface with a bodyless POST and strict accepted response", async () => {
+    status = 202; body = encodeJson({ interface: "wan.10", status: "retrying" });
+    expect(await net.retryDHCP("wan.10")).toEqual({ interface: "wan.10", status: "retrying" });
+    expect(captured?.url).toBe("/interfaces/wan.10/dhcp/retry");
+    expect(captured?.method).toBe("post"); expect(captured?.data).toBeUndefined();
+    body = encodeJson({ interface: "wan.10", status: "leased" });
+    await expect(net.retryDHCP("wan.10")).rejects.toThrow("Incompatible API response");
+  });
   it("reads backend input policies in transaction maps and full state", async () => {
     const pending = transaction(), current = state();
     pending.candidate.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ action: "accept" }] }] };

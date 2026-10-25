@@ -2,17 +2,31 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { getDiscoveredInterfaces } from "@/services/netcontrol";
-import { displayResourceValue } from "@/services/resourceCollections";
+import { record } from "@/types/forms";
+import type { ResourceRow } from "@/composables/useResourceCollection";
+import ResourceTable from "@/components/feature/ResourceTable.vue";
 import type { DiscoveredInterface } from "@/types/domain";
 
-withDefaults(defineProps<{ columns?: number }>(), { columns: 7 });
-const emit = defineEmits<{ manage: [link: DiscoveredInterface] }>();
+const props = withDefaults(defineProps<{ expandedName?: string; loopbacks?: boolean; editingRow?: number }>(), { expandedName: undefined, loopbacks: false, editingRow: undefined });
+const emit = defineEmits<{ manage: [link: DiscoveredInterface]; edit: [value: unknown]; delete: [row: ResourceRow] }>();
 const store = useControllerStore();
-const inventory = ref<DiscoveredInterface[]>([]), loading = ref(false), error = ref("");
-const managed = computed(() => new Set((store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired)?.interfaces.map(link => link.name) ?? []));
-const available = computed(() => inventory.value.filter(link =>
-  link.ownership === "unmanaged" && ["ethernet", "veth"].includes(link.kind) && !managed.value.has(link.name) &&
-  !store.runtime.data?.parent_interfaces.some(parent => parent.name === link.name)));
+const inventory = ref<DiscoveredInterface[] | null>(null), loading = ref(false), error = ref("");
+const selected = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
+const rows = computed<ResourceRow[]>(() => {
+  const links = (inventory.value ?? []).filter(link => {
+    const loopback = link.name === "lo" || link.kind === "loopback" || link.ownership === "loopback" || link.kind === "dummy";
+    const vlan = link.kind === "vlan" || selected.value?.interfaces.some(item => item.name === link.name && item.kind === "vlan");
+    return props.loopbacks ? loopback : !loopback && !vlan;
+  });
+  const result: ResourceRow[] = links.map(link => {
+    const index = selected.value?.interfaces.findIndex(item => item.name === link.name) ?? -1;
+    return { discovered: link, index, rowID: link.name, value: record(selected.value?.interfaces[index] ?? { name: link.name, kind: link.kind }) };
+  });
+  if (props.loopbacks) selected.value?.interfaces.forEach((link, index) => {
+    if (link.kind === "dummy" && !links.some(discovered => discovered.name === link.name)) result.push({ index, rowID: link.name, value: record(link) });
+  });
+  return result;
+});
 let controller: AbortController | undefined;
 async function refresh(): Promise<void> {
   if (loading.value) return;
@@ -28,46 +42,53 @@ defineExpose({ refresh });
 </script>
 
 <template>
-  <tr v-if="error">
-    <td
-      :colspan="columns"
-      role="alert"
-      class="text-error"
-    >
-      {{ error }}
-      <v-btn
-        icon="mdi-refresh"
-        size="small"
-        variant="text"
-        aria-label="Retry interface discovery"
-        title="Retry interface discovery"
-        :loading="loading"
-        @click="refresh"
-      />
-    </td>
-  </tr>
-  <tr
-    v-for="link in available"
-    :key="link.name"
+  <v-progress-linear
+    v-if="loading"
+    indeterminate
+  />
+  <v-alert
+    v-if="error"
+    type="error"
+    role="alert"
+    class="mb-4"
   >
-    <td>{{ link.name }}</td>
-    <td>{{ displayResourceValue(link.kind, "kind") }}</td>
-    <td class="text-medium-emphasis">
-      Unmanaged
-    </td>
-    <td>{{ link.up ? "Up" : "Down" }}</td>
-    <td>{{ link.mtu }}</td>
-    <td>{{ link.addresses.join(", ") || "None" }}</td>
-    <td v-if="columns > 7" />
-    <td>
-      <v-btn
-        size="small"
-        prepend-icon="mdi-plus"
-        :disabled="Boolean(store.readOnlyReason)"
-        @click="emit('manage', link)"
-      >
-        Manage this interface
-      </v-btn>
-    </td>
-  </tr>
+    {{ inventory === null ? 'Interface inventory unavailable.' : 'Interface inventory stale; showing last discovered interfaces.' }} {{ error }}
+    <v-btn
+      icon="mdi-refresh"
+      size="small"
+      variant="text"
+      aria-label="Retry interface discovery"
+      title="Retry interface discovery"
+      :loading="loading"
+      @click="refresh"
+    />
+  </v-alert>
+  <ResourceTable
+    v-if="inventory !== null || (loopbacks && editingRow !== undefined)"
+    section="interfaces"
+    :rows="rows"
+    :total="rows.length"
+    :disabled="Boolean(store.readOnlyReason) || loading || Boolean(error)"
+    :detail="false"
+    inventory
+    :loopbacks="loopbacks"
+    :expanded-name="expandedName"
+    :editing-row="editingRow"
+    @edit="emit('edit', $event)"
+    @delete="emit('delete', $event)"
+    @manage="emit('manage', $event)"
+  >
+    <template #editing-row="slotProps">
+      <slot
+        name="editing-row"
+        v-bind="slotProps"
+      />
+    </template>
+    <template #additional-rows="slotProps">
+      <slot
+        name="additional-rows"
+        v-bind="slotProps"
+      />
+    </template>
+  </ResourceTable>
 </template>

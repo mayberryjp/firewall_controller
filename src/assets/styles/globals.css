@@ -131,6 +131,15 @@ body {
   max-width: var(--app-content-max-width);
   margin-inline: auto;
   padding: calc(var(--app-space) * 4);
+  padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+}
+
+.connection-bubble {
+  position: fixed !important;
+  right: calc(20px + env(safe-area-inset-right, 0px));
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  z-index: 1100;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 35%) !important;
 }
 
 .mono, pre {
@@ -220,6 +229,10 @@ body {
 
 .v-table td {
   max-width: 360px;
+}
+
+.v-table > .v-table__wrapper > table > tbody > tr > :is(td, th) {
+  border-block-width: 0 !important;
 }
 
 @media (prefers-reduced-motion: reduce) {

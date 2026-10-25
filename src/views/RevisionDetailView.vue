@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { formatTimestamp } from "@/services/timestamps";
 import { useControllerStore } from "@/stores/controller";
 import { revisionSchema } from "@/types/domain";
 import { useConfigExport } from "@/composables/useConfigExport";
@@ -36,7 +37,7 @@ async function restore(): Promise<void> {
   try {
     const result = await store.restore(id.value, Number(seconds.value), description.value);
     restoreDialog.value = false;
-    if (result) await router.push(`/transactions/${encodeURIComponent(result.id)}`);
+    if (result) await router.push(`/config/commits/${encodeURIComponent(result.id)}`);
   } catch (failure) { error.value = failure instanceof Error ? failure.message : "Restore failed"; }
 }
 </script>
@@ -69,10 +70,10 @@ async function restore(): Promise<void> {
         </p>
         <dl class="record-metadata">
           <template v-if="detail.submitted_at">
-            <dt>Submitted</dt><dd>{{ detail.submitted_at }}<span v-if="detail.submitted_by"> · {{ detail.submitted_by }}</span></dd>
+            <dt>Submitted (UTC)</dt><dd>{{ formatTimestamp(detail.submitted_at) }}<span v-if="detail.submitted_by"> · {{ detail.submitted_by }}</span></dd>
           </template>
           <template v-if="detail.committed_at">
-            <dt>Committed</dt><dd>{{ detail.committed_at }}<span v-if="detail.committed_by"> · {{ detail.committed_by }}</span></dd>
+            <dt>Committed (UTC)</dt><dd>{{ formatTimestamp(detail.committed_at) }}<span v-if="detail.committed_by"> · {{ detail.committed_by }}</span></dd>
           </template>
         </dl>
         <p v-if="detail.restored_from_revision !== undefined">
@@ -80,9 +81,9 @@ async function restore(): Promise<void> {
         </p>
         <router-link
           v-if="detail.transaction_id"
-          :to="`/transactions/${encodeURIComponent(detail.transaction_id)}`"
+          :to="`/config/commits/${encodeURIComponent(detail.transaction_id)}`"
         >
-          Recorded transaction
+          Recorded commit
         </router-link>
       </div>
       <div class="d-flex flex-wrap ga-3 mb-5">
@@ -104,7 +105,7 @@ async function restore(): Promise<void> {
       >
         A local draft exists. Export and explicitly discard it in Changes before restoration.<v-btn
           variant="text"
-          to="/changes"
+          to="/config/changes"
         >
           Review draft
         </v-btn>
@@ -141,10 +142,10 @@ async function restore(): Promise<void> {
       />
     </template>
     <v-btn
-      to="/history"
+      to="/config/revisions"
       variant="text"
     >
-      All committed revisions
+      All push requests
     </v-btn>
     <v-dialog
       v-model="restoreDialog"

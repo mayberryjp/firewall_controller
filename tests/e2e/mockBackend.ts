@@ -1,9 +1,9 @@
 import type { Page } from "@playwright/test";
-import { config, runtime, statistics, transaction, gatewayStatistics } from "../fixtures";
-import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics } from "../../src/types/domain";
+import { config, runtime, statistics, transaction, gatewayStatistics, connections } from "../fixtures";
+import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics, RuntimeState } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
 
-export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics } = {}) {
+export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics } = {}) {
   let committed = options.initialConfig ?? config(), revision = "0";
   const transactions: Record<string, Transaction> = {};
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
@@ -17,7 +17,8 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
   const runtimeState = () => {
     const stored = Object.values(transactions).find(item => item.status === "pending_confirmation")?.candidate ?? committed;
     return {
-      ...runtime(), dhcp_relay: stored.interfaces.map(link => ({ interface: link.name, state: link.dhcp_relay.enabled ? "simulated" : "disabled" })),
+      ...runtime(), capabilities: options.runtimeCapabilities,
+      dhcp_relay: stored.interfaces.map(link => ({ interface: link.name, state: link.dhcp_relay.enabled ? "simulated" : "disabled" })),
       gateway_monitors: gatewayRows(),
       appliance_services: runtime().appliance_services.map(item => ({
         ...item, state: stored[item.name === "ntp" ? "ntp" : item.name === "syslog" ? "syslog" : "vnstat"].enabled ? "simulated" : "disabled",
@@ -39,7 +40,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       return route.fulfill({ status: 204, headers: {
         "Access-Control-Allow-Origin": request.headers().origin ?? "*",
         "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Authorization, Content-Type",
       } });
     }
@@ -83,9 +84,11 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
           active_transaction: Object.values(transactions).find(item => !["committed", "rolled_back"].includes(item.status)) });
       }
       if (path === "/runtime") return reply(runtimeState());
+      if (path === "/system/upgrade") return reply({ enabled: false, repository: null, job: null, last_successful_version: null });
       if (path === "/interfaces/discovered") return reply(options.discoveredInterfaces ?? []);
       if (path === "/services/dhcp-relay/status") return reply({ interfaces: runtimeState().dhcp_relay, error: "" });
       if (path === "/statistics") return reply(options.statistics ?? statistics());
+      if (path === "/statistics/connections") return reply({ ...connections(), connections: [], sample: { ...connections().sample, status: "simulated" }, summary: { total: null, matched: null, returned: 0, accounting_unavailable: null } });
       if (path === "/statistics/gateways") return reply({ sample: statistics().sample, monitors: gatewayRows() });
       if (path.startsWith("/statistics/gateways/")) {
         const row = gatewayRows().find(item => item.name === decodeURIComponent(path.split("/")[3] ?? ""));
@@ -95,6 +98,10 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       if (path.startsWith("/transactions/")) return transactions[path.split("/")[2] ?? ""] ? reply(transactions[path.split("/")[2]!]) : reply({ error: "Not found", transaction: null }, 404);
       if (path === "/revisions") return reply({ revisions: [{ revision, current: true, submitted_at: null, committed_at: null }] });
       if (path.startsWith("/revisions/")) return reply({ revision: path.split("/")[2], current: true, submitted_at: null, committed_at: null, config: committed });
+    }
+    if (request.method() === "DELETE") {
+      writes.push({ path, body: request.postData() ? decodeJson(request.postData()!) : undefined });
+      if (path === "/connections" || /^\/connections\/\d+$/.test(path)) return reply({ status: path === "/connections" ? "flushed" : "deleted", scope: connections().sample.scope });
     }
     if (request.method() === "POST") {
       const body: unknown = request.postData() ? decodeJson(request.postData()!) : undefined;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Dataset } from "@/stores/controller";
+import { formatTimestamp } from "@/services/timestamps";
 defineProps<{ query: Dataset<unknown>; label: string }>();
 </script>
 
@@ -31,7 +32,7 @@ defineProps<{ query: Dataset<unknown>; label: string }>();
   <p
     v-else-if="query.stale && query.lastSuccess"
     class="text-caption text-medium-emphasis mb-3"
-    :title="`Last read ${new Date(query.lastSuccess).toLocaleString()}`"
+    :title="`Last read ${formatTimestamp(query.lastSuccess)} UTC`"
   >
     {{ label }}: stale data
   </p>

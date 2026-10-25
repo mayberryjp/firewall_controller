@@ -37,6 +37,9 @@ class FakeFirewallHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self._record()
 
+    def do_DELETE(self) -> None:
+        self._record()
+
     def log_message(self, format: str, *args: object) -> None:
         pass
 
@@ -100,7 +103,7 @@ class RegistryHTTPTests(unittest.TestCase):
         )
         self.assertEqual(response.status, 204)
         self.assertEqual(response.getheader("Access-Control-Allow-Origin"), "*")
-        self.assertEqual(response.getheader("Access-Control-Allow-Methods"), "GET, POST, OPTIONS")
+        self.assertEqual(response.getheader("Access-Control-Allow-Methods"), "GET, POST, DELETE, OPTIONS")
         self.assertEqual(response.getheader("Access-Control-Allow-Headers"), "Authorization, Content-Type")
         self.assertIsNone(response.getheader("Access-Control-Allow-Credentials"))
 
@@ -177,6 +180,34 @@ class RegistryHTTPTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertNotIn(b"device-key", encrypted)
 
+    def test_proxy_preserves_connection_pagination_and_encoded_filters(self):
+        token = self.login()
+        _, created = self.request(
+            "POST",
+            "/api/v1/devices",
+            {
+                "name": "Connections test firewall",
+                "address": f"http://127.0.0.1:{self.firewall.server_port}",
+                "credential": "device-key",
+            },
+            token,
+        )
+        device_id = created["device"]["id"]
+        for query in (
+            "limit=100&offset=0",
+            "address=2001%3Adb8%3A%3A1&protocol=tcp&port=0&zone=0&limit=100&offset=100",
+        ):
+            with self.subTest(query=query):
+                endpoint = f"/statistics/connections?{query}"
+                response, payload = self.request(
+                    "GET", f"/api/v1/devices/{device_id}/proxy{endpoint}", token=token
+                )
+                self.assertEqual(response.status, 200)
+                self.assertEqual(payload["path"], f"/api/v1{endpoint}")
+                self.assertEqual(FakeFirewallHandler.requests[-1][0], f"/api/v1{endpoint}")
+                self.assertEqual(FakeFirewallHandler.requests[-1][2], b"")
+        self.assertEqual(len(FakeFirewallHandler.requests), 2)
+
     def test_proxy_forwards_post_body_and_rejects_missing_registry_session(self):
         token = self.login()
         _, created = self.request(
@@ -205,6 +236,38 @@ class RegistryHTTPTests(unittest.TestCase):
         self.assertEqual(response.status, 401)
         self.assertEqual(response.getheader("X-Registry-Auth-Error"), "true")
         self.assertEqual(len(FakeFirewallHandler.requests), 1)
+
+    def test_proxy_forwards_delete_json_and_requires_authentication(self):
+        token = self.login()
+        _, created = self.request("POST", "/api/v1/devices", {
+            "name": "Deletion test firewall",
+            "address": f"http://127.0.0.1:{self.firewall.server_port}",
+            "credential": "device-key",
+        }, token)
+        device_id = created["device"]["id"]
+        endpoint = f"/api/v1/devices/{device_id}/proxy/connections"
+        response, _ = self.request("OPTIONS", endpoint, headers={
+            "Origin": "https://dashboard.example", "Access-Control-Request-Method": "DELETE",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        })
+        self.assertEqual(response.status, 204)
+        self.assertIn("DELETE", response.getheader("Access-Control-Allow-Methods"))
+        for suffix, body in [("", {"confirm": True}), ("/123", {
+            "family": "ipv4", "protocol": 6, "zone": 0,
+            "original": {"source": "192.0.2.2", "destination": "198.51.100.2", "source_port": 50000, "destination_port": 443},
+        })]:
+            with self.subTest(suffix=suffix):
+                response, _ = self.request("DELETE", endpoint + suffix, body, token)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(FakeFirewallHandler.requests[-1], (
+                    "/api/v1/connections" + suffix, "Bearer device-key", json.dumps(body).encode("utf-8"),
+                ))
+        response, _ = self.request("DELETE", endpoint, {"confirm": True})
+        self.assertEqual(response.status, 401)
+        self.assertEqual(response.getheader("X-Registry-Auth-Error"), "true")
+        self.assertEqual(len(FakeFirewallHandler.requests), 2)
+        response, _ = self.request("DELETE", f"/api/v1/devices/{device_id}", {}, token)
+        self.assertEqual(response.status, 405)
 
     def test_device_can_be_updated_and_deleted(self):
         token = self.login()

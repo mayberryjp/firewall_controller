@@ -10,6 +10,7 @@ vi.mock("@/services/netcontrol", () => ({
   getStatistics: vi.fn(), getGatewayStatistics: vi.fn(), getRevisions: vi.fn(), getRevision: vi.fn(),
   submitPackage: vi.fn(), confirmTransaction: vi.fn(), rollbackTransaction: vi.fn(),
   restoreRevision: vi.fn(), reconcileServices: vi.fn(),
+  getSystemUpgrade: vi.fn(), startSystemUpgrade: vi.fn(),
 }));
 beforeEach(() => {
   setActivePinia(createPinia()); vi.resetAllMocks();
@@ -19,6 +20,7 @@ beforeEach(() => {
   vi.mocked(api.getRevisions).mockResolvedValue({ revisions: [] });
   vi.mocked(api.getStatistics).mockResolvedValue(statistics());
   vi.mocked(api.getGatewayStatistics).mockResolvedValue({ sample: statistics().sample, monitors: [] });
+  vi.mocked(api.getSystemUpgrade).mockResolvedValue({ enabled: false, repository: null, job: null, last_successful_version: null });
 });
 async function connected() {
   const store = useControllerStore();
@@ -27,6 +29,60 @@ async function connected() {
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("does not let a status read started before acceptance replace the accepted upgrade job", async () => {
+    const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    const job = { id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue(available);
+    let finishWrite!: (value: typeof job) => void, finishRead!: (value: typeof available) => void;
+    vi.mocked(api.startSystemUpgrade).mockImplementation(() => new Promise(resolve => { finishWrite = resolve; }));
+    const store = await connected();
+    const submission = store.startUpgrade("1.2.3", "operator/appliance");
+    await vi.waitFor(() => expect(api.startSystemUpgrade).toHaveBeenCalledTimes(1));
+    vi.mocked(api.getSystemUpgrade).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    const read = store.refreshUpgrade();
+    finishWrite(job); await submission;
+    finishRead(available); await read;
+    expect(store.upgrade.data?.job?.id).toBe("upgrade-1"); expect(store.upgradeNotice).toBe("");
+    expect(store.upgrade.stale).toBe(false); expect(store.upgradePending).toBe(false);
+  });
+  it("refuses an upgrade if its operator-configured repository changed after confirmation", async () => {
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue({ enabled: true, repository: "operator/changed", job: null, last_successful_version: null });
+    const store = await connected();
+    await expect(store.startUpgrade("1.2.3", "operator/original")).rejects.toThrow("repository changed");
+    expect(api.startSystemUpgrade).not.toHaveBeenCalled(); expect(store.upgradePending).toBe(false);
+  });
+  it("preserves drafts, blocks active upgrades and refreshes state after a terminal job", async () => {
+    const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    const job = { id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue(available);
+    vi.mocked(api.startSystemUpgrade).mockResolvedValue(job);
+    const store = await connected();
+    const candidate = config(); candidate.routes[0]!.metric = 42; store.stage(candidate);
+    await store.startUpgrade("1.2.3", "operator/appliance");
+    expect(store.readOnlyReason).toContain("queued"); expect(store.draft?.routes[0]?.metric).toBe(42);
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "recovery_required" } });
+    await expect(store.checkMaintenance()).rejects.toThrow("console recovery");
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "rolled_back" } });
+    const changed = state(); changed.revision = "1"; vi.mocked(api.getState).mockResolvedValue(changed);
+    await store.refreshUpgrade();
+    expect(store.upgradeBlockedReason).toBe(""); expect(store.state.data?.revision).toBe("1");
+    expect(store.draft?.routes[0]?.metric).toBe(42); expect(store.draftStale).toBe(true);
+    expect(api.submitPackage).not.toHaveBeenCalled();
+  });
+  it("reconciles an uncertain upgrade by job identity without resubmitting and detects supersession", async () => {
+    const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    const job = { id: "upgrade-1", version: "1.2.3", status: "checking", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue(available);
+    vi.mocked(api.startSystemUpgrade).mockRejectedValue(new ApiFailure("disconnected", undefined, undefined, true));
+    const store = await connected();
+    await expect(store.startUpgrade("1.2.3", "operator/appliance")).rejects.toThrow("disconnected");
+    expect(store.upgradeUncertain).toBe(true);
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job }); await store.refreshUpgrade();
+    expect(store.acceptedUpgradeID).toBe("upgrade-1"); expect(store.upgradeUncertain).toBe(false);
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, id: "upgrade-2", status: "succeeded" } }); await store.refreshUpgrade();
+    expect(store.upgradeBlockedReason).toContain("operator verification"); expect(store.upgradeNotice).toContain("upgrade-1");
+    expect(api.startSystemUpgrade).toHaveBeenCalledTimes(1);
+  });
   it("loads gateway statistics while observation is unavailable and clears their cache on disconnect", async () => {
     const store = await connected();
     vi.mocked(api.getState).mockRejectedValue(new Error("observation failed"));
@@ -258,6 +314,8 @@ describe("provisional transaction safety", () => {
     vi.mocked(api.getState).mockResolvedValue({ ...state(), revision: "1", desired: candidate });
     await store.refreshTransactions();
     expect(store.draft).toBeNull(); expect(store.submitted).toBeNull();
+    expect(store.notice).toBeNull();
+    expect(store.transactions.data?.[pending.id]?.status).toBe("committed");
   });
   it("retains the candidate as an editable draft after verified rollback", async () => {
     const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
@@ -266,6 +324,7 @@ describe("provisional transaction safety", () => {
     vi.mocked(api.getTransactions).mockResolvedValueOnce({}).mockResolvedValue({ [rolledBack.id]: rolledBack });
     await store.apply(120, "");
     expect(store.draft).toEqual(candidate); expect(store.submitted).toBeNull(); expect(store.baseRevision).toBe("0");
+    expect(store.notice).toContain("Server verified rollback");
   });
   it("a rejected 401 releases an unsubmitted snapshot but preserves the draft", async () => {
     const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);

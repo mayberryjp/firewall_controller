@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ title: string; to: string; note?: string; detail?: string }>();
+defineProps<{ title: string; to?: string; note?: string; detail?: string }>();
 </script>
 
 <template>
@@ -18,6 +18,7 @@ defineProps<{ title: string; to: string; note?: string; detail?: string }>();
         :title="detail"
       >{{ note }}</span>
       <v-btn
+        v-if="to"
         :to="to"
         :aria-label="`Open ${title}`"
         :title="`Open ${title}`"

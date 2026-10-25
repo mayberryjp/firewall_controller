@@ -4,8 +4,9 @@ import { record } from "@/types/forms";
 import { prefix, stableJson } from "@/services/configuration";
 import { resourceItems } from "@/services/resourceCollections";
 import type { Section } from "@/services/resourceForms";
+import type { DiscoveredInterface } from "@/types/domain";
 
-export interface ResourceRow { value: Record<string, unknown>; index: number; rowID: string }
+export interface ResourceRow { value: Record<string, unknown>; index: number; rowID: string; discovered?: DiscoveredInterface }
 export interface ResourceFilters {
   search: string;
   kind: string;
@@ -16,7 +17,7 @@ export interface ResourceFilters {
   table: string;
 }
 
-export function useResourceCollection(section: Section, wireguard: boolean, name?: string) {
+export function useResourceCollection(section: Section, wireguard: boolean, name?: string, vlan = false) {
   const store = useControllerStore();
   const filters = reactive<ResourceFilters>({ search: "", kind: "All", role: "All", admin: "All", interface: "All", family: "All", table: "" });
   const selectedConfig = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
@@ -26,6 +27,7 @@ export function useResourceCollection(section: Section, wireguard: boolean, name
   })).filter(({ value }) => {
     if (name && value.name !== name) return false;
     if (wireguard && value.kind !== "wireguard") return false;
+    if (vlan && value.kind !== "vlan") return false;
     if (filters.kind !== "All" && value.kind !== filters.kind) return false;
     if (filters.role !== "All" && value.role !== filters.role.toLowerCase()) return false;
     if (filters.admin !== "All" && value.up !== (filters.admin === "Up")) return false;

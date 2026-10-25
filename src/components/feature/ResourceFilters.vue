@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import type { ResourceFilters } from "@/composables/useResourceCollection";
 import type { Section } from "@/services/resourceForms";
-defineProps<{ section: Section; interfaces: string[] }>();
+import { displayResourceValue } from "@/services/resourceCollections";
+import { watch } from "vue";
+import { useControllerStore } from "@/stores/controller";
+import type { Choice } from "@/types/forms";
+defineProps<{ section: Section; interfaces: Choice[] }>();
 const filters = defineModel<ResourceFilters>({ required: true });
+const store = useControllerStore();
+watch(() => store.ipv6Enabled, enabled => {
+  if (!enabled && filters.value.family === "ipv6") filters.value.family = "All";
+}, { immediate: true });
 </script>
 
 <template>
@@ -15,7 +23,7 @@ const filters = defineModel<ResourceFilters>({ required: true });
     <template v-if="section === 'interfaces'">
       <v-select
         v-model="filters.kind"
-        :items="['All', 'ethernet', 'dummy', 'vlan', 'wireguard']"
+        :items="['All', 'ethernet', 'dummy', 'vlan', 'wireguard'].map(value => ({ title: value === 'All' ? value : displayResourceValue(value, 'kind'), value }))"
         label="Kind"
       />
       <v-select
@@ -32,10 +40,11 @@ const filters = defineModel<ResourceFilters>({ required: true });
     <template v-if="section === 'routes'">
       <v-select
         v-model="filters.interface"
-        :items="['All', ...interfaces]"
+        :items="[{ title: 'All', value: 'All' }, ...interfaces]"
         label="Interface"
       />
       <v-select
+        v-if="store.ipv6Enabled"
         v-model="filters.family"
         :items="['All', 'ipv4', 'ipv6']"
         label="Family"

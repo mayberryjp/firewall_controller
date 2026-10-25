@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { selectedRelayPrefix } from "@/services/configuration";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
-import ServiceRepair from "@/components/feature/ServiceRepair.vue";
+import DHCPRelayEditor from "@/components/feature/DHCPRelayEditor.vue";
 const store = useControllerStore();
+const editing = ref<string | null>(null);
 const stored = computed(() => store.draft ?? store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
 const names = computed(() => [...new Set([
   ...(stored.value?.interfaces.map(link => link.name) ?? []),
@@ -35,16 +36,15 @@ function selected(name: string): string {
     >
       {{ store.runtime.data.error }}
     </v-alert>
-    <ServiceRepair service="dhcp-relay" />
     <v-table>
-      <thead><tr><th>Interface</th><th>Enabled</th><th>Servers</th><th>Relay address</th><th>Status</th></tr></thead>
+      <thead><tr><th>Interface</th><th>Enabled</th><th>Servers</th><th>Relay address</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
         <tr
           v-for="name in names"
           :key="name"
         >
           <td>
-            <router-link :to="`/interfaces/${encodeURIComponent(name)}`">
+            <router-link :to="`/${stored?.interfaces.find(link => link.name === name)?.kind === 'vlan' ? 'vlans' : 'interfaces'}/${encodeURIComponent(name)}`">
               {{ name }}
             </router-link>
           </td>
@@ -56,13 +56,26 @@ function selected(name: string): string {
             {{ selected(name) }}
           </td>
           <td><RelayStatus :status="store.runtime.data?.dhcp_relay.find(item => item.interface === name)" /></td>
+          <td>
+            <v-btn
+              v-if="stored?.interfaces.some(link => link.name === name && link.kind !== 'wireguard')"
+              icon="mdi-pencil"
+              variant="text"
+              size="small"
+              :aria-label="`Edit DHCP relay ${name}`"
+              :title="`Edit DHCP relay ${name}`"
+              :disabled="Boolean(store.readOnlyReason)"
+              @click="editing = name"
+            />
+          </td>
         </tr>
         <tr v-if="!names.length">
-          <td colspan="5">
+          <td colspan="6">
             No interface records available.
           </td>
         </tr>
       </tbody>
     </v-table>
+    <DHCPRelayEditor v-model="editing" />
   </section>
 </template>

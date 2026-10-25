@@ -352,7 +352,7 @@ def make_server(
         def _proxy(self, method: str, device_id: str, endpoint: str) -> None:
             if not self._authorized():
                 headers = {"X-Registry-Auth-Error": "true"}
-                if method == "POST":
+                if method in ("POST", "DELETE"):
                     self.close_connection = True
                     headers["Connection"] = "close"
                 self._send(401, {"error": "Registry login required"}, headers)
@@ -364,13 +364,13 @@ def make_server(
                 or any(ord(char) < 32 for char in endpoint)
             ):
                 headers = None
-                if method == "POST":
+                if method in ("POST", "DELETE"):
                     self.close_connection = True
                     headers = {"Connection": "close"}
                 self._send(400, {"error": "Invalid firewall API path"}, headers)
                 return
             try:
-                body = self._raw_body(MAX_PROXY_BODY_BYTES) if method == "POST" else None
+                body = self._raw_body(MAX_PROXY_BODY_BYTES) if method in ("POST", "DELETE") else None
                 address, credential = self.registry.get_proxy_target(device_id)
                 target = urlsplit(address)
                 upstream_path = "/api/v1" + endpoint
@@ -385,7 +385,7 @@ def make_server(
                 )
             except ValueError as error:
                 headers = None
-                if method == "POST":
+                if method in ("POST", "DELETE"):
                     self.close_connection = True
                     headers = {"Connection": "close"}
                 self._send(400, {"error": str(error)}, headers)
@@ -440,13 +440,13 @@ def make_server(
                 for item in self.headers.get("Access-Control-Request-Headers", "").split(",")
                 if item.strip()
             }
-            if requested_method not in ("GET", "POST") or not requested_headers.issubset(
+            if requested_method not in ("GET", "POST", "DELETE") or not requested_headers.issubset(
                 {"authorization", "content-type"}
             ):
                 self._send(405, {"error": "Unsupported cross-origin method or header"})
                 return
             self._send(204, headers={
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
                 "Access-Control-Allow-Headers": "Authorization, Content-Type",
                 "Access-Control-Max-Age": "600",
             })
@@ -547,6 +547,11 @@ def make_server(
             self._send(405, {"error": "Method not allowed"})
 
         def do_DELETE(self) -> None:
+            path = urlsplit(self.path).path
+            match = re.fullmatch(r"/api/v1/devices/([0-9a-fA-F-]{36})/proxy(/.*)", path)
+            if match is not None:
+                self._proxy("DELETE", match.group(1), match.group(2))
+                return
             self._send(405, {"error": "Method not allowed"})
 
     Handler.registry = registry

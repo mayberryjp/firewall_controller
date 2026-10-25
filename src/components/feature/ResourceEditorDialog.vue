@@ -15,7 +15,6 @@ const props = defineProps<{
   error: string;
   renaming: boolean;
   renameImpacts: string[];
-  relaySelection: string;
   disabled: boolean;
 }>();
 const acknowledged = defineModel<boolean>("acknowledged", { required: true });
@@ -35,15 +34,6 @@ watch(() => props.error, async value => {
   >
     <v-card :title="`${editingIndex < 0 ? 'Add' : 'Edit'} ${title} — local draft only`">
       <v-card-text id="editor">
-        <v-alert
-          v-if="section === 'interfaces' && form.kind === 'ethernet'"
-          type="warning"
-          class="mb-4"
-        >
-          Changing a management NIC can disconnect this session. Keep console access and verify connectivity before confirming.
-          DHCP mode requires removal of static IPv4 addresses; static IPv6 may remain. Releasing management does not delete
-          hardware, restart OS DHCP or remove persistent networkd exclusions. Host forwarding remains an operator prerequisite.
-        </v-alert>
         <v-alert
           v-if="renaming"
           type="warning"
@@ -98,18 +88,6 @@ watch(() => props.error, async value => {
           :errors="errors"
           @update:model-value="$emit('change', field.key, $event)"
         />
-        <v-alert
-          v-if="section === 'interfaces'"
-          type="info"
-          variant="tonal"
-          class="mt-4"
-        >
-          Selected DHCP relay address/subnet: {{ relaySelection }} (first eligible IPv4 prefix in canonical lexicographic order).
-          All upstreams receive each request; WAN/LAN does not choose upstream links.
-          Requires transactions.write and interfaces.write; the server enforces permissions.
-          Changing enabled links, servers or selected addresses can restart the shared relay process and briefly disrupt other interfaces.
-          Relay provides no DHCP server, DHCPv6, automatic firewall/NAT/routes or daemon installation.
-        </v-alert>
       </v-card-text>
       <v-card-actions>
         <v-btn @click="$emit('cancel')">
@@ -120,7 +98,7 @@ watch(() => props.error, async value => {
           :disabled="disabled"
           @click="$emit('stage')"
         >
-          Stage changes
+          Save
         </v-btn>
       </v-card-actions>
     </v-card>

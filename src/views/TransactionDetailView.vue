@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import type { Transaction } from "@/types/domain";
+import { formatTimestamp } from "@/services/timestamps";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
@@ -18,14 +19,14 @@ async function read(): Promise<void> {
   if (version !== generation || disposed) return;
   loading.value = false;
   if (result) detail.value = result;
-  else error.value = store.actionError || "Transaction unavailable (possibly not found or denied)";
+  else error.value = store.actionError || "Commit unavailable (possibly not found or denied)";
 }
 watch(() => props.id, () => { detail.value = null; void read(); }, { immediate: true });
 onUnmounted(() => { disposed = true; generation++; });
 </script>
 
 <template>
-  <section aria-label="Transaction detail">
+  <section aria-label="Commit detail">
     <div class="d-flex align-center justify-space-between mb-4">
       <h1 class="text-h6 wrap-text mono">
         {{ id }}
@@ -33,8 +34,8 @@ onUnmounted(() => { disposed = true; generation++; });
       <v-btn
         icon="mdi-refresh"
         variant="text"
-        aria-label="Refresh transaction"
-        title="Refresh transaction"
+        aria-label="Refresh commit"
+        title="Refresh commit"
         :loading="loading"
         :disabled="loading || store.busy"
         @click="read"
@@ -42,7 +43,7 @@ onUnmounted(() => { disposed = true; generation++; });
     </div>
     <DatasetStatus
       :query="store.transactions"
-      label="Independent transaction discovery"
+      label="Independent commit discovery"
     />
     <v-progress-linear
       v-if="loading"
@@ -63,7 +64,7 @@ onUnmounted(() => { disposed = true; generation++; });
         <dl class="record-metadata">
           <dt>Status</dt><dd><strong>{{ current.status }}</strong></dd>
           <dt>Base revision</dt><dd>
-            <router-link :to="`/history/${current.base_revision}`">
+            <router-link :to="`/config/revisions/${current.base_revision}`">
               {{ current.base_revision }}
             </router-link>
           </dd>
@@ -71,21 +72,21 @@ onUnmounted(() => { disposed = true; generation++; });
             <dt>Actor</dt><dd>{{ current.actor }}</dd>
           </template>
           <template v-if="current.submitted_at">
-            <dt>Submitted</dt><dd>{{ current.submitted_at }}</dd>
+            <dt>Submitted (UTC)</dt><dd>{{ formatTimestamp(current.submitted_at) }}</dd>
           </template>
           <template v-if="current.committed_at">
-            <dt>Committed</dt><dd>{{ current.committed_at }}<span v-if="current.committed_by"> · {{ current.committed_by }}</span></dd>
+            <dt>Committed (UTC)</dt><dd>{{ formatTimestamp(current.committed_at) }}<span v-if="current.committed_by"> · {{ current.committed_by }}</span></dd>
           </template>
         </dl>
         <p v-if="current.restored_from_revision !== undefined">
           Restored from
-          <router-link :to="`/history/${current.restored_from_revision}`">
+          <router-link :to="`/config/revisions/${current.restored_from_revision}`">
             {{ current.restored_from_revision }}
           </router-link>
         </p>
         <p v-if="resultRevision">
           Result revision
-          <router-link :to="`/history/${resultRevision}`">
+          <router-link :to="`/config/revisions/${resultRevision}`">
             {{ resultRevision }}
           </router-link>
         </p>
@@ -110,10 +111,10 @@ onUnmounted(() => { disposed = true; generation++; });
       />
     </template>
     <v-btn
-      to="/transactions"
+      to="/config/commits"
       variant="text"
     >
-      All transactions
+      All commits
     </v-btn>
   </section>
 </template>

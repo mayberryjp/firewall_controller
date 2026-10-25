@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { formatTimestamp, isTimestamp } from "@/services/timestamps";
 const props = defineProps<{ value: unknown; label?: string }>();
-function fields(value: unknown, path = ""): Array<{ label: string; value: string }> {
+function fields(value: unknown, path = "", key = ""): Array<{ label: string; value: string }> {
   if (Array.isArray(value) && value.some(item => item !== null && typeof item === "object")) {
-    return value.flatMap((item, index) => fields(item, `${path} ${index + 1}`.trim()));
+    return value.flatMap((item, index) => fields(item, `${path} ${index + 1}`.trim(), key));
   }
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
     const entries = Object.entries(value);
-    if (entries.length) return entries.flatMap(([key, item]) => fields(item, [path, key.replaceAll("_", " ")].filter(Boolean).join(" / ")));
+    if (entries.length) return entries.flatMap(([key, item]) => fields(item, [path, key.replaceAll("_", " ")].filter(Boolean).join(" / "), key));
   }
-  const display = value === null || value === undefined ? "Unavailable" : Array.isArray(value) ? value.map(String).join(", ") || "None" : typeof value === "boolean" ? value ? "Yes" : "No" : String(value) || "None";
+  if (isTimestamp(value) || (key === "acquired_at" && typeof value === "number")) {
+    return [{ label: `${(path || "Value").replace(/^./, letter => letter.toUpperCase())} (UTC)`, value: formatTimestamp(typeof value === "number" ? value * 1000 : value) }];
+  }
+  const display = value === null || value === undefined ? "Unavailable" : Array.isArray(value) ? value.map(item => isTimestamp(item) ? `${formatTimestamp(item)} UTC` : String(item)).join(", ") || "None" : typeof value === "boolean" ? value ? "Yes" : "No" : String(value) || "None";
   return [{ label: (path || "Value").replace(/^./, letter => letter.toUpperCase()), value: display }];
 }
 const rows = computed(() => fields(props.value));

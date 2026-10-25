@@ -5,9 +5,14 @@ firewall control plane**, following the
 [frontend coding standards](https://github.com/mayberryjp/coding_standards/blob/main/FRONTEND_CODING_STANDARDS.md)
 and [Netcontrol frontend specification](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md).
 
-Backend contracts were checked against commit
-`e13cd21` (October 23), including the
-[host-NIC/DHCP/DNS handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-23.md).
+Backend contracts were checked against the October 24 README,
+[journal](https://github.com/mayberryjp/firewall_backend/blob/main/docs/journal/2026-10-24.md)
+and [frontend handoffs](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-24.md),
+including the breaking source-policy removal, signed upgrades and connection-state deletion.
+These backend features are Unreleased; local mock tests do not establish deployment or native acceptance.
+Host-input filtering also follows the current
+[input-firewall contract](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md#661-host-input-filtering):
+optional input policies, managed ingress rules, DHCP-WAN allowances, and complete-package preservation.
 The spec's React suggestion is optional;
 this project retains the existing Vue/Vuetify stack.
 
@@ -68,32 +73,47 @@ review the backend's networkd/resolved and persistent-state prerequisites.
 | Browser route | Purpose |
 | --- | --- |
 | `/connect` | Registry sign-in, persistent firewall list, encrypted key storage and controller-proxied device connection |
-| `/overview` | Committed/live state, drift, runtime, recent history, exact statistics |
-| `/interfaces`, `/interfaces/:name` | Managed dummy/VLAN/WireGuard editors, required WAN/LAN roles, DHCPv4 relay |
-| `/parents` | Protected adopted-parent diagnostics; no provisioning controls |
-| `/routes` | Routes and managed-interface/table/metric validation |
-| `/policy-rules` | Source-prefix routing with unique priorities |
-| `/firewall` | Global IPv4 ICMP exception, default forward policy and ordered accept/drop rules; existing host/ingress policies preserved read-only |
+| `/overview` | Compact interface, gateway and WireGuard status widgets; exact interface counters with one interface per row |
+| `/interfaces`, `/interfaces/:name` | Physical interfaces inventory and active IPv4/IPv6 addresses, excluding dummy/loopback links; inline NIC editing and explicit management/release |
+| `/loopbacks` | Loopback creation, editing and explicit adoption; built-in `lo` and other system loopback links remain read-only |
+| `/vlans`, `/vlans/:name` | VLAN-only creation, behavior editing and deletion, parent/tag validation and dependency review |
+| `/routes` | Static routes and managed-interface/table/metric validation; legacy `/policy-rules` redirects here |
+| `/firewall` | Default forward policy and ordered accept/drop rules; existing host/ingress policies preserved read-only |
+| `/settings`, `/settings/general` | Global IPv6 policy and measured/simulated runtime, IPv4 ICMP exception; settings join the shared draft |
+| `/connections` | Live conntrack snapshots, filters/paging, exact nullable counters and explicitly confirmed state deletion |
 | `/nat` | Ordered IPv4/IPv6 masquerading with family-correct egress |
-| `/wireguard` | Same interface draft with nested peer/settings editor |
-| `/services/softflowd`, `/services/softflowd/:name` | Staged instances, independent runtime, collective reconcile |
-| `/services/dhcp-relay` | Per-interface stored/observed relay configuration, runtime and explicit collective repair |
+| `/wireguard`, `/wireguard/:name` | Tunnel creation, key reference, listen port and peers; links back to Interfaces for link settings/deletion |
+| `/firewall/input` | Host-input policy and ordered managed-ingress rules, separate from forwarding |
+| `/services/softflowd`, `/services/softflowd/:name` | Staged flow-export instances and independent runtime |
+| `/services/dhcp-relay` | Sole editor for per-interface relay enablement/upstream servers, with stored/observed configuration and runtime |
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
-| `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors, scoped runtime and collective repair |
-| `/changes` | Shared draft, semantic comparison, import/export, provisional apply |
-| `/transactions`, `/transactions/:id` | Independent recovery discovery and explicit lifecycle actions |
-| `/history`, `/history/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
+| `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
+| `/services/maintenance` | Explicit all-managed-services repair and signed self-upgrade with version/repository confirmation |
+| `/config/changes` | Staged changes, unified diff, Commit & push |
+| `/config/commits`, `/config/commits/:id` | Commits: independent recovery discovery and explicit lifecycle actions |
+| `/config/revisions`, `/config/revisions/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
 
 Deep links fall back to the SPA; reload restores an unexpired registry session
 and reconnects the remembered firewall.
 Unknown routes show an application 404.
 
-The top navbar selects Overview, Networking, Services, or Changes & history.
+The top navbar selects Interfaces, Routing, Firewall, VPN, Services, or the Settings
+gear. Routing uses a classic network-diagram router symbol; Firewall uses a brick wall.
+Connection health appears in an icon-only floating bottom-right bubble; hover or
+focus it for connection status, or open it for deployment
+details and Disconnect. There is no profile/person button. Interfaces
+contains Physical interfaces, Loopbacks and VLANs. Routing contains Static Routes
+and Gateway monitors. The Firewall Controller
+brand links to Overview; there is no separate Overview navigation button. Firewall
+contains forwarding, Host input, Connections and NAT; VPN contains WireGuard. The existing **Config rN**
+revision box opens `/config`; there is no separate Config navigation button.
 Each section exposes its own routed page tabs: a left rail on desktop and a
-horizontal scrollable strip below 1280px. `/networking`, `/services`, and
-`/activity` open the first page in their section. Existing page URLs remain
-unchanged; detail links retain their section and selected parent tab, and browser
-back/forward navigates between pages.
+horizontal scrollable strip below 1280px when a section has multiple pages. `/networking` (Interfaces), `/routing`, `/vpn`, `/services`, and
+`/config` open the first page in their section. Old `/activity`, `/changes`,
+`/transactions` and `/history` URLs redirect to the corresponding Config pages,
+including commit and revision detail links. Detail links retain their section and
+selected parent tab, and browser back/forward navigates between pages. Commits is
+the UI name for backend transactions; API endpoints and permissions are unchanged.
 
 Operational pages show settings, records, and current status without repeated
 read timestamps or deployment instructions. Errors and stale-data notices remain
@@ -101,7 +121,189 @@ visible. Detailed values use expandable labeled fields rather than JSON dumps;
 small resource lists omit filter bars. Service-impact warnings appear in change
 review and explicit repair/apply confirmations.
 
+Human-facing timestamps use `yyyy-mm-dd hh:mm:ss` in UTC, matching the supplied
+containers' default timezone, not the browser's timezone. Table headings, detail
+labels and tooltips identify UTC. Fractional seconds are omitted for display only;
+API/storage timestamps, machine-readable HTML `datetime` attributes, exports and
+deadline calculations retain their original precision and formats. DHCP lease
+acquisition timestamps are converted from Unix seconds for display.
+
+Each setting has one owning editor. Physical interfaces shows discovered non-loopback links, with
+rows and **Active Addresses** from `GET /api/v1/interfaces/discovered` (`state.read`).
+Managed configuration is joined by technical name for labels, roles and settings.
+The inventory table shows only active addresses; configured static addresses remain in
+the interface editor. DHCP/IPv6 assignments stay visible even with an empty static list,
+and live addresses never enter configuration drafts. Interface type, management state,
+role and admin state use colored chips (green Up, red Down).
+Unmanaged/down links and unsupported kinds remain visible; unsupported kinds are
+read-only. There is no interface visibility dropdown. Interfaces > Loopbacks contains
+managed loopback interfaces and built-in loopback links such as `lo`, which is always read-only.
+Loopback creation, edits, adoption and deletion stage into the shared draft; discovered
+addresses are never copied into saved settings. Configured loopback interfaces remain
+listed even if not yet discovered. The loopback editor cannot manage `lo` or change kind.
+Add loopback, editing and adoption use inline table rows with Save/Cancel, like
+VLANs. The IPv4 field accepts comma-separated addresses with prefixes; existing
+IPv6 and hidden settings are preserved. New loopbacks start administratively up
+with an unassigned role and no addresses. Loopback rows omit type and ownership;
+the inline editor uses a compact Admin state toggle. New loopbacks default to MTU
+65535. MTU is shown read-only; editing and adoption preserve existing MTUs.
+The Role selector has a dedicated wider column and spans the full row on narrow screens.
+Inventory is fetched independently of configuration/runtime; failed discovery shows
+unavailable state or retains stale rows rather than reporting a successful empty table.
+VLAN creation and editing live under Interfaces > VLANs. Add VLAN inserts an inline
+table row with interface name, compact VLAN ID and MTU fields, parent interface,
+and IPv4 addresses/prefixes. IPv4 addresses can also be added or changed after
+creation by editing the VLAN row; IPv6 and other hidden settings are preserved.
+The parent dropdown offers only physical Ethernet interfaces from the current
+configuration and available adopted parents, not VLANs, loopbacks or tunnels.
+The IPv4 cell accepts comma-separated static addresses with prefixes; DHCP clients
+are supported only on physical Ethernet interfaces.
+New VLANs default to an unassigned role, admin down and no addresses.
+Existing VLAN settings not shown in the row are preserved; committed parent/ID
+values remain immutable and renames require dependency acknowledgement. VLANs
+are excluded from the Physical Interfaces inventory, including unmanaged VLANs.
+Physical NIC edits replace the display row with controls in each corresponding table
+cell, without a popup. The compact table groups display name under hardware name and
+uses dropdowns for role, admin state and DHCP/static IPv4 mode. MTU, static IPv4
+addresses and IPv6 addresses can be edited directly. DHCP IPv4 shows the discovered
+address read-only (or `DHCP` while no address is available); live addresses are never
+copied into saved static settings. There is no separate Active Addresses column.
+Hardware identity and ownership remain read-only.
+Stage changes saves the row into the shared draft; hidden DNS and relay settings are preserved. Interfaces
+use optional `metadata.display_name` for friendly labels. Interface dropdowns show
+`Display name (interface name)`, for example `WAN (eno1)`, or just the interface name
+when no display name is set. Selections still save the interface name.
+Description is not shown in the
+interface table or editor; existing `metadata.description` values are preserved when editing.
+Existing virtual-interface
+detail links remain supported. Interface edits preserve relay/tunnel
+settings, relay edits preserve link settings, and WireGuard edits preserve
+addresses, DHCP clients and DNS. Tunnel creation collects required initial link
+values only; subsequent link changes and deletion belong to Interfaces.
+Read-only summaries can still appear elsewhere. Navbar **Save** leads to
+**Review changes**, the single place for apply options and provisional submission.
+If apply is disabled, the review page and apply dialog identify the blocking
+condition. Use **Refresh state** on the review page to reload observation and
+transaction discovery without discarding the draft. Refresh does not repair drift,
+resolve an active transaction, or rebase a draft onto a newer committed revision.
+Input and forwarding default policies remain separate because they control
+different traffic paths.
+
+Configurable resources support optional shared metadata. Display names are empty or
+up to 128 Unicode scalar values, with no controls or whitespace-only names;
+descriptions allow up to 2048 scalars, including newline/tab. Empty annotations
+are omitted. Labels never replace technical names, keys or selectors. Editors,
+imports, exports, transaction review and revision restore preserve annotations;
+existing read-only host/ingress policy summaries remain read-only. Annotation edits
+use the resource's existing transaction permissions. These fields require the
+backend's October 24 metadata contract.
+
+Committed, administratively up DHCP interfaces have a **Reload DHCP** action in
+their table row. It calls `POST /interfaces/{name}/dhcp/retry` with no body and
+requires `interfaces.write`, without changing the shared draft or revisions.
+Active/recovery transactions block the action. A `202 retrying` response means
+worker initialization, not a new lease or connectivity success. The UI inspects
+runtime and observes lease acquisition/error updates every five seconds for up to
+one minute; `state.read` is needed to observe them. Errors remain inline. It never
+automatically repeats the POST; inspect runtime before retrying after a timeout.
+
 ## Safety model
+
+Firewall > Connections reads `GET /api/v1/statistics/connections` with `state.read`.
+Opening Connections collapses the desktop section navigation to a hamburger-only
+rail; expanding it restores text page links. Other pages restore their normal navigation. The compact table shows source,
+destination, protocol/state chips, separate sent/received packets and bytes, and timeout, without expandable
+row details or a Reply column. Byte totals
+use compact units with exact decimal values in tooltips; unavailable is
+never zero. Advanced filters are behind More filters; mobile uses stacked rows.
+The State dropdown filters the loaded page immediately using observed states; All
+states clears it. Selection survives refreshes and paging. State is not a server
+filter, so other pages may contain additional matching connections.
+Column headers toggle ascending/descending sorting of the loaded page, preserving
+the selection through refreshes. Counters sort exactly; unavailable values stay last.
+Snapshots stay in page memory and are cleared on disconnect/navigation; no automatic
+export, persistence, reverse DNS, connection writes or draft changes are performed merely by viewing or filtering.
+Visible live views poll five seconds after each completed read, without overlap;
+failures back off up to one minute, retaining an explicitly stale snapshot. Permanent
+permission/unsupported-endpoint errors pause automatic reads. Filters reset paging.
+Each page is a fresh kernel dump, not a retained snapshot or history.
+
+Original/reply counters are exact decimal strings; null is unavailable, not zero.
+Conntrack accounting may require operator-enabled `net.netfilter.nf_conntrack_acct=1`
+before new connections are created. The UI never enables it or flushes connections automatically.
+The view includes the daemon namespace's local/unmanaged traffic, not only managed
+forwarded traffic. Conntrack state does not prove current firewall permission, and
+there are no per-rule hit counts, connection closing, blocking or packet logs.
+This requires the backend's Unreleased connection-statistics API (handoff
+2026-10-24-05), kernel support and netfilter read privileges; native Linux acceptance
+and deployment must be verified separately.
+
+The registry proxy forwards connection query parameters unchanged. If this endpoint
+returns `400` with `statistics endpoints do not accept query parameters` and returns
+`404` without query parameters, the selected firewall is running a backend without
+the connection-statistics API. Upgrade/restart that firewall's backend or select the
+correct saved device; removing the valid pagination parameters is not a fix.
+
+### Explicit connection-state deletion
+
+Row deletion uses `DELETE /api/v1/connections/{id}` with only the snapshot's family,
+protocol, zone and original tuple. Null IDs, incomplete/unsupported tuples and differing
+directional zones disable row deletion; malformed identity never falls back to a flush.
+The separate whole-namespace action sends exactly `{"confirm":true}` to
+`DELETE /api/v1/connections`, without query filters. It removes all IPv4/IPv6 zones,
+including management, NAT, local and unmanaged traffic in the daemon namespace.
+
+Both actions require `connections.delete` and explicit destructive confirmation;
+`state.read` alone does not grant deletion. There is no permission-discovery API,
+so the backend authorizes the write and permission errors stay visible. Management/NAT
+can be interrupted. State deletion does not send resets, close sockets or block traffic;
+entries may immediately reappear. There is no undo or revision rollback.
+Active transactions/upgrades block deletion. Drafts are retained; successful or expired
+selectors refresh the snapshot. Timeouts/disconnects can leave partial or unknown results:
+refresh and inspect, never automatically retry. The registry forwards authenticated
+DELETE JSON and permits DELETE preflight. Native TCP/NAT/IPv6 acceptance needs a
+disposable appliance, not a production management session.
+
+### Signed self-upgrade
+
+Service maintenance reads `GET /api/v1/system/upgrade` with `state.read` and submits
+only `{"version":"1.2.3"}` via POST with `system.upgrade`. Canonical SemVer is limited
+to 80 bytes, permits prereleases and excludes leading `v` and build metadata.
+Confirmation identifies the exact version, configured repository and management/service
+interruption risk. Disabled setup requires operator-managed repository/signing trust and
+credentials; the browser never configures trust, URLs, tokens, paths or force flags.
+
+The shared store retains accepted job identity across transient failures and polls
+without overlap, with backoff. Only `succeeded`, `failed` and `rolled_back` are terminal;
+`recovery_required` and unknown statuses remain write-blocking and require console
+investigation. A disconnect is not an outcome; submissions are never automatically
+repeated. Superseded job IDs are reported without inventing the earlier result.
+Configuration writes, service repair, DHCP retry and connection deletion are gated.
+Drafts remain intact, and committed state/revision is refreshed before later submission.
+Last successful version is historical, not a claim about the running version. There
+are no browser cancel, force, reset or reboot actions. No real upgrade was executed
+as part of frontend verification.
+
+### Breaking source-policy removal
+
+Public `policy_rules`, `/api/v1/policy-rules` and `policy.write` are retired.
+Complete configuration schemas reject the field, even `[]` or null, rather than
+silently dropping it from imports, revisions or transactions. Private monitor-owned
+state is never exposed or emitted as public configuration. Deploy a matching backend;
+the browser does not reset, migrate or rewrite old appliance state.
+
+For eligible empty retired arrays only, operators can review the backend's
+[offline conversion and recovery guide](https://github.com/mayberryjp/firewall_backend/blob/main/docs/BUILD_AND_INSTALL.md#offline-policy-rule-state-conversion).
+This is a separate stopped-daemon, console-access operation requiring preview,
+explicit confirmation and private backups. Nonempty rules/history need separate
+review; never delete history to force startup. No conversion tool was run here.
+
+Host-input settings are preserved through resource edits, imports, exports, and
+transaction/history reads. Input changes require `firewall.write` and
+`transactions.write`; review warns about management/DHCP reachability and removal
+of WAN protection. The Push changes button is the explicit confirmation; there are
+no required risk attestations. IPv4 NAT permits configured DHCP-client egress without
+copying a leased address into static configuration; IPv6 still needs an address.
 
 - Resource forms edit local values. **Stage changes** updates one complete
   in-memory draft cloned from committed desired configuration, never observation.
@@ -118,10 +320,11 @@ review and explicit repair/apply confirmations.
   revision, fresh transaction discovery, drift, and actual serialized UTF-8 size.
   Pre-submit reads are UX checks, not a server concurrency guarantee.
 - `202` is provisional, **not committed**. Frozen snapshots cannot be edited.
-  Explicit confirm acknowledges operator connectivity checks; rollback is explicit
-  recovery. Only server-verified outcomes establish commit/rollback.
+  Confirm changes is an explicit action in the same push dialog, without another
+  popup or connectivity attestation. Rollback is explicit recovery. Only
+  server-verified outcomes establish commit/rollback.
 - Deadlines use absolute server timestamps, with approximate browser-clock
-  countdowns. UTC and local time are visible. At expiry, confirmation is disabled
+  countdowns. Absolute times are displayed in container-default UTC. At expiry, confirmation is disabled
   while the application awaits server outcome. There is no automatic confirm.
 - Timeouts/disconnects/operational write failures freeze the outcome as unknown.
   Known IDs are read directly; new transaction records are correlation hints,
@@ -167,8 +370,9 @@ as an empty inventory.
 - Native leases, errors, expiry (Unix seconds), dynamic routes and resolver data
   are separate from static configuration. Missing runtime support is shown as
   unsupported/simulated, never fabricated as a successful lease.
-- Routes, source-policy lookup tables and monitors accept main table 254 or
-  10000..19999. Policy priorities remain 10000..19999. Ethernet is eligible for
+- Routes and monitors accept main table 254 or 10000..19999 at the API boundary;
+  the inline editors use main table 254. Public policy rules are no longer supported.
+  Ethernet is eligible for
   VLAN parenting and DHCP relay. NAT still requires an address of its family
   in the configured static egress, matching the current backend validator.
 - Interfaces and WireGuard use manual configuration/runtime refresh when idle;
@@ -202,7 +406,7 @@ fields are rejected as incompatible rather than silently stripped.
   `"unassigned"`. There is no name-based WAN/LAN inference.
   Labels, filters and review summaries expose role changes. Roles are descriptive
   metadata, not independently observed link attributes, and do not configure
-  firewall/NAT/routes. Protected adopted parents do not have editable roles.
+  firewall/NAT/routes.
 - `firewall.allow_all_icmp` uses the current backend's **omitted true default**:
   omitted values, including historical snapshots, enable it; null is invalid. Explicit false
   survives unrelated edits/import/export/transactions. When enabled, protocol 1
@@ -271,13 +475,42 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
 
 #### Native gateway monitoring
 
+- Probe timing and health thresholds are hidden by default when adding or editing
+  a monitor. Use **Show advanced** to reveal them and **Hide advanced** to collapse
+  them without discarding values. Validation errors in these settings reveal them
+  automatically.
+- The interface is the probe egress, not just a physical-link check.
+  Explicit mode requires a configured source address and explicit route.
+  IPv4 probes automatically follow DHCP when the selected managed interface is
+  DHCP-configured; other probes use configured static paths, including IPv6 on
+  interfaces with DHCP IPv4. There is no monitor mode selector. Saving DHCP probes
+  requires fresh `/runtime` capabilities advertising both `dhcp` monitor mode and
+  the `ipv4` DHCP-monitor address family. Imported DHCP drafts cannot bypass this
+  gate. The October 24-12 backend implementation is unreleased and was not deployed
+  as part of this frontend work; older backends can still save static probes.
+  Neither mode copies live lease data into static configuration.
 - `/gateway-monitors` stages explicit managed interface, source/gateway/target,
-  routing table, timing and threshold settings. At most 64 named monitors,
-  names 1..32 letters/digits/underscore/hyphen. Enabled monitors need an up
+  inferred configured source/gateway, main-table routing, timing and threshold settings.
+  The interface and probe target determine the serialized variant without copying
+  live lease values. At most 64 named monitors, names 1..32 letters/digits/underscore/hyphen.
+  Enabled explicit monitors need an up
   interface with the configured source, matching route through the specified
-  gateway/table and a source-policy rule. Canonical numeric addresses must share
+  gateway/table. The backend installs exact-source routing rules: all traffic from
+  that source is affected, not only probes. Enabled monitors sharing a source must
+  use the same table. No public source-policy record is required or accepted.
+  Canonical numeric addresses must share
   a family; IPv6 link-local gateway/target are scoped by the selected interface.
-  Disabled monitors need valid settings but not live references.
+  Disabled explicit monitors need valid settings but not live references.
+- DHCP monitors require a managed DHCP-configured interface even when disabled,
+  and an up interface when enabled. The target must be numeric unicast IPv4.
+  Saving requires no current lease, static address or configured route, and emits
+  no `source_address`, `gateway` or `routing_table`. The backend resolves only the
+  selected interface's lease and route, never another WAN. Private marked probe
+  paths do not redirect unmarked application traffic. Missing leases display
+  **Waiting for DHCP** with Unknown health; resolution/probe errors also remain
+  Unknown with their reason. Resolved source/gateway/table are read-only runtime
+  details; a null gateway with a resolved source/table means a direct route.
+  Path changes restart warmup; unchanged renewals preserve measurements.
 - Interval and timeout: 100..60000 ms, timeout <=10 intervals. Window:
   1000..300000 ms, >=2 timeouts, >=3 intervals, <=1024 intervals.
   Mean RTT threshold: 1..60000 ms; loss threshold: 1..100%; variation threshold:
@@ -287,6 +520,9 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   configuration observation. Visible polling is non-overlapping every 3 seconds,
   with existing hidden-tab pause/backoff. GETs read cached measurements, not new
   probes. Gateway runtime is also decoded from `/runtime`.
+  Monitor rows show sample state, health, loss, mean RTT, standard deviation,
+  RTT variation and sent/received/lost/pending counts without expansion. Expanding
+  a row reveals the complete measurements and resolved-path details.
 - Worker lifecycle, sample availability and health are separate. Stale after
   max(1 second, 3 probe intervals), errors, warmup and simulated/no-data results
   are Unknown, not current reachability or remote Down. Per-row measurement
@@ -303,8 +539,10 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   holds are 3/5 seconds and rolling-window effects add delay. Last success is
   since worker start and can predate the current window.
 - Linux requires explicit `-gateway-monitoring`, raw-socket/namespace privileges,
-  explicit source-policy routing and ICMP/ICMPv6 return paths. No dpinger,
-  automatic firewall exceptions, routing changes or failover are provided.
+  matching configured routes for explicit mode or a usable IPv4 lease route for
+  DHCP mode, plus ICMP/ICMPv6 return paths. Exact-source rules for explicit mode
+  and private marked paths for DHCP mode are backend-managed; no dpinger,
+  automatic desired routes, firewall exceptions or failover are provided.
   Affected networking/config changes, repair and restart reset measurements;
   health never rewrites desired enabled or creates modeled configuration drift.
 
@@ -372,10 +610,14 @@ native readiness or native reboot recovery. Deployment labels stay explicit.
 - Backend preflight remains authoritative. No local dry-run, permission discovery,
   key-file inventory, or connectivity verification endpoint is invented.
 
-Imports accept complete config-only JSON, not request wrappers. Unknown fields,
-trailing values, partial configs, invalid references, and oversized input are
-rejected. Preview shows deletion impact before replacing the local draft. Exports
-are config-only, operator initiated, and require a sensitivity acknowledgement.
+Staged Changes shows the unified diff and **Commit & push**. There are no import,
+draft export or refresh controls. Commit & push checks the latest firewall state
+before opening the push dialog; no write occurs until **Push changes** is confirmed.
+The dialog accepts a commit message and an automatic rollback deadline, then stays
+open to show push progress. **Confirm changes** in that same dialog keeps the changes
+and records the new revision, with no separate confirmation banner, popup or
+connectivity checkbox. Otherwise the firewall rolls back at the deadline. This is a combined commit/push
+workflow, not a separate local Git commit or an immediate permanent network change.
 
 Resource lists automatically show the shared unsaved configuration when present,
 otherwise the active candidate or committed configuration. There is no draft-preview
@@ -386,16 +628,20 @@ as readable fields rather than JSON; apply review and safety confirmations are u
 ## Refresh and error handling
 
 State/runtime are independent single-flight datasets with loading, delayed-read,
-error, last-success and stale indicators. Automatic network refresh runs only on
+error, last-success and stale indicators. Automatic state/runtime refresh runs on
 Overview: state/runtime every 5 seconds, transaction discovery every 10 seconds,
 and interface/gateway statistics every 3 seconds. Active/uncertain transactions
 increase Overview state/discovery polling to 1 second after each read completes.
-Other pages, including transaction details, do not poll, even during pending
-transactions. Use the navbar refresh button or a page's refresh control to update
+Connections separately polls visible live snapshots every 5 seconds after each
+completed read, with bounded backoff. Other pages, including transaction details,
+do not poll for pending transactions, except the open push dialog: it reads only its
+own active commit every 2 seconds after each read completes, backing off to 30 seconds
+on failures. Reads pause while hidden and stop on close or final outcome. Reload the browser or use a page's refresh control to update
 them. Reads performed on entry and fresh-state checks required by explicit writes
 remain enabled. Deadline countdowns do not make network requests.
 Overview polling pauses in hidden tabs and wakes on visibility/online events;
-those events do not trigger background reads on other pages. Transport failures
+Connections also pauses in hidden tabs and refreshes on visibility when live;
+these events do not trigger background state/runtime reads on other pages. Overview transport failures
 back off 1/2/5/10 seconds.
 
 Reads time out after 80 seconds, writes after 90. Reads delayed over 3 seconds are

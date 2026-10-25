@@ -13,7 +13,9 @@ export function stableJson(value: unknown): string {
 }
 
 export function normalize(config: Config): Config {
-  const result = cloneConfig(config);
+  const parsed = configSchema.safeParse(config);
+  const result = cloneConfig(parsed.success ? parsed.data : config);
+  if (result.ipv6_enabled === true) delete result.ipv6_enabled;
   for (const area of ["dhcp_clients", "dns"] as const) {
     if (!Object.keys(result[area] ?? {}).length) delete result[area];
   }
@@ -35,7 +37,6 @@ export function normalize(config: Config): Config {
   }
   result.routes.sort((a, b) => `${a.table}/${a.destination}/${a.metric}`.localeCompare(`${b.table}/${b.destination}/${b.metric}`));
   result.routes.forEach((route) => { if (!route.gateway) delete route.gateway; });
-  result.policy_rules.sort((a, b) => a.priority - b.priority);
   result.softflowd.sort((a, b) => a.name.localeCompare(b.name));
   result.softflowd.forEach((service) => { if (!service.capture_filter) delete service.capture_filter; });
   result.gateway_monitors.sort((a, b) => a.name.localeCompare(b.name));
@@ -81,6 +82,10 @@ export interface Difference {
 export function differences(before: Config, after: Config): Difference[] {
   const old = normalize(before), next = normalize(after);
   const result: Difference[] = [];
+  if ((old.ipv6_enabled !== false) !== (next.ipv6_enabled !== false)) result.push({
+    area: "ipv6", identity: "Enable IPv6", kind: "modified",
+    before: old.ipv6_enabled !== false, after: next.ipv6_enabled !== false,
+  });
   function named<T>(area: string, a: T[], b: T[], key: (value: T) => string): void {
     const previous = new Map(a.map((value) => [key(value), value]));
     const current = new Map(b.map((value) => [key(value), value]));
@@ -113,7 +118,6 @@ export function differences(before: Config, after: Config): Difference[] {
     named(area, Object.entries(old[area] ?? {}), Object.entries(next[area] ?? {}), item => item[0]);
   }
   named("routes", old.routes, next.routes, (item) => `${item.table}/${item.destination}/${item.metric}`);
-  named("policy-rules", old.policy_rules, next.policy_rules, (item) => String(item.priority));
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
   for (const area of ["ntp", "syslog", "vnstat"] as const) {
@@ -220,26 +224,53 @@ export function endpoint(text: string, collector = false): void {
   if (collector && !globalUnicast(address, true)) throw new Error("Collector must be unicast or loopback");
 }
 export interface ValidationIssue { path: string; message: string; page: string }
+export function ipv6Conflicts(config: Config): string[] {
+  const conflicts: string[] = [];
+  function visit(value: unknown, path: string): void {
+    if (Array.isArray(value)) { value.forEach((item, index) => visit(item, `${path}.${index}`)); return; }
+    if (value && typeof value === "object") {
+      for (const [key, item] of Object.entries(value)) {
+        if (key !== "metadata" && key !== "kernel") visit(item, path ? `${path}.${key}` : key);
+      }
+      return;
+    }
+    if (typeof value !== "string") return;
+    let ipv6 = false;
+    try {
+      if (value.startsWith("[")) { endpoint(value); ipv6 = true; }
+      else ipv6 = (value.includes("/") ? ipaddr.parseCIDR(value)[0] : ipaddr.parse(value)).kind() === "ipv6";
+    } catch { ipv6 = false; }
+    if (ipv6 || (path.endsWith(".family") && value === "ipv6") ||
+      (path.endsWith(".capture_filter") && ["ip6", "icmp6"].includes(value))) conflicts.push(path);
+  }
+  visit(config, "");
+  return conflicts;
+}
 export function validateConfig(config: Config, parents: ParentInterface[] = [], baseline?: Config): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const issue = (path: string, message: string, page: string) => issues.push({ path, message, page });
+  if (config.ipv6_enabled === false) {
+    for (const path of ipv6Conflicts(config)) issue(path, "IPv6 is disabled globally. Enable IPv6 in General settings or remove this setting.", "/settings/general");
+  }
   function check(path: string, page: string, action: () => void): void {
     try { action(); } catch (error) { issue(path, error instanceof Error ? error.message : "Invalid value", page); }
   }
   function bound(value: number, min: number, max: number, path: string, page: string): void {
     if (!Number.isInteger(value) || value < min || value > max) issue(path, `Must be an integer ${min}..${max}`, page);
   }
-  const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), priorities = new Set<number>(), relayAddresses = new Set<string>();
+  const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), relayAddresses = new Set<string>();
   const validName = (name: string) => /^[a-zA-Z0-9_.-]{1,15}$/.test(name) && !["lo", ".", ".."].includes(name);
   const interfaces = new Map(config.interfaces.map((link) => [link.name, link]));
+  const interfacePage = (name: string): string => `/${interfaces.get(name)?.kind === "vlan" ? "vlans" : "interfaces"}/${encodeURIComponent(name)}`;
   if (config.gateway_monitors.length > 64) issue("gateway_monitors", "At most 64 gateway monitors", "/gateway-monitors");
   const monitorNames = new Set<string>();
+  const monitorSources = new Map<string, number>();
   config.gateway_monitors.forEach((monitor, index) => {
     const path = `gateway_monitors.${index}`, page = "/gateway-monitors";
     if (!/^[a-zA-Z0-9_-]{1,32}$/.test(monitor.name) || monitorNames.has(monitor.name)) issue(`${path}.name`, "Use a unique case-sensitive name, 1..32 letters, digits, underscore or hyphen", page);
     monitorNames.add(monitor.name);
     if (!validName(monitor.interface)) issue(`${path}.interface`, "Use a valid explicit interface name", page);
-    if (monitor.routing_table !== 254) bound(monitor.routing_table, 10000, 19999, `${path}.routing_table`, page);
+    if (monitor.mode !== "dhcp" && monitor.routing_table !== 254) bound(monitor.routing_table, 10000, 19999, `${path}.routing_table`, page);
     for (const [key, min, max] of [
       ["probe_interval_ms", 100, 60000], ["loss_timeout_ms", 100, 60000], ["window_ms", 1000, 300000],
       ["latency_threshold_ms", 1, 60000], ["loss_threshold_percent", 1, 100],
@@ -250,6 +281,13 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       issue(`${path}.window_ms`, "Window must be >= 2 timeouts, >= 3 intervals and <= 1024 intervals", page);
     }
     check(path, page, () => {
+      if (monitor.mode === "dhcp") {
+        const link = interfaces.get(monitor.interface), target = numericAddress(monitor.target);
+        if (!link || !config.dhcp_clients?.[monitor.interface]) throw new Error("DHCP monitor requires a managed DHCP-configured interface, including when disabled");
+        if (monitor.enabled && !link.up) throw new Error("Enabled DHCP monitor requires an up managed interface");
+        if (target.kind() !== "ipv4" || !globalUnicast(target)) throw new Error("DHCP monitor requires an IPv4 unicast numeric probe target");
+        return;
+      }
       const source = numericAddress(monitor.source_address), gateway = numericAddress(monitor.gateway), target = numericAddress(monitor.target);
       if (!globalUnicast(source) || ![gateway, target].every(address => globalUnicast(address) || (address.kind() === "ipv6" && address.range() === "linkLocal"))) {
         throw new Error("Use canonical unicast numeric addresses; IPv6 link-local is allowed only for gateway/target, scoped by interface");
@@ -258,6 +296,9 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         throw new Error("Source, gateway and target must share a family; gateway and target must be remote");
       }
       if (!monitor.enabled) return;
+      const sourceKey = source.toString(), previousTable = monitorSources.get(sourceKey);
+      if (previousTable !== undefined && previousTable !== monitor.routing_table) throw new Error("Enabled monitors sharing a source address must use the same routing table");
+      monitorSources.set(sourceKey, monitor.routing_table);
       const link = interfaces.get(monitor.interface);
       if (!link?.up || !link.addresses.some(value => prefix(value, false).address.toString() === source.toString())) {
         throw new Error("Enabled monitor requires its source on an up managed interface");
@@ -268,8 +309,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       };
       const matchingRoute = config.routes.some(route => route.table === monitor.routing_table && route.interface === monitor.interface &&
         contains(route.destination, target) && (route.gateway === monitor.gateway || (monitor.target === monitor.gateway && !route.gateway)));
-      const matchingRule = config.policy_rules.some(rule => rule.table === monitor.routing_table && contains(rule.source, source));
-      if (!matchingRoute || !matchingRule) throw new Error("Enabled monitor requires an explicit matching route through its gateway/table and source-policy rule; nothing is auto-created");
+      if (!matchingRoute) throw new Error("Enabled monitor requires an explicit matching route through its gateway/table; no route is auto-created");
     });
   });
   for (const name of ["ntp", "syslog"] as const) {
@@ -288,7 +328,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     }));
   }
   for (const [name, client] of Object.entries(config.dhcp_clients ?? {})) {
-    const path = `dhcp_clients.${name}`, page = `/interfaces/${encodeURIComponent(name)}`;
+    const path = `dhcp_clients.${name}`, page = interfacePage(name);
     const link = config.interfaces.find(item => item.name === name);
     if (!link || link.kind !== "ethernet") issue(path, "DHCPv4 requires a configured Ethernet interface", page);
     if (link?.dhcp_relay.enabled) issue(path, "DHCPv4 client and relay cannot be enabled together", page);
@@ -302,7 +342,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     bound(client.route_metric, 0, 4294967295, `${path}.route_metric`, page);
   }
   for (const [name, settings] of Object.entries(config.dns ?? {})) {
-    const path = `dns.${name}`, page = `/interfaces/${encodeURIComponent(name)}`;
+    const path = `dns.${name}`, page = interfacePage(name);
     if (!config.interfaces.some(link => link.name === name)) issue(path, "Resolver settings require a configured interface", page);
     if (settings.servers.length > 8 || new Set(settings.servers).size !== settings.servers.length) issue(`${path}.servers`, "Use at most 8 unique DNS servers", page);
     settings.servers.forEach((server, index) => check(`${path}.servers.${index}`, page, () => {
@@ -315,7 +355,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     }));
   }
   for (const [index, link] of config.interfaces.entries()) {
-    const path = `interfaces.${index}`, page = `/interfaces/${encodeURIComponent(link.name)}`;
+    const path = `interfaces.${index}`, page = interfacePage(link.name);
     if (!validName(link.name) || names.has(link.name)) issue(`${path}.name`, "Invalid or duplicate interface name", page);
     names.add(link.name);
     if (!["wan", "lan", "unassigned"].includes(link.role)) issue(`${path}.role`, "Explicitly select WAN, LAN or Unassigned; no role is inferred", page);
@@ -337,7 +377,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     }));
     if (relay.enabled) {
       if (!relay.servers.length) issue(`${path}.dhcp_relay.servers`, "Enabled relay requires at least one server", page);
-      if (!link.up || link.kind === "wireguard") issue(`${path}.dhcp_relay.enabled`, "Enabled relay requires an administratively up Ethernet, dummy or VLAN interface", page);
+      if (!link.up || link.kind === "wireguard") issue(`${path}.dhcp_relay.enabled`, "Enabled relay requires an administratively up Ethernet, loopback or VLAN interface", page);
       check(`${path}.dhcp_relay.enabled`, page, () => {
         const selected = selectedRelayPrefix(link)?.split("/")[0];
         if (!selected) throw new Error("Enabled relay requires a configured unicast IPv4 address");
@@ -391,20 +431,12 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       const destination = prefix(route.destination, true);
       if (route.gateway && numericAddress(route.gateway).kind() !== destination.family) throw new Error("Gateway family must match destination");
     });
-    if (!interfaces.has(route.interface)) issue(`${path}.interface`, "Select a managed draft interface", page);
+    if (!interfaces.has(route.interface)) issue(`${path}.interface`, "Select a gateway interface", page);
     if (route.table !== 254) bound(route.table, 10000, 19999, `${path}.table`, page);
     bound(route.metric, 1, 2147483647, `${path}.metric`, page);
     const key = `${route.table}/${route.destination}/${route.metric}`;
     if (routeIDs.has(key)) issue(path, "Duplicate table/destination/metric", page);
     routeIDs.add(key);
-  });
-  config.policy_rules.forEach((rule, index) => {
-    const path = `policy_rules.${index}`, page = "/policy-rules";
-    check(`${path}.source`, page, () => { prefix(rule.source, true); });
-    bound(rule.priority, 10000, 19999, `${path}.priority`, page);
-    if (rule.table !== 254) bound(rule.table, 10000, 19999, `${path}.table`, page);
-    if (priorities.has(rule.priority)) issue(`${path}.priority`, "Priority must be unique", page);
-    priorities.add(rule.priority);
   });
   config.firewall.rules.forEach((rule, index) => check(`firewall.rules.${index}`, "/firewall", () => {
     const source = rule.source ? prefix(rule.source, true) : undefined;
@@ -458,7 +490,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       if (seconds !== undefined) bound(seconds, name === "general" ? 1 : 0, 604800, `${path}.timeouts.${name}`, page);
     });
   });
-  if (baseline && stableJson(config.kernel) !== stableJson(baseline.kernel)) issue("kernel", "Kernel settings must be preserved unchanged; this spec does not define a kernel editor", "/changes");
+  if (baseline && stableJson(config.kernel) !== stableJson(baseline.kernel)) issue("kernel", "Kernel settings must be preserved unchanged; this spec does not define a kernel editor", "/config/changes");
   if (config.firewall.policies && config.firewall.rules.length) issue("firewall.rules", "Host/interface policy mode cannot be combined with legacy forwarding rules", "/firewall");
   if (baseline && stableJson(normalize(config).firewall.policies) !== stableJson(normalize(baseline).firewall.policies)) {
     issue("firewall.policies", "Host/interface policies are read-only in this controller; preserve them unchanged", "/firewall");
@@ -473,7 +505,8 @@ export function importConfig(text: string): Config {
 export function requiredPermissions(diff: Difference[]): string[] {
   const permissions = new Set(["transactions.write"]);
   const map: Record<string, string> = {
-    interfaces: "interfaces.write", routes: "routes.write", "policy-rules": "policy.write",
+    ipv6: "kernel.namespace.write",
+    interfaces: "interfaces.write", routes: "routes.write",
     dhcp_clients: "interfaces.write", dns: "interfaces.write",
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",

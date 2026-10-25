@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { configSchema, interfaceSchema, runtimeSchema, transactionSchema, revisionDetailSchema } from "@/types/domain";
+import { configSchema, interfaceSchema, runtimeSchema, transactionSchema, revisionDetailSchema, objectMetadataSchema } from "@/types/domain";
 import { differences, equalConfig, importConfig, normalize, requiredPermissions, selectedRelayPrefix, serviceRepairPermissions, validateConfig } from "@/services/configuration";
 import { preset, resourceFields } from "@/services/resourceForms";
+import { interfaceChoice } from "@/services/resourceCollections";
 import { decodeJson, encodeJson } from "@/services/json";
 import { config, runtime, transaction } from "../fixtures";
+
+describe("interface dropdown labels", () => {
+  it("uses display names without changing interface identities", () => {
+    expect(interfaceChoice({ name: "eno1", metadata: { display_name: "WAN", description: "" } }))
+      .toEqual({ title: "WAN (eno1)", value: "eno1" });
+    expect(interfaceChoice({ name: "eno1" })).toEqual({ title: "eno1", value: "eno1" });
+    expect(interfaceChoice({ name: "eno1", metadata: { display_name: "", description: "Notes" } }))
+      .toEqual({ title: "eno1", value: "eno1" });
+  });
+  it("keeps unmanaged parent names and named managed parents as separate choices", () => {
+    const managed = interfaceChoice({ name: "eno1", metadata: { display_name: "WAN", description: "" } });
+    const parent = interfaceChoice({ name: "eno2" });
+    const fields = resourceFields("interfaces", [managed], [parent], false, "vlan", undefined, []);
+    expect(fields.find(field => field.key === "vlan")?.fields?.find(field => field.key === "parent")?.choices)
+      .toEqual([managed, parent]);
+  });
+});
 
 describe("native runtime parent diagnostics", () => {
   const parent = { name: "eth0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:01", mtu: 1500, up: true, available: true };
@@ -33,6 +51,29 @@ describe("native runtime parent diagnostics", () => {
 });
 
 describe("host Ethernet configuration", () => {
+  it("preserves common metadata through imports and transactions without changing identities", () => {
+    const candidate = config(), metadata = { display_name: "Office", description: "Staff devices\nPrimary network" };
+    candidate.interfaces[0]!.metadata = metadata;
+    candidate.interfaces[0]!.dhcp_relay.metadata = metadata;
+    candidate.routes[0]!.metadata = metadata;
+    candidate.firewall.rules[0]!.metadata = metadata; candidate.firewall.nat.masquerade[0]!.metadata = metadata;
+    candidate.softflowd[0]!.metadata = metadata; candidate.ntp.metadata = metadata;
+    candidate.syslog.metadata = metadata; candidate.syslog.servers = [{ host: "logs.example", port: 514, transport: "udp", metadata }];
+    candidate.vnstat.metadata = metadata;
+    candidate.dhcp_clients = { metadata: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no", metadata } };
+    candidate.dns = { lab0: { servers: [], metadata, domains: [{ name: "example.test", route_only: false, metadata }] } };
+    expect(importConfig(encodeJson(candidate))).toEqual(candidate);
+    expect(transactionSchema.parse({ ...transaction(), candidate }).candidate).toEqual(candidate);
+    expect(candidate.interfaces[0]!.name).toBe("lab0");
+    expect(objectMetadataSchema.parse({})).toBeUndefined();
+    expect(objectMetadataSchema.parse({ description: "Notes" })).toEqual({ display_name: "", description: "Notes" });
+  });
+  it("validates metadata scalar limits and rejects unsupported fields and controls", () => {
+    expect(objectMetadataSchema.safeParse({ display_name: "\u{1F600}".repeat(128) }).success).toBe(true);
+    for (const metadata of [null, { unknown: "text" }, { display_name: null }, { display_name: "   " }, { display_name: "x".repeat(129) }, { description: "x".repeat(2049) }, { description: "bad\u0000text" }, { display_name: "bad\ntext" }]) {
+      expect(objectMetadataSchema.safeParse(metadata).success).toBe(false);
+    }
+  });
   it("round-trips inherited unassigned NICs and DHCP/DNS maps", () => {
     const candidate = config();
     candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet", role: "unassigned", addresses: ["2001:db8::10/64"] };
@@ -48,12 +89,9 @@ describe("host Ethernet configuration", () => {
     candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet" };
     candidate.interfaces[0].dhcp_relay = { enabled: true, servers: ["198.51.100.10"] };
     candidate.routes[0]!.table = 254;
-    candidate.policy_rules[0]!.table = 254;
     expect(configSchema.parse(candidate)).toEqual(candidate);
     expect(importConfig(encodeJson(candidate))).toEqual(candidate);
     expect(validateConfig(candidate)).toEqual([]);
-    candidate.policy_rules[0]!.priority = 254;
-    expect(validateConfig(candidate).some(issue => issue.path.endsWith("priority"))).toBe(true);
   });
   it("reviews map-only changes and rejects DHCP/static/relay conflicts", () => {
     const before = config(), candidate = config();
@@ -120,6 +158,10 @@ describe("required explicit WAN/LAN role", () => {
     for (const role of ["wan", "lan"]) expect(interfaceSchema.parse({ ...link, role }).role).toBe(role);
     const field = resourceFields("interfaces", [], [], false, kind, undefined, []).find(item => item.key === "role");
     expect(field?.choices).toEqual([{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }, { title: "Unassigned", value: "unassigned" }]);
+    if (kind === "dummy") {
+      const kindField = resourceFields("interfaces", [], [], false, kind, undefined, []).find(item => item.key === "kind");
+      expect(kindField?.choices).toContainEqual({ title: "Loopback", value: "dummy" });
+    }
   });
   it("changes role independently of name and only needs interface permission", () => {
     const before = config(), after = config(); after.interfaces[0]!.role = "wan";
@@ -160,7 +202,7 @@ describe("DHCPv4 relay contract and validation", () => {
     link.up = true; link.addresses = ["2001:db8::10/64"];
     expect(validateConfig(candidate).some(issue => issue.message.includes("configured unicast IPv4"))).toBe(true);
     candidate.interfaces[0] = { ...link, kind: "wireguard", wireguard: { key_ref: "key", listen_port: 51820, peers: [] } };
-    expect(validateConfig(candidate).some(issue => issue.message.includes("dummy or VLAN"))).toBe(true);
+    expect(validateConfig(candidate).some(issue => issue.message.includes("loopback or VLAN"))).toBe(true);
   });
   it("selects by lexicographic canonical prefix order, never numeric or input order", () => {
     expect(selectedRelayPrefix({ addresses: ["2001:db8::1/64", "192.0.2.2/24", "192.0.2.10/24"] })).toBe("192.0.2.10/24");

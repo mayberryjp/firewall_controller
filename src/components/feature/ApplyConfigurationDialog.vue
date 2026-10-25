@@ -1,32 +1,55 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
-import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import { requiredPermissions } from "@/services/configuration";
+import type { Transaction } from "@/types/domain";
+import TransactionActions from "@/components/feature/TransactionActions.vue";
 
 const open = defineModel<boolean>({ required: true });
 const props = withDefaults(defineProps<{ seconds?: number | string; description?: string; editOptions?: boolean }>(), {
   seconds: 120, description: "", editOptions: false,
 });
 const store = useControllerStore(), router = useRouter();
-const acknowledged = ref(false), dropAcknowledged = ref(false), error = ref("");
+const error = ref("");
 const confirmationSeconds = ref<number | string>(120), saveDescription = ref("");
-const dropRisk = computed(() => store.draft?.firewall.policy === "drop" || store.draft?.firewall.rules.some(rule => rule.action === "drop" && !rule.source && !rule.destination) ||
-  store.draft?.firewall.input?.policy === "drop" || store.draft?.firewall.input?.interfaces.some(ingress => ingress.rules.some(rule => rule.action === "drop" && !rule.destination && !rule.protocol && !rule.destination_ports?.length)));
+const pushed = ref<Transaction | null>(null);
+const current = computed(() => pushed.value ? store.transactions.data?.[pushed.value.id] ?? pushed.value : null);
+let timer: ReturnType<typeof setTimeout> | undefined, generation = 0, failures = 0;
+function stopReading(): void { generation++; clearTimeout(timer); }
+function scheduleRead(): void {
+  clearTimeout(timer);
+  if (!open.value || !store.connected || !current.value || !["applying", "pending_confirmation", "rolling_back"].includes(current.value.status)) return;
+  const version = generation, id = current.value.id;
+  timer = setTimeout(async () => {
+    if (version !== generation) return;
+    if (store.busy || document.visibilityState === "hidden") { scheduleRead(); return; }
+    const result = await store.readTransaction(id);
+    if (version !== generation) return;
+    if (result) { pushed.value = result; error.value = ""; failures = 0; }
+    else { error.value = store.actionError || "Unable to check push status"; failures++; }
+    scheduleRead();
+  }, Math.min(30000, 2000 * 2 ** Math.min(failures, 4)));
+}
+watch([open, () => pushed.value?.id, () => current.value?.status, () => store.connected], () => { stopReading(); failures = 0; scheduleRead(); });
+onUnmounted(stopReading);
 watch(open, value => {
   if (!value) return;
-  acknowledged.value = false; dropAcknowledged.value = false; error.value = "";
+  error.value = ""; pushed.value = null;
   confirmationSeconds.value = props.seconds; saveDescription.value = props.description;
 }, { immediate: true });
 async function apply(): Promise<void> {
-  if (!acknowledged.value || (dropRisk.value && !dropAcknowledged.value) || !store.canApply || store.editorDirty) return;
+  if (!store.canApply || store.editorDirty) return;
   try {
     error.value = "";
     const transaction = await store.apply(Number(props.editOptions ? confirmationSeconds.value : props.seconds), props.editOptions ? saveDescription.value : props.description);
-    open.value = false;
-    if (transaction) await router.push(`/transactions/${encodeURIComponent(transaction.id)}`);
-  } catch (failure) { error.value = failure instanceof Error ? failure.message : "Unable to save configuration"; }
+    if (transaction) pushed.value = transaction;
+    else error.value = store.actionError || "Push outcome could not be verified. Check Commits before trying again.";
+  } catch (failure) { error.value = failure instanceof Error ? failure.message : "Unable to push changes"; }
+}
+async function close(): Promise<void> {
+  open.value = false;
+  if (current.value) await router.push(`/config/commits/${encodeURIComponent(current.value.id)}`);
 }
 </script>
 
@@ -37,55 +60,88 @@ async function apply(): Promise<void> {
     persistent
     scrollable
   >
-    <v-card title="Apply complete configuration provisionally">
+    <v-card title="Push changes">
       <v-card-text>
-        <p class="mb-4">
-          This replaces all owned configuration, including deletions. Networking can be disrupted and intermediate states are visible; it is not an atomic kernel transaction.
-          The confirmation clock starts before the response. Confirm explicitly before the server deadline. Out-of-band access and operator-managed forwarding may be necessary.
-        </p>
-        <v-alert
-          v-if="store.editorDirty"
-          type="warning"
-          class="mb-4"
-        >
-          There is unstaged form input. Cancel and stage the current form before saving the shared draft.
-        </v-alert>
-        <v-alert
-          v-if="!store.canApply"
-          type="warning"
-          class="mb-4"
-        >
-          Save blocked: resolve validation, empty changes, stale/unavailable discovery, stale base, drift, active transaction, or frozen/uncertain write.
-          <v-btn
-            to="/changes"
-            variant="text"
-            :disabled="store.editorDirty || store.busy"
-            @click="open = false"
+        <template v-if="current">
+          <v-alert
+            v-if="current.status === 'committed'"
+            type="success"
           >
-            Review changes
-          </v-btn>
-        </v-alert>
-        <ConfigDiff
-          v-if="store.baseline && store.draft"
-          :before="store.baseline"
-          :after="store.draft"
-        />
-        <template v-if="editOptions">
-          <v-text-field
-            v-model="saveDescription"
-            label="Description"
-          />
-          <v-text-field
-            v-model="confirmationSeconds"
-            type="number"
-            label="Confirmation window (seconds)"
-            min="10"
-            max="300"
-          />
+            Changes confirmed.
+          </v-alert>
+          <v-alert
+            v-else-if="current.status === 'rolled_back'"
+            type="warning"
+          >
+            Changes rolled back.
+          </v-alert>
+          <template v-else>
+            <p
+              class="mb-3"
+              role="status"
+            >
+              {{ current.status === 'pending_confirmation' ? 'Changes applied.' : current.status.replaceAll('_', ' ') }}
+            </p>
+            <v-alert
+              v-if="current.error"
+              type="error"
+              role="alert"
+              class="mb-3"
+            >
+              {{ current.error }}
+            </v-alert>
+            <TransactionActions
+              :transaction="current"
+              :show-details="false"
+              @updated="pushed = $event"
+            />
+          </template>
         </template>
-        <p class="text-caption text-medium-emphasis mb-4">
-          Required permissions: {{ requiredPermissions(store.diff).join(", ") }}
-        </p>
+        <template v-else>
+          <p class="mb-4">
+            Push all changes, including deletions, to the firewall. This can interrupt network access.
+            Test connectivity, then confirm the push before the deadline or the firewall will restore its previous configuration.
+            The deadline starts when the firewall begins applying changes. Keep another way to access the firewall if connectivity is lost.
+          </p>
+          <v-alert
+            v-if="store.editorDirty"
+            type="warning"
+            class="mb-4"
+          >
+            There is unstaged form input. Cancel and stage those edits before pushing.
+          </v-alert>
+          <v-alert
+            v-if="!store.canApply"
+            type="warning"
+            class="mb-4"
+          >
+            Push blocked: {{ store.applyBlockedReason }}
+            <v-btn
+              to="/config/changes"
+              variant="text"
+              :disabled="store.editorDirty || store.busy"
+              @click="open = false"
+            >
+              SAVE
+            </v-btn>
+          </v-alert>
+          <template v-if="editOptions">
+            <v-text-field
+              v-model="saveDescription"
+              label="Commit message"
+            />
+            <v-text-field
+              v-model="confirmationSeconds"
+              type="number"
+              label="Auto-rollback after (seconds)"
+              min="10"
+              max="300"
+            />
+          </template>
+          <p class="text-caption text-medium-emphasis mb-4">
+            Required permissions: {{ requiredPermissions(store.diff).join(", ") }}
+          </p>
+        </template>
         <v-alert
           v-if="error"
           type="error"
@@ -94,31 +150,31 @@ async function apply(): Promise<void> {
         >
           {{ error }}
         </v-alert>
-        <v-checkbox
-          v-model="acknowledged"
-          label="I reviewed the complete package, deletion impact, disruption risk, deadline, and recovery prerequisites."
-        />
-        <v-checkbox
-          v-if="dropRisk"
-          v-model="dropAcknowledged"
-          label="I explicitly acknowledge default drop / catch-all drop and potentially unreachable later rules."
-        />
       </v-card-text>
       <v-card-actions class="flex-wrap">
         <v-btn
+          v-if="current"
           :disabled="store.busy"
-          @click="open = false"
+          @click="close"
         >
-          Cancel
+          {{ ['committed', 'rolled_back'].includes(current.status) ? 'Done' : 'Close' }}
         </v-btn>
-        <v-btn
-          color="warning"
-          :loading="store.busy"
-          :disabled="!acknowledged || (dropRisk && !dropAcknowledged) || !store.canApply || store.editorDirty"
-          @click="apply"
-        >
-          Apply provisionally
-        </v-btn>
+        <template v-else>
+          <v-btn
+            :disabled="store.busy"
+            @click="open = false"
+          >
+            Cancel
+          </v-btn>
+          <v-btn
+            color="warning"
+            :loading="store.busy"
+            :disabled="!store.canApply || store.editorDirty"
+            @click="apply"
+          >
+            Push changes
+          </v-btn>
+        </template>
       </v-card-actions>
     </v-card>
   </v-dialog>

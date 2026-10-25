@@ -54,13 +54,13 @@ function diagnostic(text: string, credential = getRegistrySessionToken()): strin
 }
 
 export async function request<T>(
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> {
-  const writing = method === "POST";
+  const writing = method !== "GET";
   const requestCredential = getRegistrySessionToken();
   const serialized = body === undefined ? undefined : encodeJson(body);
   if (serialized !== undefined && utf8Size(serialized) > 1_048_576) {

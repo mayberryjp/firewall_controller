@@ -1,13 +1,14 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ZodError } from "zod";
+import ipaddr from "ipaddr.js";
 import { useControllerStore } from "@/stores/controller";
-import { dhcpClientSchema, dnsConfigSchema, type ManagedInterface, type DiscoveredInterface } from "@/types/domain";
-import { record } from "@/types/forms";
+import { dhcpClientSchema, dnsConfigSchema, objectMetadataSchema, type DiscoveredInterface } from "@/types/domain";
+import { record, type Field } from "@/types/forms";
 import { preset, resourceFields, type Section } from "@/services/resourceForms";
-import { cloneConfig, prefix, selectedRelayPrefix, stableJson, validateConfig } from "@/services/configuration";
-import { resourceItems, replaceResourceItems } from "@/services/resourceCollections";
+import { cloneConfig, numericAddress, prefix, stableJson, validateConfig } from "@/services/configuration";
+import { interfaceChoice, resourceItems, replaceResourceItems } from "@/services/resourceCollections";
 
-export function useResourceEditor(section: Section, wireguard = false) {
+export function useResourceEditor(section: Section, wireguard = false, vlan = false, loopbacks = false) {
   const store = useControllerStore();
   const dialog = ref(false), form = ref<Record<string, unknown>>({});
   const original = ref<unknown>(), editingIndex = ref(-1), renameAcknowledged = ref(false);
@@ -16,31 +17,22 @@ export function useResourceEditor(section: Section, wireguard = false) {
   const editingConfig = computed(() => store.draft ?? store.state.data?.desired);
   const editingBlocked = computed(() => Boolean(store.readOnlyReason) || (section === "firewall" && Boolean(editingConfig.value?.firewall.policies)));
   const allManaged = computed(() => editingConfig.value?.interfaces.map(link => link.name) ?? []);
-  const adopted = computed(() => store.runtime.data?.parent_interfaces.filter(parent => parent.available).map(parent => parent.name) ?? []);
-  const parentOptions = computed(() => editingConfig.value?.interfaces.filter(link => {
-    if (link.kind === "wireguard" || link.name === form.value.name) return false;
-    const visited = new Set<string>();
-    let parent: ManagedInterface = link;
-    while (parent.kind === "vlan") {
-      if (parent.vlan.parent === form.value.name || visited.has(parent.name)) return false;
-      visited.add(parent.name);
-      const next = editingConfig.value?.interfaces.find(candidate => candidate.name === (parent.kind === "vlan" ? parent.vlan.parent : ""));
-      if (!next) break;
-      parent = next;
-    }
-    return true;
-  }).map(link => link.name) ?? []);
+  const interfaceOptions = computed(() => editingConfig.value?.interfaces.map(interfaceChoice) ?? []);
+  const parentOptions = computed(() => editingConfig.value?.interfaces
+    .filter(link => link.kind === "ethernet" && link.name !== form.value.name).map(interfaceChoice) ?? []);
+  const adopted = computed(() => store.runtime.data?.parent_interfaces
+    .filter(parent => parent.available && parent.kind === "ethernet" && parent.name !== form.value.name && !allManaged.value.includes(parent.name))
+    .map(interfaceChoice) ?? []);
   const familyInterfaces = computed(() => editingConfig.value?.interfaces.filter(link => (form.value.family === "ipv4" && editingConfig.value?.dhcp_clients?.[link.name]) || link.addresses.some(address => {
     try { return prefix(address, false).family === form.value.family; } catch { return false; }
-  })).map(link => link.name) ?? []);
+  })).map(interfaceChoice) ?? []);
   const immutable = computed(() => Boolean(original.value && store.state.data?.desired.interfaces.some(link => link.name === record(original.value).name)));
-  const fields = computed(() => resourceFields(section, section === "interfaces" ? parentOptions.value : allManaged.value,
-    adopted.value, immutable.value, form.value.kind, form.value.family, familyInterfaces.value));
-  const relaySelection = computed(() => {
-    try {
-      const addresses = form.value.addresses;
-      return selectedRelayPrefix({ addresses: Array.isArray(addresses) ? addresses.filter((item): item is string => typeof item === "string") : [] }) ?? "No eligible IPv4 prefix";
-    } catch (error) { return error instanceof Error ? error.message : "Invalid address prefix"; }
+  const fields = computed(() => {
+    const result: Field[] = resourceFields(section, section === "interfaces" ? parentOptions.value : interfaceOptions.value,
+      adopted.value, immutable.value, form.value.kind, form.value.family, familyInterfaces.value, wireguard, editingIndex.value < 0, vlan)
+      .map(field => loopbacks && field.key === "kind" ? { ...field, disabled: true, choices: [{ title: "Loopback", value: "dummy" }] } :
+        field.key === "family" && !store.ipv6Enabled ? { ...field, choices: field.choices?.filter(choice => choice.value !== "ipv6") } : field);
+    return result;
   });
   function dependencies(name: unknown): string[] {
     if (!editingConfig.value || section !== "interfaces") return [];
@@ -57,6 +49,54 @@ export function useResourceEditor(section: Section, wireguard = false) {
   const impacts = computed(() => deletion.value ? dependencies(record(deletion.value.value).name) : []);
   const renaming = computed(() => section === "interfaces" && original.value !== undefined && record(original.value).name !== form.value.name);
   const renameImpacts = computed(() => renaming.value ? dependencies(record(original.value).name) : []);
+  function monitorGateway(value: Record<string, unknown>): string {
+    const retained = value.enabled === false ? String(value.gateway ?? "") : "";
+    try {
+      const target = numericAddress(String(value.target));
+      const routes = (editingConfig.value?.routes ?? []).flatMap(route => {
+        if (route.table !== 254 || route.interface !== value.interface) return [];
+        try {
+          const network = ipaddr.parseCIDR(route.destination);
+          return network[0].kind() === target.kind() && target.match(network) ?
+            [{ gateway: route.gateway || String(value.target), prefix: network[1], metric: route.metric }] : [];
+        } catch { return []; }
+      }).sort((left, right) => right.prefix - left.prefix || left.metric - right.metric);
+      const best = routes[0];
+      if (!best) return retained;
+      const gateways = new Set(routes.filter(route => route.prefix === best.prefix && route.metric === best.metric).map(route => route.gateway));
+      return gateways.size === 1 ? best.gateway : retained;
+    } catch { return ""; }
+  }
+  function monitorSource(value: Record<string, unknown>): string {
+    let family: string | undefined;
+    for (const key of ["target", "gateway"]) {
+      try { family = numericAddress(String(value[key])).kind(); break; } catch { continue; }
+    }
+    const link = editingConfig.value?.interfaces.find(item => item.name === value.interface);
+    const addresses = (link?.addresses ?? []).flatMap(address => {
+      try {
+        const parsed = prefix(address, false);
+        return (!family || parsed.family === family) && (store.ipv6Enabled || parsed.family !== "ipv6") ? [parsed.address.toString()] : [];
+      } catch { return []; }
+    });
+    return addresses.find(address => address === value.source_address) ?? addresses[0] ??
+      (value.enabled === false ? String(value.source_address ?? "") : "");
+  }
+  function inferMonitor(value: Record<string, unknown>): Record<string, unknown> {
+    const next = { ...value };
+    let ipv6 = false;
+    try { ipv6 = numericAddress(String(next.target)).kind() === "ipv6"; } catch { ipv6 = false; }
+    if (editingConfig.value?.dhcp_clients?.[String(next.interface)] && !ipv6) {
+      next.mode = "dhcp";
+      delete next.source_address; delete next.gateway; delete next.routing_table;
+    } else {
+      delete next.mode;
+      next.gateway = monitorGateway(next);
+      next.source_address = monitorSource(next);
+      next.routing_table = 254;
+    }
+    return next;
+  }
   function open(value?: unknown): void {
     if (!editingConfig.value) return;
     original.value = value;
@@ -65,7 +105,21 @@ export function useResourceEditor(section: Section, wireguard = false) {
     if (value !== undefined && editingIndex.value < 0) { formError.value = "This record no longer exists in the current configuration."; return; }
     const initial = editingIndex.value >= 0 ? resourceItems(editingConfig.value, section)[editingIndex.value] : preset(section, wireguard);
     form.value = record(JSON.parse(JSON.stringify(initial)));
+    if (section === "gateway_monitors") form.value = inferMonitor(form.value);
+    if (section === "interfaces" && editingIndex.value < 0 && (vlan || loopbacks)) form.value.up = true;
+    if (section === "interfaces" && loopbacks && editingIndex.value < 0) {
+      form.value.role = "unassigned";
+      form.value.mtu = 65535;
+    }
+    if (section === "interfaces" && vlan && editingIndex.value < 0) {
+      form.value.kind = "vlan";
+      form.value.role = "unassigned";
+      form.value.vlan = { parent: "", id: 1 };
+    }
     if (section === "interfaces") {
+      if (form.value.kind === "ethernet") {
+        form.value.display_name = record(form.value.metadata).display_name ?? "";
+      }
       const name = String(form.value.name);
       form.value.address_mode = editingConfig.value.dhcp_clients?.[name] ? "dhcp" : "static";
       form.value.dhcp_client = dhcpClientSchema.parse(editingConfig.value.dhcp_clients?.[name] ?? {});
@@ -76,13 +130,17 @@ export function useResourceEditor(section: Section, wireguard = false) {
     renameAcknowledged.value = false;
   }
   function manage(link: DiscoveredInterface): void {
-    if (editingBlocked.value) return;
+    if (editingBlocked.value || link.name === "lo" || link.ownership !== "unmanaged" || !(loopbacks ? ["dummy"] : ["ethernet", "veth"]).includes(link.kind)) return;
     open();
-    form.value = { ...form.value, name: link.name, kind: "ethernet", mtu: link.mtu, up: link.up, addresses: [] };
+    form.value = { ...form.value, name: link.name, kind: loopbacks ? "dummy" : "ethernet", role: "unassigned", mtu: link.mtu, up: link.up, addresses: [] };
     formStart.value = stableJson(form.value);
   }
   function change(key: string, value: unknown): void {
-    const next = { ...form.value, [key]: value };
+    let next = { ...form.value, [key]: value };
+    if (section === "gateway_monitors" && ["interface", "target"].includes(key)) {
+      next = inferMonitor(next);
+      errors.value = {}; formError.value = "";
+    }
     if (section === "interfaces" && key === "kind") {
       delete next.vlan; delete next.wireguard;
       if (value === "vlan") next.vlan = { parent: "", id: 1 };
@@ -93,7 +151,7 @@ export function useResourceEditor(section: Section, wireguard = false) {
   watch(form, () => { if (dialog.value) store.editorDirty = stableJson(form.value) !== formStart.value; }, { deep: true });
   onUnmounted(() => { store.editorDirty = false; });
   function cancel(): void {
-    if (store.editorDirty && !window.confirm("Discard unstaged form input?")) return;
+    if (store.editorDirty && form.value.kind !== "ethernet" && !window.confirm("Discard unstaged form input?")) return;
     dialog.value = false; store.editorDirty = false; form.value = {};
   }
   function stageForm(): void {
@@ -101,21 +159,58 @@ export function useResourceEditor(section: Section, wireguard = false) {
     errors.value = {}; formError.value = "";
     try {
       if (renaming.value && !renameAcknowledged.value) throw new Error("Review and acknowledge interface rename dependency impacts first");
-      const value = JSON.parse(JSON.stringify(form.value)) as Record<string, unknown>;
+      let value = JSON.parse(JSON.stringify(form.value)) as Record<string, unknown>;
+      if (section === "routes") value.table = 254;
+      if (section === "gateway_monitors") value = inferMonitor(value);
+      if (section === "gateway_monitors" && value.mode === "dhcp") {
+        if (!store.supportsDhcpGatewayMonitors) {
+          errors.value["editor.interface"] = ["The selected backend does not advertise DHCP monitor support."];
+          throw new Error("The selected backend does not advertise DHCP IPv4 gateway monitoring. Refresh runtime capabilities before saving.");
+        }
+        delete value.source_address; delete value.gateway; delete value.routing_table;
+      } else if (section === "gateway_monitors") {
+        delete value.mode;
+        value.routing_table = 254;
+        value.source_address = monitorSource(value);
+        if (!value.source_address) {
+          errors.value["editor.interface"] = [editingConfig.value.dhcp_clients?.[String(value.interface)]
+            ? "The selected interface needs a configured IPv6 source matching the probe target's IP version."
+            : "The selected interface needs a configured source IP of the same IP version as the probe target, not the same address or subnet."];
+          throw new Error("The selected interface has no suitable source address.");
+        }
+        value.gateway = monitorGateway(value);
+        if (!value.gateway) {
+          errors.value["editor.target"] = ["Select a probe target with an unambiguous route in table 254 on this interface."];
+          throw new Error("No unambiguous route to the probe target on the selected interface.");
+        }
+      }
+      if (loopbacks && (value.kind !== "dummy" || value.name === "lo")) throw new Error("Only loopback interfaces other than lo can be managed here.");
       if (section === "softflowd") {
         const timeouts = record(value.timeouts);
         value.timeouts = Object.fromEntries(Object.entries(timeouts).filter(([, seconds]) => seconds !== "" && seconds !== undefined));
       }
       const candidate = cloneConfig(editingConfig.value);
       if (section === "interfaces") {
+        if (value.kind === "ethernet") {
+          const metadata = objectMetadataSchema.parse({ ...record(value.metadata), display_name: value.display_name ?? "" });
+          if (metadata) value.metadata = metadata; else delete value.metadata;
+          delete value.display_name;
+        }
         const name = String(value.name), previousName = record(original.value).name;
-        const clients = { ...candidate.dhcp_clients }, dns = { ...candidate.dns };
-        if (typeof previousName === "string" && previousName !== name) { delete clients[previousName]; delete dns[previousName]; }
-        if (value.address_mode === "dhcp") clients[name] = dhcpClientSchema.parse(value.dhcp_client);
-        else delete clients[name];
-        if (value.resolver_enabled) dns[name] = dnsConfigSchema.parse(value.resolver);
-        else delete dns[name];
-        candidate.dhcp_clients = clients; candidate.dns = dns;
+        const current = candidate.interfaces.find(link => link.name === previousName);
+        if (wireguard && current?.kind === "wireguard") {
+          value = { ...current, wireguard: value.wireguard };
+        } else {
+          value.dhcp_relay = current?.dhcp_relay ?? { enabled: false, servers: [] };
+          if (current?.kind === "wireguard") value.wireguard = current.wireguard;
+          const clients = { ...candidate.dhcp_clients }, dns = { ...candidate.dns };
+          if (typeof previousName === "string" && previousName !== name) { delete clients[previousName]; delete dns[previousName]; }
+          if (value.address_mode === "dhcp") clients[name] = dhcpClientSchema.parse(value.dhcp_client);
+          else delete clients[name];
+          if (value.resolver_enabled) dns[name] = dnsConfigSchema.parse(value.resolver);
+          else delete dns[name];
+          candidate.dhcp_clients = clients; candidate.dns = dns;
+        }
         for (const key of ["address_mode", "dhcp_client", "resolver_enabled", "resolver"]) delete value[key];
       }
       const values = [...resourceItems(candidate, section)], index = editingIndex.value < 0 ? values.length : editingIndex.value;
@@ -129,7 +224,7 @@ export function useResourceEditor(section: Section, wireguard = false) {
         const key = issue.path.replace(basePath, "editor").replace(/\.(addresses|allowed_ips|servers)\.\d+$/, ".$1");
         errors.value[key] = [...(errors.value[key] ?? []), issue.message];
       }
-      if (ownIssues.length) throw new Error("Correct the highlighted local validation errors. Cross-resource errors remain visible in Review changes.");
+      if (ownIssues.length) throw new Error("Correct the highlighted local validation errors. Cross-resource errors remain visible in SAVE.");
       store.stage(candidate); dialog.value = false; store.editorDirty = false;
     } catch (error) {
       if (error instanceof ZodError) for (const issue of error.issues) {
@@ -164,6 +259,6 @@ export function useResourceEditor(section: Section, wireguard = false) {
     } catch (error) { formError.value = error instanceof Error ? error.message : "Unable to reorder"; }
   }
   return { dialog, form, editingIndex, renameAcknowledged, errors, formError, deletion,
-    editingBlocked, allManaged, fields, relaySelection, impacts, renaming, renameImpacts,
+    editingBlocked, allManaged, interfaceOptions, fields, impacts, renaming, renameImpacts,
     open, manage, change, cancel, stageForm, stageDelete, move };
 }

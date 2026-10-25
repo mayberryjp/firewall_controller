@@ -7,16 +7,26 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "", name: "home", component: () => import("@/views/HomeView.vue") },
   ],
   "networking-section": [
+    { path: "/loopbacks", name: "loopbacks", component: () => import("@/views/LoopbacksView.vue") },
     { path: "/interfaces", name: "interfaces", component: () => import("@/views/InterfacesView.vue") },
     { path: "/interfaces/:name", name: "interface-detail", component: () => import("@/views/InterfaceDetailView.vue"), props: true, meta: { navigationPage: "interfaces" } },
-    { path: "/parents", name: "parents", component: () => import("@/views/ParentsView.vue") },
+    { path: "/vlans", name: "vlans", component: () => import("@/views/VLANsView.vue") },
+    { path: "/vlans/:name", name: "vlan-detail", component: () => import("@/views/VLANsView.vue"), props: true, meta: { navigationPage: "vlans" } },
+  ],
+  "routing-section": [
     { path: "/routes", name: "routes", component: () => import("@/views/RoutesView.vue") },
-    { path: "/policy-rules", name: "policy-rules", component: () => import("@/views/PolicyRulesView.vue") },
+    { path: "/policy-rules", name: "policy-rules", redirect: "/routes" },
+    { path: "/gateway-monitors", name: "gateway-monitors", component: () => import("@/views/GatewayMonitorsView.vue") },
+  ],
+  "firewall-section": [
     { path: "/firewall", name: "firewall", component: () => import("@/views/FirewallView.vue") },
     { path: "/firewall/input", name: "firewall-input", component: () => import("@/views/FirewallInputView.vue") },
+    { path: "/connections", name: "connections", component: () => import("@/views/ConnectionsView.vue") },
     { path: "/nat", name: "nat", component: () => import("@/views/NATView.vue") },
+  ],
+  "vpn-section": [
     { path: "/wireguard", name: "wireguard", component: () => import("@/views/WireGuardView.vue") },
-    { path: "/gateway-monitors", name: "gateway-monitors", component: () => import("@/views/GatewayMonitorsView.vue") },
+    { path: "/wireguard/:name", name: "wireguard-detail", component: () => import("@/views/WireGuardView.vue"), props: true, meta: { navigationPage: "wireguard" } },
   ],
   "services-section": [
     { path: "/services/softflowd", name: "softflowd", component: () => import("@/views/SoftflowdView.vue") },
@@ -25,13 +35,23 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/services/ntp", name: "ntp", component: () => import("@/views/NTPView.vue") },
     { path: "/services/syslog", name: "syslog", component: () => import("@/views/SyslogView.vue") },
     { path: "/services/vnstat", name: "vnstat", component: () => import("@/views/VnStatView.vue") },
+    { path: "/services/maintenance", name: "service-maintenance", component: () => import("@/views/ServiceMaintenanceView.vue") },
   ],
-  "activity-section": [
-    { path: "/changes", name: "changes", component: () => import("@/views/ChangesView.vue") },
-    { path: "/transactions", name: "transactions", component: () => import("@/views/TransactionsView.vue") },
-    { path: "/transactions/:id", name: "transaction-detail", component: () => import("@/views/TransactionDetailView.vue"), props: true, meta: { navigationPage: "transactions" } },
-    { path: "/history", name: "history", component: () => import("@/views/HistoryView.vue") },
-    { path: "/history/:revision", name: "revision-detail", component: () => import("@/views/RevisionDetailView.vue"), props: true, meta: { navigationPage: "history" } },
+  "settings-section": [
+    { path: "/settings/general", name: "settings-general", component: () => import("@/views/SettingsView.vue") },
+  ],
+  "config-section": [
+    { path: "/config/changes", name: "changes", component: () => import("@/views/ChangesView.vue") },
+    { path: "/config/commits", name: "commits", component: () => import("@/views/TransactionsView.vue") },
+    { path: "/config/commits/:id", name: "transaction-detail", component: () => import("@/views/TransactionDetailView.vue"), props: true, meta: { navigationPage: "commits" } },
+    { path: "/config/revisions", name: "history", component: () => import("@/views/HistoryView.vue") },
+    { path: "/config/revisions/:revision", name: "revision-detail", component: () => import("@/views/RevisionDetailView.vue"), props: true, meta: { navigationPage: "history" } },
+    { path: "/activity", redirect: { name: "changes" } },
+    { path: "/changes", redirect: { name: "changes" } },
+    { path: "/transactions", redirect: { name: "commits" } },
+    { path: "/transactions/:id", redirect: to => ({ name: "transaction-detail", params: to.params, query: to.query, hash: to.hash }) },
+    { path: "/history", redirect: { name: "history" } },
+    { path: "/history/:revision", redirect: to => ({ name: "revision-detail", params: to.params, query: to.query, hash: to.hash }) },
   ],
 };
 

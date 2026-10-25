@@ -9,6 +9,7 @@ const dialog = ref(false), error = ref("");
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
 const permissions = computed(() => stored.value ? serviceRepairPermissions(stored.value, props.service).join(", ") : "Unknown; committed/pending settings unavailable");
 const blocked = computed(() => !store.connected || store.busy || store.incompatible || Boolean(store.uncertain) ||
+  store.upgradePending || Boolean(store.upgradeBlockedReason) ||
   store.activeTransactions.some(item => ["applying", "rolling_back", "recovery_failed"].includes(item.status)));
 async function repair(): Promise<void> {
   error.value = "";

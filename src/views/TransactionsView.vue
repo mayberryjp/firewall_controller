@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from "vue";
+import { formatTimestamp } from "@/services/timestamps";
 import { useControllerStore } from "@/stores/controller";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 const store = useControllerStore();
@@ -9,10 +10,10 @@ const filtered = computed(() => store.sortedTransactions.filter(item =>
 onMounted(() => { void store.refreshTransactions(); });
 </script>
 <template>
-  <section aria-label="Transactions">
+  <section aria-label="Commits">
     <DatasetStatus
       :query="store.transactions"
-      label="Independent transaction discovery"
+      label="Independent commit discovery"
     />
     <div
       v-if="store.sortedTransactions.length > 20"
@@ -20,7 +21,7 @@ onMounted(() => { void store.refreshTransactions(); });
     >
       <v-text-field
         v-model="search"
-        label="Filter transaction text"
+        label="Filter commit text"
         @update:model-value="page = 1"
       />
       <v-select
@@ -31,7 +32,7 @@ onMounted(() => { void store.refreshTransactions(); });
       />
     </div>
     <v-table>
-      <thead><tr><th>Transaction</th><th>Status</th><th>Description</th><th>Submitted</th><th>Base revision</th><th>Deadline</th></tr></thead>
+      <thead><tr><th>Commit</th><th>Status</th><th>Description</th><th>Submitted (UTC)</th><th>Base revision</th><th>Deadline (UTC)</th></tr></thead>
       <tbody>
         <tr
           v-for="item in filtered.slice((page - 1) * 20, page * 20)"
@@ -40,7 +41,7 @@ onMounted(() => { void store.refreshTransactions(); });
           <td>
             <router-link
               class="mono"
-              :to="`/transactions/${encodeURIComponent(item.id)}`"
+              :to="`/config/commits/${encodeURIComponent(item.id)}`"
             >
               {{ item.id }}
             </router-link>
@@ -49,13 +50,13 @@ onMounted(() => { void store.refreshTransactions(); });
           <td :title="item.actor">
             {{ item.description || "—" }}
           </td>
-          <td>{{ item.submitted_at || "—" }}</td><td class="mono">
+          <td>{{ formatTimestamp(item.submitted_at, "—") }}</td><td class="mono">
             {{ item.base_revision }}
           </td>
-          <td>{{ item.status === "pending_confirmation" ? item.confirmation_deadline : "—" }}</td>
+          <td>{{ item.status === "pending_confirmation" ? formatTimestamp(item.confirmation_deadline) : "—" }}</td>
         </tr><tr v-if="!filtered.length">
           <td colspan="6">
-            No matching transaction records.
+            No matching commit records.
           </td>
         </tr>
       </tbody>

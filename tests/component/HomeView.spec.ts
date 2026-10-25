@@ -7,6 +7,7 @@ import FieldInput from "@/components/base/FieldInput.vue";
 import { useControllerStore } from "@/stores/controller";
 import * as registry from "@/services/registry";
 import { state, statistics, monitor, gatewayStatistics } from "../fixtures";
+import { navigationSections } from "@/constants/navigation";
 vi.mock("vue-router", () => ({ useRouter: () => ({ replace: vi.fn() }), useRoute: () => ({ query: {} }) }));
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -71,7 +72,7 @@ describe("compact overview dashboard", () => {
       VCard: { props: ["tag"], template: '<component :is="tag || \'div\'"><slot /></component>' },
       VTable: { template: "<div><table><slot /></table></div>" },
       VBtn: { template: "<a><slot /></a>" },
-      RouterLink: { template: "<a><slot /></a>" },
+      RouterLink: { props: ["to"], template: '<a :href="to"><slot /></a>' },
     } } });
   }
   it("shows only the four compact widgets, preserves exact counters, and subscribes to live reads", () => {
@@ -87,6 +88,50 @@ describe("compact overview dashboard", () => {
     const wrapper = dashboard().get('[aria-label="Interfaces"]');
     expect(wrapper.text()).toContain("Simulated");
     expect(wrapper.text()).not.toContain("Up");
+  });
+  it("lists one interface per counter row with counters in labeled columns", () => {
+    const store = useControllerStore();
+    store.statistics.data!.interfaces[0]!.counters = {
+      rx_packets: "11", tx_packets: "12", rx_bytes: "18446744073709551615",
+      tx_bytes: "14", rx_errors: "15", tx_errors: "16",
+    };
+    store.statistics.data!.interfaces.push({
+      ...store.statistics.data!.interfaces[0]!, name: "eth1",
+      counters: { rx_packets: "21", tx_packets: "22", rx_bytes: "23", tx_bytes: "24", rx_errors: "25", tx_errors: "26" },
+    });
+    const widget = dashboard().get('[aria-label="Interface counters"]');
+    expect(widget.findAll("thead th").map(cell => cell.text())).toEqual([
+      "Interface", "Packets in", "Packets out", "Bytes in", "Bytes out", "Errors in", "Errors out",
+    ]);
+    expect(widget.findAll("tbody tr").map(row => row.findAll("th, td").map(cell => cell.text()))).toEqual([
+      ["lab0", "11", "12", "18446744073709551615", "14", "15", "16"],
+      ["eth1", "21", "22", "23", "24", "25", "26"],
+    ]);
+  });
+  it("omits interface widget header links while retaining other widget navigation", () => {
+    const wrapper = dashboard();
+    expect(wrapper.get('[aria-label="Interfaces"] header').find("a").exists()).toBe(false);
+    expect(wrapper.get('[aria-label="Interface counters"]').find("a").exists()).toBe(false);
+    expect(wrapper.get('[aria-label="Gateways"] header a').attributes("aria-label")).toBe("Open Gateways");
+    expect(wrapper.get('[aria-label="WireGuard"] header a').attributes("aria-label")).toBe("Open WireGuard");
+  });
+  it("spans every counter column when no interface samples are available", () => {
+    useControllerStore().statistics.data!.interfaces = [];
+    const widget = dashboard().get('[aria-label="Interface counters"]');
+    expect(widget.get("tbody td").text()).toBe("No interface counters available.");
+    expect(widget.get("tbody td").attributes("colspan")).toBe("7");
+  });
+  it("has no adopted-parent navigation and renders overview interface names without links", () => {
+    const store = useControllerStore(), base = store.state.data!.desired.interfaces[0]!;
+    store.state.data!.desired.interfaces.push(
+      { ...base, name: "vlan30", kind: "vlan", vlan: { parent: "lab0", id: 30 } },
+      { ...base, name: "wg0", kind: "wireguard", wireguard: { key_ref: "key", listen_port: 51820, peers: [] } },
+    );
+    store.statistics.data!.interfaces.push({ ...store.statistics.data!.interfaces[0]!, name: "eth1", kind: "ethernet", ownership: "unmanaged" });
+    const widget = dashboard().get('[aria-label="Interfaces"]');
+    expect(widget.findAll("tbody tr td:first-child").map(cell => cell.text())).toEqual(["lab0", "eth1", "vlan30", "wg0"]);
+    expect(widget.find("a").exists()).toBe(false);
+    expect(navigationSections.flatMap(section => section.pages).some(page => page.path === "/parents")).toBe(false);
   });
   it("shows WireGuard link state and configured peers without claiming handshake health", () => {
     const store = useControllerStore();
@@ -121,5 +166,11 @@ describe("compact overview dashboard", () => {
     const widget = dashboard().get('[aria-label="Interface counters"]');
     expect(widget.text()).toContain("Unavailable");
     expect(widget.findAll("td").every(cell => cell.text() === "Unavailable")).toBe(true);
+  });
+  it("preserves zero counters while showing missing individual counters as unavailable", () => {
+    const widget = dashboard().get('[aria-label="Interface counters"]');
+    expect(widget.findAll("tbody td").map(cell => cell.text())).toEqual([
+      "Unavailable", "Unavailable", "18446744073709551615", "0", "Unavailable", "Unavailable",
+    ]);
   });
 });

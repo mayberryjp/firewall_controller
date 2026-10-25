@@ -1,55 +1,38 @@
 <script setup lang="ts">
 import { nextTick, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
-import type { Config } from "@/types/domain";
-import { importConfig, validateConfig } from "@/services/configuration";
-import { useConfigExport } from "@/composables/useConfigExport";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import ApplyConfigurationDialog from "@/components/feature/ApplyConfigurationDialog.vue";
 const store = useControllerStore();
-const { exportConfig, exportError } = useConfigExport();
 const error = ref(""), summary = ref<HTMLElement | null>(null);
 const applyDialog = ref(false);
-const destructive = ref<"discard" | "restart" | null>(null), importText = ref(""), imported = ref<Config | null>(null);
-const importDialog = ref(false), importAcknowledged = ref(false);
+const checking = ref(false);
+const comparison = ref<"base" | "latest">("base");
+const destructive = ref<"discard" | "restart" | null>(null);
 async function showError(failure: unknown): Promise<void> {
   error.value = failure instanceof Error ? failure.message : "Operation failed";
   await nextTick(); summary.value?.focus();
+}
+async function reviewPush(): Promise<void> {
+  if (checking.value || store.busy) return;
+  checking.value = true;
+  try {
+    error.value = "";
+    await store.refresh();
+    if (store.canApply && !store.editorDirty) applyDialog.value = true;
+  }
+  catch (failure) { await showError(failure); }
+  finally { checking.value = false; }
 }
 function discard(): void {
   try { if (destructive.value === "restart") store.restartDraft(); else store.discardDraft(); destructive.value = null; }
   catch (failure) { void showError(failure); }
 }
-function previewImport(): void {
-  try {
-    if (store.readOnlyReason || !store.state.data) throw new Error(store.readOnlyReason || "Committed state unavailable");
-    const candidate = importConfig(importText.value);
-    const issues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.state.data.desired);
-    if (issues.length) throw new Error(issues.map(issue => `${issue.path}: ${issue.message}`).join("\n"));
-    imported.value = candidate; importAcknowledged.value = false; importDialog.value = true; error.value = "";
-  } catch (failure) { void showError(failure); }
-}
-async function readFile(event: Event): Promise<void> {
-  const input = event.target;
-  if (!(input instanceof HTMLInputElement)) return;
-  const file = input.files?.[0];
-  if (!file) return;
-  try {
-    if (file.size > 1_048_576) throw new Error("Import file exceeds 1 MiB");
-    importText.value = await file.text(); previewImport();
-  } catch (failure) { await showError(failure); }
-  finally { input.value = ""; }
-}
-function acceptImport(): void {
-  if (!imported.value || !importAcknowledged.value) return;
-  try { store.stage(imported.value); importDialog.value = false; imported.value = null; importText.value = ""; }
-  catch (failure) { void showError(failure); }
-}
 </script>
 <template>
-  <section aria-label="Review changes">
+  <section aria-label="SAVE">
     <div
-      v-if="error || exportError"
+      v-if="error"
       ref="summary"
       tabindex="-1"
       role="alert"
@@ -59,37 +42,40 @@ function acceptImport(): void {
         type="error"
         class="wrap-text"
       >
-        {{ error || exportError }}
+        {{ error }}
       </v-alert>
     </div>
-    <p
-      v-if="store.draft"
-      class="text-caption text-medium-emphasis mb-3"
-    >
-      Base revision {{ store.baseRevision }}
-    </p>
-    <div class="d-flex flex-wrap ga-3 mb-5">
-      <v-btn
+    <div class="d-flex flex-wrap align-center ga-2 mb-4">
+      <span
         v-if="store.draft"
-        @click="exportConfig(store.draft, 'netcontrol-draft')"
-      >
-        Export draft config
-      </v-btn>
+        class="text-body-2 text-medium-emphasis mr-auto"
+      >Base revision {{ store.baseRevision }}</span>
       <v-btn
         v-if="store.draft"
         color="error"
-        variant="outlined"
-        :disabled="Boolean(store.submitted || store.uncertain || store.busy)"
+        icon="mdi-delete-outline"
+        variant="text"
+        aria-label="Discard draft"
+        title="Discard draft"
+        :disabled="Boolean(store.submitted || store.uncertain || store.busy || checking)"
         @click="destructive = 'discard'"
-      >
-        Discard draft
-      </v-btn>
+      />
       <v-btn
-        v-if="store.draft"
-        :disabled="Boolean(store.submitted || store.uncertain || store.busy)"
+        v-if="store.draft && store.draftStale"
+        :disabled="Boolean(store.submitted || store.uncertain || store.busy || checking)"
         @click="destructive = 'restart'"
       >
-        Restart from latest desired
+        Discard and start over
+      </v-btn>
+      <v-btn
+        v-if="store.draft && store.baseline"
+        color="primary"
+        prepend-icon="mdi-source-commit"
+        :loading="checking"
+        :disabled="Boolean(store.readOnlyReason) || checking || store.editorDirty || !store.diff.length || Boolean(store.validation.length)"
+        @click="reviewPush"
+      >
+        Commit &amp; push
       </v-btn>
     </div>
     <template v-if="store.draft && store.baseline">
@@ -98,20 +84,27 @@ function acceptImport(): void {
         type="warning"
         class="mb-4"
       >
-        Stale draft: comparison against latest desired is below. Export before explicitly discarding/restarting. No automatic rebase.
+        Stale draft: base revision {{ store.baseRevision }}, current revision {{ store.state.data?.revision }}. Apply is blocked; no automatic rebase.
       </v-alert>
+      <v-btn-toggle
+        v-if="store.draftStale && store.state.data"
+        v-model="comparison"
+        mandatory
+        density="compact"
+        aria-label="Comparison baseline"
+        class="mb-4"
+      >
+        <v-btn value="base">
+          Base r{{ store.baseRevision }}
+        </v-btn>
+        <v-btn value="latest">
+          Latest r{{ store.state.data.revision }}
+        </v-btn>
+      </v-btn-toggle>
       <ConfigDiff
-        :before="store.baseline"
+        :before="comparison === 'latest' && store.draftStale && store.state.data ? store.state.data.desired : store.baseline"
         :after="store.draft"
       />
-      <template v-if="store.draftStale && store.state.data">
-        <h2 class="text-h5 mb-3">
-          Latest desired versus retained draft
-        </h2><ConfigDiff
-          :before="store.state.data.desired"
-          :after="store.draft"
-        />
-      </template>
       <div
         v-if="store.validation.length"
         tabindex="-1"
@@ -132,18 +125,12 @@ function acceptImport(): void {
           </li>
         </ul>
       </div>
-      <v-btn
-        color="primary"
-        :disabled="!store.canApply || !store.freshState"
-        @click="applyDialog = true"
-      >
-        Review provisional apply
-      </v-btn>
       <p
         v-if="!store.canApply"
         class="mt-3 text-warning"
+        role="status"
       >
-        {{ store.readOnlyReason || (store.validation.length ? "Resolve validation errors before applying." : !store.diff.length ? "No changes to apply." : "Refresh state and resolve the active warnings before applying.") }}
+        {{ store.applyBlockedReason }}
       </p>
     </template>
     <p
@@ -152,70 +139,13 @@ function acceptImport(): void {
     >
       No unsaved changes.
     </p>
-    <details class="mt-6">
-      <summary>Import configuration</summary>
-      <label
-        for="config-file"
-        class="d-block mt-3"
-      >Configuration file</label>
-      <input
-        id="config-file"
-        type="file"
-        accept=".json,application/json"
-        class="d-block my-3"
-        :disabled="Boolean(store.readOnlyReason)"
-        @change="readFile"
-      >
-      <v-textarea
-        v-model="importText"
-        label="Configuration JSON"
-        rows="5"
-        class="mono"
-      />
-      <v-btn
-        :disabled="!importText || Boolean(store.readOnlyReason)"
-        @click="previewImport"
-      >
-        Preview import / deletions
-      </v-btn>
-    </details>
-    <v-dialog
-      v-model="importDialog"
-      max-width="900"
-      scrollable
-    >
-      <v-card title="Replace local draft — no server write">
-        <v-card-text>
-          <ConfigDiff
-            v-if="imported && (store.draft || store.state.data)"
-            :before="(store.draft || store.state.data!.desired)"
-            :after="imported"
-          />
-          <v-checkbox
-            v-model="importAcknowledged"
-            label="I reviewed the full replacement and deletion impact."
-          />
-        </v-card-text>
-        <v-card-actions>
-          <v-btn @click="importDialog = false">
-            Cancel
-          </v-btn><v-btn
-            color="primary"
-            :disabled="!importAcknowledged"
-            @click="acceptImport"
-          >
-            Replace local draft
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
     <v-dialog
       :model-value="destructive !== null"
       max-width="580"
       @update:model-value="!$event && (destructive = null)"
     >
-      <v-card :title="destructive === 'restart' ? 'Discard and restart from latest desired?' : 'Discard shared draft?'">
-        <v-card-text>Local work across all resource pages will be lost. Export first if it should be retained. No server mutation occurs.</v-card-text>
+      <v-card :title="destructive === 'restart' ? 'Discard changes and start from the current revision?' : 'Discard changes?'">
+        <v-card-text>Unpushed changes across all pages will be lost. The firewall will not be changed.</v-card-text>
         <v-card-actions>
           <v-btn @click="destructive = null">
             Cancel

@@ -2,14 +2,12 @@
 import { useDisplay } from "vuetify";
 import { useRoute } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
-import { navigationSections } from "@/constants/navigation";
-import RegistrySessionMenu from "@/components/layout/RegistrySessionMenu.vue";
+import { primaryNavigationSections } from "@/constants/navigation";
 import MobileCategoryMenu from "@/components/layout/MobileCategoryMenu.vue";
 import ConnectionStatus from "@/components/layout/ConnectionStatus.vue";
 const store = useControllerStore(), route = useRoute();
 const { lgAndUp } = useDisplay();
 const appName = import.meta.env.VITE_APP_NAME || "Firewall Controller";
-defineEmits<{ disconnect: [] }>();
 </script>
 
 <template>
@@ -27,7 +25,7 @@ defineEmits<{ disconnect: [] }>();
       :title="appName"
     >
       <v-icon
-        icon="mdi-shield-outline"
+        icon="mdi-wall"
         size="30"
         color="#2ec4a0"
         class="mr-3"
@@ -45,22 +43,27 @@ defineEmits<{ disconnect: [] }>();
       aria-label="Main navigation"
     >
       <v-btn
-        v-for="section in navigationSections"
+        v-for="section in primaryNavigationSections"
         :key="section.name"
         :to="{ name: section.pages[0]!.name }"
         class="navigation-trigger mx-2"
         :class="{ 'is-active': route.matched.some(record => record.name === section.name) }"
         :color="route.matched.some(record => record.name === section.name) ? 'rose' : undefined"
-        :prepend-icon="section.icon"
+        :icon="section.name === 'settings-section' ? true : undefined"
+        :prepend-icon="section.name === 'settings-section' ? undefined : section.icon"
+        :aria-label="section.title"
         variant="text"
         rounded
       >
-        {{ section.title }}
+        <v-icon
+          v-if="section.name === 'settings-section'"
+          :icon="section.icon"
+        />
+        <span v-else>{{ section.title }}</span>
       </v-btn>
     </nav>
     <div class="d-flex align-center mr-2">
       <ConnectionStatus />
-      <RegistrySessionMenu @disconnect="$emit('disconnect')" />
       <MobileCategoryMenu v-if="store.connected && !lgAndUp" />
     </div>
   </v-app-bar>

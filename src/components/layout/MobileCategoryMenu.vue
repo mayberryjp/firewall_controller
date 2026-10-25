@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRoute } from "vue-router";
-import { navigationSections } from "@/constants/navigation";
+import { primaryNavigationSections } from "@/constants/navigation";
 const route = useRoute();
 const open = ref(false);
 </script>
@@ -25,7 +25,7 @@ const open = ref(false);
         nav
       >
         <v-list-item
-          v-for="section in navigationSections"
+          v-for="section in primaryNavigationSections"
           :key="section.name"
           :to="{ name: section.pages[0]!.name }"
           :title="section.title"
