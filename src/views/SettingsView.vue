@@ -1,18 +1,31 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
-import { cloneConfig, ipv6Conflicts } from "@/services/configuration";
+import { cloneConfig, ipv6Conflicts, validateConfig } from "@/services/configuration";
+import { getTimezones } from "@/services/netcontrol";
 
 const store = useControllerStore();
 const selectedConfig = computed(() => store.draft ?? store.state.data?.desired);
 const allowICMP = ref(true);
 const enableIPv6 = ref(true);
+const hostname = ref("");
+const timezone = ref<string | null>(null);
+const knownTimezones = ref<string[]>([]);
+const timezoneItems = computed(() => timezone.value && !knownTimezones.value.includes(timezone.value) ? [timezone.value, ...knownTimezones.value] : knownTimezones.value);
 const error = ref("");
 const blocked = computed(() => Boolean(store.readOnlyReason) || !selectedConfig.value);
 watch(() => selectedConfig.value?.firewall.allow_all_icmp, value => {
   if (value !== undefined) allowICMP.value = value;
 }, { immediate: true });
 watch(() => selectedConfig.value?.ipv6_enabled, value => { enableIPv6.value = value !== false; }, { immediate: true });
+watch(() => selectedConfig.value?.system, value => {
+  hostname.value = value?.hostname ?? ""; timezone.value = value?.timezone || null;
+}, { immediate: true });
+const timezoneRequest = new AbortController();
+onMounted(async () => {
+  try { knownTimezones.value = (await getTimezones(timezoneRequest.signal)).timezones; } catch { knownTimezones.value = []; }
+});
+onUnmounted(() => timezoneRequest.abort());
 
 function stage(): void {
   error.value = "";
@@ -28,6 +41,10 @@ function stage(): void {
       if (conflicts.length) throw new Error(`Remove IPv6 settings before disabling IPv6: ${conflicts.join(", ")}.`);
     }
     candidate.firewall.allow_all_icmp = allowICMP.value;
+    const system = { hostname: hostname.value.trim(), timezone: timezone.value ?? "" };
+    if (candidate.system || system.hostname || system.timezone) candidate.system = system;
+    const issues = validateConfig(candidate).filter(item => item.path.startsWith("system."));
+    if (issues.length) throw new Error(issues.map(item => item.message).join(". "));
     store.stage(candidate);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Unable to save general settings";
@@ -58,6 +75,62 @@ function stage(): void {
     <form @submit.prevent="stage">
       <div class="settings-head">
         Setting
+      </div>
+      <v-divider />
+      <div class="setting-row">
+        <label
+          for="general-hostname"
+          class="setting-name"
+        >
+          Host name
+        </label>
+        <div class="setting-control">
+          <v-text-field
+            id="general-hostname"
+            v-model="hostname"
+            aria-describedby="general-hostname-description"
+            placeholder="Unmanaged"
+            :disabled="blocked"
+            density="compact"
+            hide-details
+            class="setting-field"
+          />
+          <p
+            id="general-hostname-description"
+            class="setting-desc"
+          >
+            Lowercase letters, digits and hyphens. Leave empty to stop managing the host name; the current name is kept.
+          </p>
+        </div>
+      </div>
+      <v-divider />
+      <div class="setting-row">
+        <label
+          for="general-timezone"
+          class="setting-name"
+        >
+          Time zone
+        </label>
+        <div class="setting-control">
+          <v-autocomplete
+            id="general-timezone"
+            v-model="timezone"
+            aria-describedby="general-timezone-description"
+            :items="timezoneItems"
+            placeholder="Unmanaged"
+            :disabled="blocked || !timezoneItems.length"
+            density="compact"
+            hide-details
+            clearable
+            class="setting-field"
+          />
+          <p
+            id="general-timezone-description"
+            class="setting-desc"
+          >
+            {{ timezoneItems.length ? 'Clear to stop managing the time zone; the current zone is kept. Running processes may keep the previous zone.' : 'The time zone list is unavailable.' }}
+          </p>
+        </div>
       </div>
       <v-divider />
       <div class="setting-row">
@@ -160,6 +233,11 @@ function stage(): void {
   align-items: flex-start;
   gap: 10px;
   min-width: 0;
+}
+
+.setting-field {
+  width: 100%;
+  max-width: 360px;
 }
 
 .setting-desc {

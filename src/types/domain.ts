@@ -159,6 +159,9 @@ export const blackholeSchema = z.object({
   name: z.string().default(""), action: z.enum(["blackhole", "unreachable", "prohibit"]).default("blackhole"),
 }).strict();
 export type BlackholeConfig = z.infer<typeof blackholeSchema>;
+export const systemSchema = z.object({ hostname: z.string().default(""), timezone: z.string().default("") }).strict();
+export type SystemConfig = z.infer<typeof systemSchema>;
+export const timezonesSchema = z.object({ timezones: z.array(z.string()) }).strict();
 export const dynamicDnsSecretReferenceSchema = z.object({ secret_ref: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
 export const dynamicDnsStatusSchema = z.object({
   entries: list(z.object({
@@ -184,6 +187,7 @@ export const configSchema = z.object({
   mqtt: mqttSchema.optional(),
   dynamic_dns: list(dynamicDnsSchema).optional(),
   blackhole: blackholeSchema.optional(),
+  system: systemSchema.optional(),
   dhcp_clients: z.record(dhcpClientSchema).optional(), dns: z.record(dnsConfigSchema).optional(),
   // The backend added kernel settings after FRONTEND_SPEC; preserve, but do not edit them.
   kernel: kernelSchema.optional(),
@@ -256,6 +260,11 @@ export const applianceStatusSchema = z.object({
   name: z.string(), scope: z.enum(["host", "managed"]), state: z.string(),
   pid: integer.optional(), started_at: timestamp.nullable().optional(),
   database_directory: optionalText, error: optionalText,
+  sample_status: optionalText, server: z.string().nullable().optional(),
+  offset_ms: z.number().finite().nullable().optional(), delay_ms: z.number().finite().nullable().optional(),
+  requested_slew_ms: z.number().finite().nullable().optional(),
+  uncorrected_offset_ms: z.number().finite().nullable().optional(),
+  discipline: optionalText, collected_at: timestamp.nullable().optional(),
 });
 export const applianceStatusPageSchema = z.object({ instances: list(applianceStatusSchema), error: optionalText });
 export const runtimeSchema = z.preprocess(value => {

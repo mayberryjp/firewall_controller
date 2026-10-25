@@ -20,11 +20,7 @@ const tunnels = computed(() => (store.state.data?.active_transaction?.candidate 
           v-for="tunnel in tunnels"
           :key="tunnel.name"
         >
-          <td>
-            <router-link :to="`/interfaces/${encodeURIComponent(tunnel.name)}`">
-              {{ tunnel.name }}
-            </router-link>
-          </td>
+          <td>{{ tunnel.name }}</td>
           <td>
             <OverviewInterfaceStatus
               :sample="store.statistics.data?.interfaces.find(item => item.name === tunnel.name)"

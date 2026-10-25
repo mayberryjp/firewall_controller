@@ -34,6 +34,7 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/services/netflow", name: "netflow", component: () => import("@/views/SoftflowdView.vue") },
     { path: "/services/netflow/:name", name: "netflow-detail", component: () => import("@/views/SoftflowdDetailView.vue"), props: true, meta: { navigationPage: "netflow" } },
     { path: "/services/dhcp-relay", name: "dhcp-relay", component: () => import("@/views/DHCPRelayView.vue") },
+    { path: "/services/remote-dns", name: "remote-dns", component: () => import("@/views/RemoteDnsView.vue") },
     { path: "/services/ntp", name: "ntp", component: () => import("@/views/NTPView.vue") },
     { path: "/services/syslog", name: "syslog", component: () => import("@/views/SyslogView.vue") },
     { path: "/services/vnstat", name: "vnstat", component: () => import("@/views/VnStatView.vue") },

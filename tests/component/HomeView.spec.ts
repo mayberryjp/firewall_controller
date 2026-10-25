@@ -390,6 +390,8 @@ describe("compact overview dashboard", () => {
     store.statistics.data!.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UP", status: "available", counters: null });
     const widget = dashboard().get('[aria-label="WireGuard"]');
     expect(widget.text()).toContain("wg0"); expect(widget.text()).toContain("Up");
+    expect(widget.get("tbody td").text()).toBe("wg0");
+    expect(widget.find("tbody a").exists()).toBe(false);
     expect(widget.text()).toContain("Configured peers"); expect(widget.text()).toContain("51820");
     expect(widget.text()).not.toMatch(/Active peers|Connected/);
   });

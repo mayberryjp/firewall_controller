@@ -36,9 +36,6 @@ function stage(): void {
 
 <template>
   <section aria-label="Blackhole interfaces">
-    <h1 class="text-h6 mb-4">
-      Blackhole interfaces
-    </h1>
     <v-alert
       v-if="store.readOnlyNotice"
       type="warning"

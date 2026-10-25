@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { configSchema, mqttSchema, blackholeSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService } from "@/types/domain";
+import { configSchema, mqttSchema, blackholeSchema, systemSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 
 export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
@@ -19,6 +19,7 @@ export function normalize(config: Config): Config {
   if (result.mqtt && stableJson(result.mqtt) === stableJson(mqttSchema.parse({}))) delete result.mqtt;
   if (!result.dynamic_dns?.length) delete result.dynamic_dns;
   if (result.blackhole && stableJson(result.blackhole) === stableJson(blackholeSchema.parse({}))) delete result.blackhole;
+  if (result.system && stableJson(result.system) === stableJson(systemSchema.parse({}))) delete result.system;
   result.dynamic_dns?.sort((a, b) => a.name.localeCompare(b.name));
   for (const area of ["dhcp_clients", "dns"] as const) {
     if (!Object.keys(result[area] ?? {}).length) delete result[area];
@@ -126,7 +127,7 @@ export function differences(before: Config, after: Config): Difference[] {
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
   named("dynamic_dns", old.dynamic_dns ?? [], next.dynamic_dns ?? [], item => item.name);
-  for (const area of ["ntp", "syslog", "vnstat", "mqtt", "blackhole"] as const) {
+  for (const area of ["ntp", "syslog", "vnstat", "mqtt", "blackhole", "system"] as const) {
     if (stableJson(old[area]) !== stableJson(next[area])) result.push({
       area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
     });
@@ -190,7 +191,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     if (!doc.dhcp_clients) delete doc.dhcp_clients;
     if (!doc.dns) delete doc.dns;
     if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
-  } else if (["ntp", "syslog", "vnstat", "mqtt", "blackhole", "kernel"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
+  } else if (["ntp", "syslog", "vnstat", "mqtt", "blackhole", "system", "kernel"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
   else if (change.area === "ipv6") doc.ipv6_enabled = change.after === false ? false : undefined;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
@@ -314,6 +315,11 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), relayAddresses = new Set<string>();
   const validName = (name: string) => /^[a-zA-Z0-9_.-]{1,15}$/.test(name) && !["lo", ".", ".."].includes(name);
   const interfaces = new Map(config.interfaces.map((link) => [link.name, link]));
+  if (config.system) {
+    const { hostname, timezone } = config.system, page = "/settings/general";
+    if (hostname && !/^(?!-)[a-z0-9-]{1,63}(?<!-)$/.test(hostname)) issue("system.hostname", "Host name must be 1..63 lowercase letters, digits or hyphens, not starting or ending with a hyphen", page);
+    if (timezone && (timezone.length > 64 || !/^[A-Za-z0-9_+-]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(timezone))) issue("system.timezone", "Time zone must be an IANA name such as America/New_York", page);
+  }
   if (config.mqtt) {
     const settings = config.mqtt, page = "/settings/mqtt-streaming";
     if (utf8Size(settings.endpoint) > 1024) issue("mqtt.endpoint", "Broker URL must be at most 1024 UTF-8 bytes", page);
@@ -618,7 +624,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write",
-    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write",
+    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

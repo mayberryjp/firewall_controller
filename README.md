@@ -89,6 +89,7 @@ review the backend's networkd/resolved and persistent-state prerequisites.
 | `/firewall/input` | Host-input policy and ordered managed-ingress rules, separate from forwarding |
 | `/services/netflow`, `/services/netflow/:name` | NetFlow/IPFIX: staged flow-export instances (**Add export**, inline Status enable/disable toggle) and independent runtime; instance names are plain text, with editing through the row action |
 | `/services/dhcp-relay` | Sole editor for per-interface relay enablement/upstream servers, with stored/observed configuration and runtime |
+| `/services/remote-dns` | Inline Add DNS server, edit and delete actions stage the server list to `dns[interface].servers` for every current LAN/WAN interface; existing per-interface servers are combined into one list. Preserves domains, DHCP settings and unassigned interfaces. Not a DNS server for LAN clients. Review through SAVE and Commit & push; future interfaces require staging again. |
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
 | `/services/maintenance` | Explicit all-managed-services repair and signed self-upgrade with version/repository confirmation |

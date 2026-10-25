@@ -114,7 +114,7 @@ function moveResource(index: number, delta: number): void {
         :disabled="editingBlocked"
         @click="addResource"
       >
-        Add {{ loopbacks ? "loopback" : vlan ? "VLAN" : wireguard ? "tunnel" : section === "softflowd" ? "export" : section === "gateway_monitors" ? "monitor" : section === "routes" ? "Static Route" : "rule" }}
+        Add {{ loopbacks ? "loopback" : vlan ? "VLAN" : wireguard ? "tunnel" : section === "softflowd" ? "NetFlow/IPFIX export" : section === "gateway_monitors" ? "monitor" : section === "routes" ? "Static Route" : "rule" }}
       </v-btn>
     </div>
     <ResourceFilters

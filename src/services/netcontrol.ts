@@ -3,7 +3,7 @@ import { z } from "zod";
 import { numericAddress } from "@/services/configuration";
 import { hostHealthSchema } from "@/services/hostHealth";
 import {
-  mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema,
+  mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema, timezonesSchema,
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
   revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
@@ -17,6 +17,7 @@ const submittedTransactionSchema = transactionSchema.extend({ ignored_fields: z.
 export const getHostHealth = (signal?: AbortSignal) => request("GET", "/statistics/host", hostHealthSchema, undefined, signal);
 export const getMqttStatus = (signal?: AbortSignal) => request("GET", "/services/mqtt/status", mqttStatusSchema, undefined, signal);
 export const getDynamicDnsStatus = (signal?: AbortSignal) => request("GET", "/services/dynamic-dns/status", dynamicDnsStatusSchema, undefined, signal);
+export const getTimezones = (signal?: AbortSignal) => request("GET", "/system/timezones", timezonesSchema, undefined, signal);
 export async function uploadDynamicDnsSecret(secret: string, signal?: AbortSignal) {
   if (!secret || secret.includes("\0") || new TextEncoder().encode(secret).length > 4096) throw new Error("Client secret must be 1..4096 UTF-8 bytes without NUL");
   try { return await request("POST", "/services/dynamic-dns/secrets", dynamicDnsSecretReferenceSchema, { client_secret: secret }, signal); }

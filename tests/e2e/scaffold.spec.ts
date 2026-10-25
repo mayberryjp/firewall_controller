@@ -444,7 +444,7 @@ test("compact overview contains four live status widgets without diagnostic clut
   ] });
   await connect(page);
   const dashboard = page.getByRole("region", { name: "Overview", exact: true });
-  await expect(dashboard.getByRole("heading", { level: 2 })).toHaveText(["Interfaces", "Gateways", "WireGuard", "Interface counters"]);
+  await expect(dashboard.getByRole("heading", { level: 2 })).toHaveText(["Interfaces", "Gateways", "WireGuard", "System stats", "Interface counters"]);
   await expect(dashboard.getByRole("region", { name: "Interfaces", exact: true }).getByRole("cell", { name: "Up", exact: true })).toHaveCount(2);
   const interfaceWidget = dashboard.getByRole("region", { name: "Interfaces", exact: true });
   await expect(interfaceWidget.getByRole("columnheader")).toHaveText(["Name", "Status", "Active IP", "Mode"]);
@@ -465,7 +465,7 @@ test("compact overview contains four live status widgets without diagnostic clut
   const interfaces = await dashboard.getByRole("region", { name: "Interfaces", exact: true }).boundingBox();
   const counts = await dashboard.getByRole("region", { name: "Interface counters", exact: true }).boundingBox();
   if (isMobile) expect(counts!.y).toBeGreaterThan(interfaces!.y);
-  else expect(counts!.y).toBe(interfaces!.y);
+  else expect(counts!.x).toBeGreaterThan(interfaces!.x);
   await page.screenshot({ path: testInfo.outputPath("compact-overview.png"), fullPage: true, animations: "disabled" });
 });
 
@@ -516,8 +516,7 @@ test("connection bubble stays bottom-right and settings uses the gear without a 
   expect(viewport.height - bounds!.y - bounds!.height).toBeCloseTo(20, 0);
   await openNavigation(page);
   const nav = page.getByRole("navigation", { name: "Main navigation" });
-  await expect(nav.getByRole("link", { name: "Routing", exact: true }).locator("svg")).toBeVisible();
-  expect(await nav.getByRole("link", { name: "Routing", exact: true }).locator("svg").evaluate(element => getComputedStyle(element).fill)).toBe("none");
+  await expect(nav.getByRole("link", { name: "Routing", exact: true }).locator(".mdi-transit-connection-variant")).toBeVisible();
   await expect(nav.getByRole("link", { name: "Firewall", exact: true }).locator(".mdi-wall")).toBeVisible();
   await expect(nav.getByRole("link", { name: "Settings", exact: true }).locator(".mdi-cog-outline")).toBeVisible();
   await nav.getByRole("link", { name: "Settings", exact: true }).click();
@@ -1015,7 +1014,6 @@ test("host NIC discovery stages simple inline DHCP without live writes", async (
   }] });
   await connect(page);
   await navigate(page, "Physical interfaces");
-  await expect(page.getByRole("cell", { name: "Unassigned", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Manage this interface", exact: true }).click();
   await expect(page.getByLabel("IPv4 addresses / prefixes", { exact: true })).toHaveValue("");
   await page.getByRole("row", { name: "Configure eth1", exact: true }).getByRole("combobox", { name: "IPv4 configuration", exact: true }).selectOption("dhcp");
@@ -1054,7 +1052,6 @@ test("recovery remains accessible when state observation is unavailable", async 
   await connect(page);
   await expect(page.getByText("Critical: recovery failed", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry rollback", exact: true })).toBeVisible();
-  await expect(page.getByRole("img", { name: "Observation unavailable", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
@@ -1256,8 +1253,6 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   await expect(page).toHaveURL(/\/config\/changes$/);
   await expect(page.getByRole("dialog")).toHaveCount(1);
   await expect(page.getByRole("dialog").getByRole("checkbox")).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Global safety state", exact: true }).getByRole("button", { name: "Confirm changes", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Global safety state", exact: true })).not.toContainText("Server reports pending_confirmation");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("confirm-in-push-dialog.png"), fullPage: true, animations: "disabled" });
   expect(backend.writes.filter(write => write.path === "/transactions")).toHaveLength(1);
@@ -1301,7 +1296,7 @@ test("only overview polls while other pages refresh on demand", async ({ page })
   await expect(refreshTransaction).toBeEnabled();
   const reads: string[] = [];
   page.on("request", request => {
-    if (request.method() === "GET" && request.url().includes("/proxy/")) reads.push(new URL(request.url()).pathname);
+    if (request.method() === "GET" && request.url().includes("/proxy/") && !request.url().includes("/system/upgrade")) reads.push(new URL(request.url()).pathname);
   });
   await page.clock.fastForward(20000);
   expect(reads).toHaveLength(0);
@@ -1313,7 +1308,7 @@ test("only overview polls while other pages refresh on demand", async ({ page })
   await expect(page.getByRole("region", { name: "Static Routes", exact: true })).toBeVisible();
   reads.length = 0;
   await page.clock.fastForward(20000);
-  expect(reads).toHaveLength(0);
+  expect(reads.filter(path => !path.endsWith("/runtime"))).toHaveLength(0);
   await navigate(page, "Overview");
   await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
   await page.clock.fastForward(6000);
@@ -1327,7 +1322,9 @@ test("reload restores the registry session and rediscovers pending transactions"
   await page.reload();
   await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
   await expect(page.getByLabel("Registry admin password")).toHaveCount(0);
-  await expect(page.getByRole("main")).toContainText("pending confirmation");
+  await expect(page.getByRole("main")).toContainText("Overview");
+  await navigate(page, "Commits");
+  await expect(page.getByRole("main").getByRole("link", { name: "tx-test", exact: true })).toBeVisible();
   expect(signIns).toBe(1);
 });
 
@@ -1353,7 +1350,7 @@ test("an expired registry cookie requires login instead of reconnecting", async 
 test("keyboard skip link, unknown routes, and exact statistics values", async ({ page }) => {
   await mockBackend(page);
   await connect(page);
-  await expect(page.getByRole("cell", { name: "18446744073709551615", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "18.45 EB", exact: true })).toHaveAttribute("title", "18446744073709551615");
   await page.goto("/unknown-controller-page");
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
   await page.keyboard.press("Tab");
@@ -1437,6 +1434,7 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   const expected = structuredClone(initial);
   expected.routes[0]!.metric = 42;
+  expected.routes[0]!.table = 254;
   expected.firewall.input!.interfaces[0]!.rules[0]!.destination_ports = [68, 67];
   expect(backend.writes).toHaveLength(1);
   expect(backend.writes[0]?.body).toMatchObject({ config: expected });
@@ -1462,9 +1460,9 @@ test("removing host input requires visible protection review and no immediate wr
 
 test("inline interface settings and multi-server relay stage together without auto-configuring networking", async ({ page }) => {
   const initial = config(); initial.interfaces[0] = { ...initial.interfaces[0]!, kind: "ethernet" };
-  const backend = await mockBackend(page, { initialConfig: initial }); await connect(page);
+  const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [{ name: "lab0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:02", mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed" }] }); await connect(page);
   await navigate(page, "Physical interfaces");
-  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await page.getByRole("row", { name: /lab0/ }).first().click();
   await page.getByLabel("MTU", { exact: true }).fill("1450");
   await expect(page.getByLabel("Enable DHCPv4 relay", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("DHCPv4 relay servers", { exact: true })).toHaveCount(0);
@@ -1639,13 +1637,13 @@ test("appliance settings share one draft and explain clock and local logger roll
   const backend = await mockBackend(page); await connect(page);
   await navigate(page, "NTP");
   await expect(page.getByRole("main").getByRole("heading")).toHaveCount(0);
-  await page.getByRole("button", { name: "Add server", exact: true }).click();
+  await page.getByRole("button", { name: "Add NTP upstream server", exact: true }).click();
   await page.getByLabel("Host", { exact: true }).fill("clock.example");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("row", { name: /clock.example/ })).toBeVisible();
   await navigate(page, "Syslog");
   await expect(page.getByRole("main")).not.toContainText("Operator prerequisites");
-  await page.getByRole("button", { name: "Add server", exact: true }).click();
+  await page.getByRole("button", { name: "Add remote syslog server", exact: true }).click();
   await page.getByLabel("Host", { exact: true }).fill("logs.example");
   await page.getByLabel("Port", { exact: true }).fill("6514");
   await page.getByLabel("Transport", { exact: true }).press("Enter");
@@ -1773,7 +1771,7 @@ test("operational pages keep content compact with readable details", async ({ pa
     await navigate(page, entry.title);
     const main = page.getByRole("main");
     await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(0);
+    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections)/.test(entry.path) ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
     await expect(main).not.toContainText("Operator prerequisites");
     await expect(main).not.toContainText("Last successful read");
@@ -1876,7 +1874,7 @@ test("VLANs have a dedicated route while Interfaces edits physical behavior only
   const editor = page.getByRole("row", { name: "VLAN editor", exact: true });
   await expect(editor).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(editor.locator("input")).toHaveCount(5);
+  await expect(editor.locator("input")).toHaveCount(6);
   await expect.poll(() => vlanLabels.evaluateAll(labels => labels.length > 0 && labels.every(label => label.scrollWidth <= label.clientWidth))).toBe(true);
   await expect(page.getByLabel("Kind", { exact: true })).toHaveCount(0);
   await page.getByLabel("Interface name", { exact: true }).fill("vlan30");

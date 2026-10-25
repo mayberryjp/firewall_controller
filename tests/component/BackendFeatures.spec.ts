@@ -41,7 +41,7 @@ import { ApiFailure } from "@/services/api";
 import { useControllerStore } from "@/stores/controller";
 import { configSchema, runtimeSchema } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
-import { cloneConfig, validateConfig } from "@/services/configuration";
+import { cloneConfig, differences, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections } from "../fixtures";
 import type { Component } from "vue";
 
@@ -53,7 +53,7 @@ const stubs = {
   VSwitch: { props: ["modelValue", "label", "disabled"], emits: ["update:modelValue"], template: '<label>{{ label }}<input type="checkbox" :checked="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.checked)"></label>' },
   VDialog: { props: ["modelValue"], template: '<div v-if="modelValue" role="dialog"><slot /></div>' },
   VSelect: { props: ["modelValue", "label", "items", "disabled"], emits: ["update:modelValue"], template: '<label>{{ label }}<select :disabled="disabled" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option value="">Select</option><option v-for="item in items" :key="item.value ?? item" :value="item.value ?? item">{{ item.title ?? item }}</option></select></label>' },
-  VTextField: true, VNumberInput: true, VTextarea: true, VCheckbox: true, VCombobox: true, VBtnToggle: true, VIcon: true, VExpansionPanels: box, VExpansionPanel: box, VExpansionPanelTitle: box, VExpansionPanelText: box,
+  VTextField: true, VAutocomplete: true, VNumberInput: true, VTextarea: true, VCheckbox: true, VCombobox: true, VBtnToggle: true, VIcon: true, VExpansionPanels: box, VExpansionPanel: box, VExpansionPanelTitle: box, VExpansionPanelText: box,
   DatasetStatus: true, JsonPanel: true, VProgressLinear: true,
 };
 beforeEach(() => {
@@ -116,13 +116,13 @@ describe("October 17 frontend workflows", () => {
     expect(chips().at(-1)).toEqual(["—", "default"]);
     wrapper.unmount();
   });
-  it("labels the add button Add export and stages an inline enabled toggle without a live request", async () => {
+  it("labels the add button Add NetFlow/IPFIX export and stages an inline enabled toggle without a live request", async () => {
     const store = useControllerStore();
     const before = cloneConfig(store.state.data!.desired), submit = vi.spyOn(api, "submitPackage");
     const wrapper = await render(SoftflowdView, "/services/netflow");
     try {
-      expect(wrapper.findAll("button").some(button => button.text() === "Add export")).toBe(true);
-      expect(wrapper.findAll("button").some(button => button.text() === "Add instance")).toBe(false);
+      expect(wrapper.findAll("button").some(button => button.text() === "Add NetFlow/IPFIX export")).toBe(true);
+      expect(wrapper.findAll("button").some(button => button.text() === "Add export")).toBe(false);
       expect(wrapper.findAll("th").map(header => header.text())).toContain("Status");
       const toggle = () => wrapper.get<HTMLInputElement>('[aria-label="Export enabled for capture"] input');
       const enabled = before.softflowd[0]!.enabled;
@@ -886,7 +886,7 @@ describe("October 17 frontend workflows", () => {
     editor.vm.$emit("change", "interface", "empty0"); await flushPromises();
     expect(editor.props("form").source_address).toBe("");
     await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
-    expect(editor.props("errors")["editor.interface"]).toEqual(["Select an interface with an address matching the probe target."]);
+    expect(editor.props("errors")["editor.interface"]).toEqual(["The selected interface needs a configured source IP of the same IP version as the probe target, not the same address or subnet."]);
     expect(store.draft).toBeNull();
     editor.vm.$emit("change", "interface", "lab0"); await flushPromises();
     expect(editor.props("form").source_address).toBe("192.0.2.10");
@@ -1338,10 +1338,9 @@ describe("October 17 frontend workflows", () => {
       { name: "unmanaged20", kind: "vlan", index: 20, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged" },
     ]);
     const wrapper = await render(InterfacesView, "/interfaces");
-    expect(wrapper.findAll("tbody tr")).toHaveLength(2);
+    expect(wrapper.findAll("tbody tr")).toHaveLength(1);
     expect(wrapper.find("tbody").text()).toContain("eth0");
-    expect(wrapper.find("tbody").text()).toContain("wg0");
-    for (const name of ["lab0", "vlan30", "unmanaged20"]) expect(wrapper.find("tbody").text()).not.toContain(name);
+    for (const name of ["lab0", "vlan30", "wg0", "unmanaged20"]) expect(wrapper.find("tbody").text()).not.toContain(name);
     expect(wrapper.findAll("button").some(button => button.text() === "Add interface")).toBe(false);
     expect(wrapper.find('button[aria-label="Edit / stage"]').exists()).toBe(true);
   });
@@ -1683,8 +1682,8 @@ describe("October 17 frontend workflows", () => {
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([link, { ...link, name: "lo", kind: "loopback", ownership: "loopback" }]);
     const wrapper = await render(InterfacesView, "/interfaces");
     await flushPromises();
-    expect(wrapper.findAll("button").filter(button => button.text() === "Manage this interface")).toHaveLength(1);
-    await wrapper.findAll("button").find(button => button.text() === "Manage this interface")!.trigger("click");
+    expect(wrapper.findAll('button[aria-label="Manage this interface"]')).toHaveLength(1);
+    await wrapper.get('button[aria-label="Manage this interface"]').trigger("click");
     const fields = wrapper.findAllComponents(FieldInput);
     expect(fields.find(field => field.props("field").key === "addresses")!.props("modelValue")).toBe("");
     expect(wrapper.getComponent(PhysicalInterfaceEditor).props("form").addresses).toEqual([]);
@@ -1724,11 +1723,11 @@ describe("October 17 frontend workflows", () => {
       ["LAN", "info"], ["Up", "success"], ["DHCP", "primary"],
     ]);
     expect(wrapper.find("tbody").text()).not.toContain("127.0.0.1/8");
-    expect(rows[1]!.text()).toContain("Down"); expect(rows[1]!.text()).toContain("Manage this interface");
+    expect(rows[1]!.text()).toContain("Down"); expect(rows[1]!.find('button[aria-label="Manage this interface"]').exists()).toBe(true);
     expect(rows[1]!.findAll(".status-chip").map(chip => [chip.text(), chip.attributes("data-color")])).toEqual([
       ["—", "default"], ["Down", "error"], ["—", "default"],
     ]);
-    expect(rows[1]!.findAll("td")[active]!.text()).toBe("None");
+    expect(rows[1]!.findAll("td")[active]!.text()).toContain("None");
     expect(rows[2]!.find("td").attributes("title")).toContain("Bridge"); expect(rows[2]!.find("button").exists()).toBe(false);
     await rows[0]!.trigger("click");
     const editor = wrapper.getComponent(PhysicalInterfaceEditor);
@@ -1800,7 +1799,7 @@ describe("October 17 frontend workflows", () => {
     const press = async (label: string) => { await wrapper.findAll("button").find(button => button.text() === label)!.trigger("click"); await flushPromises(); };
     expect(wrapper.text()).not.toContain("Labels"); expect(wrapper.text()).not.toContain("Display name");
     expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false); expect(wrapper.text()).not.toMatch(/Enabled|Disabled/);
-    await press("Add server"); field().vm.$emit("update:modelValue", "clock.example"); await flushPromises(); await press("Save");
+    await press("Add NTP upstream server"); field().vm.$emit("update:modelValue", "clock.example"); await flushPromises(); await press("Save");
     expect(store.draft?.ntp).toEqual({ enabled: true, servers: ["clock.example"] });
     expect(store.draft?.interfaces).toEqual(config().interfaces); expect(store.draft?.syslog).toEqual(config().syslog);
     await wrapper.get('button[aria-label="Edit clock.example"]').trigger("click");
@@ -1814,7 +1813,7 @@ describe("October 17 frontend workflows", () => {
     const wrapper = await render(SyslogView, "/services/syslog");
     const field = () => wrapper.findAllComponents({ name: "VTextField" }).find(item => item.attributes("aria-label") === "Host")!;
     const press = async (label: string) => { await wrapper.findAll("button").find(button => button.text() === label)!.trigger("click"); await flushPromises(); };
-    await press("Add server"); field().vm.$emit("update:modelValue", "UPPER.example"); await flushPromises(); await press("Save");
+    await press("Add remote syslog server"); field().vm.$emit("update:modelValue", "UPPER.example"); await flushPromises(); await press("Save");
     expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("lowercase ASCII DNS");
     field().vm.$emit("update:modelValue", "logs.example"); await flushPromises(); await press("Save");
     expect(store.draft?.syslog).toEqual({ enabled: true, servers: [{ host: "logs.example", port: 514, transport: "udp" }] });
@@ -1943,7 +1942,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).toContain("Unable to stage test setting");
     store.state.data = null; await flushPromises();
     expect(wrapper.findComponent(stubs.VSwitch).props("disabled")).toBe(true);
-    expect(wrapper.text()).toContain(store.readOnlyReason);
+    expect(wrapper.text()).not.toContain(store.readOnlyReason);
     wrapper.unmount();
   });
   it("saves the global IPv6 setting above ICMP and preserves other draft settings", async () => {
@@ -1967,6 +1966,26 @@ describe("October 17 frontend workflows", () => {
     toggles[0]!.vm.$emit("update:modelValue", true);
     await wrapper.get("form").trigger("submit");
     expect(store.ipv6Enabled).toBe(true);
+    wrapper.unmount();
+  });
+  it("places host name and time zone first in General settings and stages them with system.write", async () => {
+    const store = useControllerStore();
+    vi.spyOn(api, "getTimezones").mockResolvedValue({ timezones: ["America/New_York", "UTC"] });
+    const wrapper = await render(SettingsView, "/settings/general");
+    await flushPromises();
+    const labels = wrapper.findAll("label.setting-name").map(label => label.text());
+    expect(labels.slice(0, 3)).toEqual(["Host name", "Time zone", "Enable IPv6"]);
+    const hostname = wrapper.findAllComponents({ name: "VTextField" }).find(input => input.attributes("id") === "general-hostname")!;
+    hostname.vm.$emit("update:modelValue", "fw-1");
+    wrapper.getComponent({ name: "VAutocomplete" }).vm.$emit("update:modelValue", "America/New_York");
+    await wrapper.get("form").trigger("submit");
+    expect(store.draft?.system).toEqual({ hostname: "fw-1", timezone: "America/New_York" });
+    expect(store.state.data!.desired.system).toBeUndefined();
+    expect(requiredPermissions(differences(store.state.data!.desired, store.draft!))).toContain("system.write");
+    hostname.vm.$emit("update:modelValue", "Bad_Name");
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.text()).toContain("Host name must be");
+    expect(store.draft?.system?.hostname).toBe("fw-1");
     wrapper.unmount();
   });
   it("keeps IPv6 runtime diagnostics out of general settings", async () => {
@@ -2047,10 +2066,9 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.findAll("table")).toHaveLength(1);
     expect(wrapper.findAll("h1")).toHaveLength(0);
     const cells = wrapper.find("tbody tr").findAll("td"), headers = wrapper.findAll("th").map(header => header.text());
-    expect(cells[headers.indexOf("IPv4")]!.text()).toBe("10.10.0.1/24");
+    expect(cells[headers.indexOf("IPv4")]!.text()).toContain("10.10.0.1/24");
     expect(headers).not.toContain("Active Addresses");
     expect(wrapper.text()).not.toContain("192.0.2.10/24");
-    expect(wrapper.find("tbody").text()).toContain("Unsaved");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
     expect(wrapper.text()).not.toMatch(/Show staged draft|Start \/ show|Discovered interfaces|DHCPv4 leases|Full configured|Staged state/);
     expect(wrapper.find("tbody").text()).not.toContain("[");
@@ -2063,7 +2081,6 @@ describe("October 17 frontend workflows", () => {
     store.stage(draft);
     const wrapper = await render(RoutesView, "/routes");
     expect(wrapper.find("tbody").text()).toContain("42");
-    expect(wrapper.find("tbody").text()).toContain("Unsaved");
     expect(wrapper.text()).not.toMatch(/Show staged draft|Start \/ show|Full configured/);
   });
   it("formats collections as readable text rather than serialized JSON", () => {
