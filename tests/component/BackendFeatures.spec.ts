@@ -1589,7 +1589,7 @@ describe("October 17 frontend workflows", () => {
     await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(store.draft?.interfaces.find(link => link.kind === "wireguard")).toMatchObject({ mtu: 1450, wireguard: { key_ref: "tunnel-key", listen_port: 51820, peers: [] } });
   });
-  it("adds a peer to a tunnel interface from the WireGuard page without touching other tunnel settings", async () => {
+  it("adds, edits and deletes a peer with synchronized routes without touching other tunnel settings", async () => {
     const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
     const tunnel = { name: "wg0", kind: "wireguard" as const, role: "wan" as const, mtu: 1420, up: true, addresses: ["10.0.0.1/24"], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "tunnel-key", listen_port: 51820, peers: [] } };
     store.state.data!.desired.interfaces.push(tunnel);
@@ -1605,8 +1605,34 @@ describe("October 17 frontend workflows", () => {
     await flushPromises(); await wrapper.get("form").trigger("submit");
     const staged = store.draft?.interfaces.find(link => link.name === "wg0");
     expect(staged).toEqual({ ...tunnel, wireguard: { ...tunnel.wireguard, peers: [{ public_key: key, allowed_ips: ["10.20.0.0/24", "10.30.0.0/24"], persistent_keepalive_seconds: 0, enabled: true }] } });
+    expect(store.draft?.routes.slice(1)).toEqual(["10.20.0.0/24", "10.30.0.0/24"].map(destination => expect.objectContaining({
+      destination, interface: "wg0", table: 254, metric: 1, enabled: true,
+    })));
     expect(store.draft?.dns).toEqual(store.state.data!.desired.dns);
     expect(store.editorDirty).toBe(false); expect(submit).not.toHaveBeenCalled();
+    await wrapper.get('button[aria-label^="Edit peer"]').trigger("click");
+    field("Allowed networks (comma separated)").vm.$emit("update:modelValue", "10.40.0.0/24");
+    await flushPromises(); await wrapper.get("form").trigger("submit");
+    expect(store.draft?.routes.slice(1)).toEqual([expect.objectContaining({ destination: "10.40.0.0/24", interface: "wg0" })]);
+    await wrapper.get('button[aria-label^="Delete peer"]').trigger("click");
+    expect(store.draft?.routes).toEqual(store.state.data!.desired.routes);
+    expect(submit).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("deletes a tunnel with only generated routes and removes those routes in the same draft", async () => {
+    const store = useControllerStore(), candidate = cloneConfig(store.state.data!.desired);
+    candidate.interfaces.push({
+      ...candidate.interfaces[0]!, name: "wg0", kind: "wireguard",
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [
+        { public_key: btoa("\x01".repeat(32)), allowed_ips: ["10.20.0.0/24"], persistent_keepalive_seconds: 0 },
+      ] },
+    });
+    store.stage(candidate);
+    expect(store.draft?.routes).toHaveLength(2);
+    const wrapper = await render(TunnelsView, "/tunnels");
+    await wrapper.get('button[aria-label="Delete wg0"]').trigger("click");
+    expect(store.draft?.interfaces.some(link => link.name === "wg0")).toBe(false);
+    expect(store.draft?.routes).toEqual(store.state.data!.desired.routes);
     wrapper.unmount();
   });
   it("creates a tunnel interface named tun_wg0 with no peers and keeps peers when editing it", async () => {
@@ -1637,8 +1663,10 @@ describe("October 17 frontend workflows", () => {
     expect(rows()[1]!.classes()).toContain("peer-disabled"); expect(rows()[1]!.findAll(".status-chip")).toHaveLength(0);
     await rows()[0]!.get('input[type="checkbox"]').setValue(false);
     expect(store.draft?.interfaces.find(link => link.name === "wg0")).toMatchObject({ wireguard: { peers: [{ public_key: first, enabled: false }, { public_key: spare, enabled: false }] } });
+    expect(store.draft?.routes[1]).toMatchObject({ destination: "10.20.0.0/24", interface: "wg0", enabled: false });
     await rows()[1]!.get('input[type="checkbox"]').setValue(true);
     expect(store.draft?.interfaces.find(link => link.name === "wg0")).toMatchObject({ wireguard: { peers: [{ enabled: false }, { enabled: true }] } });
+    expect(store.draft?.routes[1]).toMatchObject({ destination: "10.20.0.0/24", interface: "wg0", enabled: true });
     await rows()[0]!.get('input[type="checkbox"]').setValue(true); await flushPromises();
     expect(wrapper.text()).toContain("Duplicate allowed network across enabled peers");
     expect(store.draft?.interfaces.find(link => link.name === "wg0")).toMatchObject({ wireguard: { peers: [{ enabled: false }, { enabled: true }] } });

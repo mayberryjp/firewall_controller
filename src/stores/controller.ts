@@ -7,7 +7,7 @@ import {
   type Config, type StateView, type RuntimeState, type Transaction,
   type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
 } from "@/types/domain";
-import { cloneConfig, differences, equalConfig, validateConfig } from "@/services/configuration";
+import { cloneConfig, differences, equalConfig, stableJson, syncWireGuardRoutes, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
 import type { HostHealth } from "@/services/hostHealth";
 import { mqttStatusSchema, dynamicDnsStatusSchema } from "@/types/domain";
@@ -245,13 +245,17 @@ export const useControllerStore = defineStore("controller", () => {
     upgradePending.value = false; upgradeUncertain.value = false; upgradeNeedsRefresh.value = false;
     acceptedUpgradeID.value = ""; requestedUpgradeVersion.value = ""; previousUpgradeID.value = ""; upgradeNotice.value = "";
   }
-  function stage(config: Config): void {
+  function stage(config: Config, syncWireGuard = false): void {
     if (readOnlyReason.value) throw new Error(readOnlyReason.value);
+    const candidate = cloneConfig(configSchema.parse(config));
+    const previous = draft.value ?? state.data?.desired;
+    if (syncWireGuard || stableJson(previous?.interfaces.filter(link => link.kind === "wireguard")) !==
+        stableJson(candidate.interfaces.filter(link => link.kind === "wireguard"))) syncWireGuardRoutes(candidate);
     if (!draft.value) {
       if (!state.data) throw new Error("Committed desired configuration unavailable");
       baseline.value = cloneConfig(state.data.desired); baseRevision.value = state.data.revision;
     }
-    draft.value = cloneConfig(configSchema.parse(config));
+    draft.value = candidate;
   }
   function discardDraft(): void {
     if (busy.value || submitted.value || uncertain.value) throw new Error("Cannot discard a frozen submitted snapshot");

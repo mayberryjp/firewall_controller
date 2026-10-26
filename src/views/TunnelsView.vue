@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
-import { cloneConfig, validateConfig } from "@/services/configuration";
+import { cloneConfig, isWireGuardRoute, validateConfig } from "@/services/configuration";
 import type { ManagedInterface } from "@/types/domain";
 
 type Tunnel = Extract<ManagedInterface, { kind: "wireguard" }>;
@@ -48,7 +48,7 @@ function stage(): void {
     const issues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.state.data?.desired).filter(issue =>
       issue.path === `interfaces.${index}` || issue.path.startsWith(`interfaces.${index}.`));
     if (issues.length) throw new Error(issues.map(issue => issue.message).join(". "));
-    store.stage(candidate); close();
+    store.stage(candidate, true); close();
   } catch (cause) { error.value = cause instanceof Error ? cause.message : "Unable to stage the tunnel"; }
 }
 function toggle(tunnel: Tunnel, up: boolean): void {
@@ -58,7 +58,7 @@ function toggle(tunnel: Tunnel, up: boolean): void {
     const candidate = cloneConfig(selected.value);
     const link = candidate.interfaces.find(item => item.name === tunnel.name);
     if (link) link.up = up;
-    store.stage(candidate);
+    store.stage(candidate, true);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : "Unable to stage the change"; }
 }
 function remove(tunnel: Tunnel): void {
@@ -66,7 +66,7 @@ function remove(tunnel: Tunnel): void {
   if (!selected.value) return;
   const config = selected.value;
   const users = [
-    ...config.routes.filter(route => route.interface === tunnel.name).map(route => `route ${route.destination}`),
+    ...config.routes.filter(route => route.interface === tunnel.name && !isWireGuardRoute(route)).map(route => `route ${route.destination}`),
     ...config.firewall.nat.masquerade.filter(rule => rule.out_interface === tunnel.name).map(() => "a masquerade rule"),
     ...(config.firewall.input?.interfaces.filter(item => item.interface === tunnel.name).map(() => "host input rules") ?? []),
     ...config.softflowd.filter(item => item.interface === tunnel.name).map(item => `NetFlow/IPFIX ${item.name}`),

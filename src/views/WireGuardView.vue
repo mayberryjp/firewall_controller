@@ -78,7 +78,7 @@ function change(edit: (tunnel: Tunnel) => number | void, tunnelName: string, who
   const issues = prefix ? validateConfig(candidate, store.runtime.data?.parent_interfaces, store.state.data?.desired)
     .filter(issue => issue.path === prefix || issue.path.startsWith(`${prefix}.`)) : [];
   if (issues.length) throw new Error(issues.map(issue => issue.message).join(". "));
-  store.stage(candidate);
+  store.stage(candidate, true);
 }
 function stage(): void {
   error.value = "";

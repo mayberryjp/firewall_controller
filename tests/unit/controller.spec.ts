@@ -29,6 +29,45 @@ async function connected() {
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("backfills peer routes atomically on WireGuard staging and preserves other draft edits", async () => {
+    const store = await connected(), candidate = cloneConfig(store.state.data!.desired);
+    const link = {
+      ...candidate.interfaces[0]!, name: "wg0", kind: "wireguard" as const,
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [
+        { public_key: btoa("\x01".repeat(32)), allowed_ips: ["10.20.0.0/24"], persistent_keepalive_seconds: 0 },
+      ] },
+    };
+    store.state.data!.desired.interfaces.push(link);
+    candidate.interfaces.push(cloneConfig(store.state.data!.desired).interfaces[1]!);
+    candidate.routes[0]!.metric = 42;
+    store.stage(candidate, true);
+    expect(store.draft?.routes).toEqual([
+      { ...candidate.routes[0], metric: 42 },
+      expect.objectContaining({ destination: "10.20.0.0/24", interface: "wg0", enabled: true, table: 254, metric: 1 }),
+    ]);
+    expect(store.state.data!.desired.routes).toHaveLength(1);
+    expect(candidate.routes).toHaveLength(1);
+    const changed = cloneConfig(store.draft!);
+    const tunnel = changed.interfaces.find(item => item.kind === "wireguard")!;
+    if (tunnel.kind !== "wireguard") throw new Error("Missing tunnel");
+    tunnel.wireguard.peers = [];
+    store.stage(changed);
+    expect(store.draft?.routes).toEqual([{ ...candidate.routes[0], metric: 42 }]);
+    expect(api.submitPackage).not.toHaveBeenCalled();
+  });
+  it("does not stage a partial peer change when an automatic route conflicts", async () => {
+    const store = await connected(), candidate = cloneConfig(store.state.data!.desired);
+    candidate.interfaces.push({
+      ...candidate.interfaces[0]!, name: "wg0", kind: "wireguard",
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [
+        { public_key: btoa("\x01".repeat(32)), allowed_ips: ["198.51.100.0/24"], persistent_keepalive_seconds: 0 },
+      ] },
+    });
+    candidate.routes[0]!.table = 254;
+    expect(() => store.stage(candidate)).toThrow("conflicts with a manual route");
+    expect(store.draft).toBeNull();
+    expect(store.baseline).toBeNull();
+  });
   it("does not let a status read started before acceptance replace the accepted upgrade job", async () => {
     const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
     const job = { id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };

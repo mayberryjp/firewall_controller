@@ -337,6 +337,24 @@ blocks. Missing, partial and simulated readings remain explicit. Verification
 uses synthetic data; physical hardware, broker TLS and Home Assistant ingestion
 require appliance acceptance.
 
+### WireGuard Allowed IP routes
+
+Saving a WireGuard peer or tunnel stages a static route for every Allowed IP
+network, including existing peers. Routes use the peer's parent tunnel interface,
+main table 254, metric 1, and no gateway. IPv4 and IPv6 networks are supported.
+Generated routes follow peer enable/disable changes (a shared network on the same
+tunnel remains enabled while any peer using it is enabled). Removing an Allowed IP,
+peer, or tunnel removes its generated routes. These changes remain in the shared
+draft for the normal SAVE/apply review; opening a page does not change configuration.
+
+Generated routes carry the metadata description
+`Automatically managed from WireGuard Allowed IPs.`; retain that description for
+automatic synchronization across sessions and exports. Other manual routes are
+preserved. A matching direct manual main-table route with the required enabled
+state is reused without modification. Conflicting manual routes at metric 1, or
+the same Allowed IP network on different tunnels, produce an inline error instead
+of overwriting a route. Peer edits that change routes also require `routes.write`.
+
 ### DHCP-dependent static routes
 
 An enabled IPv4 static route on a DHCP-managed interface is not installed by the

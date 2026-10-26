@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { configSchema, mqttSchema, blackholeSchema, systemSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService } from "@/types/domain";
+import { configSchema, mqttSchema, blackholeSchema, systemSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService, type Route } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 
 export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
@@ -81,6 +81,41 @@ export function normalize(config: Config): Config {
   return result;
 }
 export const equalConfig = (a: Config, b: Config): boolean => stableJson(normalize(a)) === stableJson(normalize(b));
+
+const wireGuardRouteDescription = "Automatically managed from WireGuard Allowed IPs.";
+export const isWireGuardRoute = (route: Route): boolean =>
+  route.metadata?.description === wireGuardRouteDescription;
+
+export function syncWireGuardRoutes(config: Config): void {
+  const required = new Map<string, { interface: string; enabled: boolean }>();
+  for (const tunnel of config.interfaces) {
+    if (tunnel.kind !== "wireguard") continue;
+    for (const peer of tunnel.wireguard.peers) for (const destination of peer.allowed_ips) {
+      prefix(destination, true);
+      const existing = required.get(destination);
+      if (existing && existing.interface !== tunnel.name) {
+        throw new Error(`Allowed network ${destination} belongs to both ${existing.interface} and ${tunnel.name}; automatic main-table routes require a single tunnel per network.`);
+      }
+      required.set(destination, { interface: tunnel.name, enabled: Boolean(existing?.enabled || peer.enabled !== false) });
+    }
+  }
+  const routes = config.routes.filter(route => !isWireGuardRoute(route));
+  for (const [destination, target] of required) {
+    const manual = routes.find(route => route.destination === destination && route.table === 254 &&
+      route.interface === target.interface && !route.gateway && route.enabled === target.enabled);
+    if (manual) continue;
+    if (routes.some(route => route.destination === destination && route.table === 254 && route.metric === 1)) {
+      throw new Error(`Automatic route for ${destination} on ${target.interface} conflicts with a manual route in table 254, metric 1. Update or remove that route in Static Routes first.`);
+    }
+    const previous = config.routes.find(route => isWireGuardRoute(route) && route.destination === destination && route.interface === target.interface);
+    routes.push({
+      ...previous, destination, interface: target.interface, enabled: target.enabled, table: 254, metric: 1,
+      metadata: { display_name: previous?.metadata?.display_name ?? "", description: wireGuardRouteDescription },
+    });
+    delete routes[routes.length - 1]!.gateway;
+  }
+  config.routes = routes;
+}
 
 export interface Difference {
   area: string; identity: string; kind: "added" | "deleted" | "modified" | "moved";
