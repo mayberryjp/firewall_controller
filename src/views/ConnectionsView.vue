@@ -629,13 +629,13 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
 .connection-row:hover { background: var(--bg-hover); }
 .connection-protocol-cell { min-width: 88px; }
 .connection-family { display: block; color: var(--text-muted); font-size: 11px; line-height: 16px; padding-left: 8px; }
-.endpoint { min-width: 140px; max-width: 280px; }
+.endpoint { min-width: 120px; max-width: 280px; }
 .endpoint-value { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; max-width: 100%; }
 .endpoint-value .mono { font-size: 13px; overflow-wrap: anywhere; white-space: normal; min-width: 0; max-width: 100%; }
 .connection-state { white-space: nowrap; }
 .state-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .connection-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
-.connection-timeout { min-width: 110px; white-space: nowrap; color: var(--text-secondary); font-size: 13px; }
+.connection-timeout { min-width: 80px; white-space: nowrap; color: var(--text-secondary); font-size: 13px; }
 .connection-actions { width: 1%; text-align: center; white-space: nowrap; }
 .connection-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 0; }
 .connection-offset { margin-left: auto; }

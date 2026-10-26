@@ -78,6 +78,55 @@ function cellValue(cell: Pick<DOMWrapper<Element>, "element">): string {
   return (content.textContent ?? "").trim();
 }
 describe("October 17 frontend workflows", () => {
+  it.each([true, false])("stages one DHCP DNS override choice (%s) for every configured interface", async value => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces.push(
+      { ...desired.interfaces[0]!, name: "wan0", role: "wan", up: false },
+      { ...desired.interfaces[0]!, name: "spare0", role: "unassigned" },
+    );
+    desired.dns = { lab0: {
+      servers: ["192.0.2.53"], domains: [{ name: "example.test", route_only: true }],
+      override_dhcp_dns: !value, metadata: { display_name: "Resolver", description: "" },
+    } };
+    const before = cloneConfig(desired), submit = vi.spyOn(api, "submitPackage");
+    store.stage(desired);
+    store.draft!.ntp = { enabled: true, servers: ["time.example.test"] };
+    const wrapper = await render(SettingsView, "/settings/general");
+    try {
+      const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-dhcp-dns")!;
+      toggle.vm.$emit("update:modelValue", value);
+      await flushPromises();
+      await wrapper.get("form").trigger("submit");
+      expect(Object.keys(store.draft!.dns!)).toEqual(["lab0", "wan0", "spare0"]);
+      for (const link of desired.interfaces) expect(store.draft!.dns![link.name]!.override_dhcp_dns).toBe(value);
+      expect(store.draft!.dns!.lab0).toEqual({ ...before.dns!.lab0, override_dhcp_dns: value });
+      expect(store.draft!.dns!.wan0).toEqual({ servers: [], domains: [], override_dhcp_dns: value });
+      expect(store.draft!.ntp.servers).toEqual(["time.example.test"]);
+      expect(requiredPermissions(differences(before, store.draft!))).toContain("interfaces.write");
+      expect(wrapper.text()).toContain("Interfaces without configured DNS servers still use DHCP DNS");
+      expect(store.state.data!.desired).toEqual(before);
+      expect(submit).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+  it("shows mixed DHCP DNS overrides without silently changing them on an unrelated save", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces.push({ ...desired.interfaces[0]!, name: "wan0", role: "wan" });
+    desired.dns = { lab0: { servers: [], domains: [], override_dhcp_dns: false } };
+    const wrapper = await render(SettingsView, "/settings/general");
+    try {
+      const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-dhcp-dns")!;
+      expect(toggle.attributes("indeterminate")).toBe("true");
+      expect(wrapper.text()).toContain("Current interfaces have different values");
+      await wrapper.get("form").trigger("submit");
+      expect(store.draft!.dns).toEqual(desired.dns);
+      toggle.vm.$emit("update:modelValue", true);
+      await flushPromises();
+      expect(wrapper.text()).not.toContain("Current interfaces have different values");
+      await wrapper.get("form").trigger("submit");
+      expect(store.draft!.dns!.lab0!.override_dhcp_dns).toBe(true);
+      expect(store.draft!.dns!.wan0!.override_dhcp_dns).toBe(true);
+    } finally { wrapper.unmount(); }
+  });
   it("renders export instance names as plain text while keeping the edit action", async () => {
     const wrapper = await render(SoftflowdView, "/services/netflow");
     expect(wrapper.find("tbody").text()).toContain("capture");
@@ -1953,7 +2002,7 @@ describe("October 17 frontend workflows", () => {
     const submit = vi.spyOn(api, "submitPackage");
     const wrapper = await render(SettingsView, "/settings/general");
     const toggles = wrapper.findAllComponents(stubs.VSwitch);
-    expect(toggles.map(toggle => toggle.attributes("id"))).toEqual(["general-ipv6", "general-icmp"]);
+    expect(toggles.map(toggle => toggle.attributes("id"))).toEqual(["general-ipv6", "general-icmp", "general-dhcp-dns"]);
     expect(wrapper.get('label[for="general-ipv6"]').text()).toBe("Enable IPv6");
     expect(wrapper.get('label[for="general-icmp"]').text()).toBe("Allow all IPv4 ICMP");
     expect(store.ipv6Enabled).toBe(true);
@@ -1974,18 +2023,29 @@ describe("October 17 frontend workflows", () => {
     const wrapper = await render(SettingsView, "/settings/general");
     await flushPromises();
     const labels = wrapper.findAll("label.setting-name").map(label => label.text());
-    expect(labels.slice(0, 3)).toEqual(["Host name", "Time zone", "Enable IPv6"]);
+    expect(labels.slice(0, 4)).toEqual(["Host name", "Domain name", "Time zone", "Enable IPv6"]);
     const hostname = wrapper.findAllComponents({ name: "VTextField" }).find(input => input.attributes("id") === "general-hostname")!;
+    const domain = wrapper.findAllComponents({ name: "VTextField" }).find(input => input.attributes("id") === "general-domain")!;
     hostname.vm.$emit("update:modelValue", "fw-1");
+    domain.vm.$emit("update:modelValue", " home.example.test ");
     wrapper.getComponent({ name: "VAutocomplete" }).vm.$emit("update:modelValue", "America/New_York");
     await wrapper.get("form").trigger("submit");
-    expect(store.draft?.system).toEqual({ hostname: "fw-1", timezone: "America/New_York" });
+    expect(store.draft?.system).toEqual({ hostname: "fw-1", domain: "home.example.test", timezone: "America/New_York" });
     expect(store.state.data!.desired.system).toBeUndefined();
     expect(requiredPermissions(differences(store.state.data!.desired, store.draft!))).toContain("system.write");
     hostname.vm.$emit("update:modelValue", "Bad_Name");
     await wrapper.get("form").trigger("submit");
     expect(wrapper.text()).toContain("Host name must be");
     expect(store.draft?.system?.hostname).toBe("fw-1");
+    hostname.vm.$emit("update:modelValue", "fw-1");
+    domain.vm.$emit("update:modelValue", "Invalid.Domain");
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.text()).toContain("Domain name must be");
+    expect(store.draft?.system?.domain).toBe("home.example.test");
+    domain.vm.$emit("update:modelValue", "");
+    await wrapper.get("form").trigger("submit");
+    expect(store.draft?.system?.domain).toBe("");
+    expect(store.draft?.system?.timezone).toBe("America/New_York");
     wrapper.unmount();
   });
   it("keeps IPv6 runtime diagnostics out of general settings", async () => {
@@ -2000,7 +2060,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).not.toContain("Observed IPv6 controls");
     expect(wrapper.find('[aria-label="Refresh IPv6 runtime"]').exists()).toBe(false);
     expect(wrapper.find("details").exists()).toBe(false);
-    expect(wrapper.findAllComponents(stubs.VSwitch)).toHaveLength(2);
+    expect(wrapper.findAllComponents(stubs.VSwitch)).toHaveLength(3);
     wrapper.unmount();
   });
   it("keeps IPv6 enabled when disabling would invalidate saved IPv6 settings", async () => {
@@ -2119,24 +2179,28 @@ describe("October 17 frontend workflows", () => {
     store.runtime.data!.dhcp_relay = [{ interface: "lab0", state: "exited", error: "child exited" }];
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
     expect(wrapper.text()).toContain("Observation failed"); expect(wrapper.text()).toContain("child exited");
-    expect(wrapper.find("tbody").text()).toContain("Yes");
-    expect(wrapper.find("tbody").text()).toContain("Exited");
+    const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("aria-label") === "Relay enabled for lab0")!;
+    expect(toggle.props("modelValue")).toBe(true);
+    expect(wrapper.find("thead").text()).not.toMatch(/Relay address|Enabled/);
     expect(wrapper.text()).toContain("198.51.100.1, 198.51.100.2");
+    expect(wrapper.text()).not.toContain("Relay address");
     expect(store.state.data!.desired.interfaces[0]!.dhcp_relay.enabled).toBe(true);
   });
-  it("edits DHCP relay only on its owning page and preserves the interface", async () => {
+  it("edits DHCP relay servers inline and toggles it without a dialog, preserving the interface", async () => {
     const store = useControllerStore(), original = structuredClone(config()), submit = vi.spyOn(api, "submitPackage");
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
     await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
-    const fields = wrapper.findAllComponents(FieldInput);
-    fields.find(field => field.props("field").key === "enabled")!.vm.$emit("update:modelValue", true);
-    fields.find(field => field.props("field").key === "servers")!.vm.$emit("update:modelValue", ["198.51.100.10", "198.51.100.20"]);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    wrapper.findAllComponents({ name: "VTextField" }).find(field => field.attributes("aria-label") === "DHCPv4 relay servers")!.vm.$emit("update:modelValue", "198.51.100.10, 198.51.100.20");
     await flushPromises();
     await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.interfaces[0]?.dhcp_relay).toEqual({ enabled: false, servers: ["198.51.100.10", "198.51.100.20"] });
+    wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("aria-label") === "Relay enabled for lab0")!.vm.$emit("update:modelValue", true);
+    await flushPromises();
     expect(store.draft?.interfaces[0]).toEqual({ ...original.interfaces[0], dhcp_relay: { enabled: true, servers: ["198.51.100.10", "198.51.100.20"] } });
     expect(store.draft?.routes).toEqual(original.routes);
     expect(store.state.data!.desired.interfaces[0]!.dhcp_relay).toEqual(original.interfaces[0]!.dhcp_relay);
-    expect(store.editorDirty).toBe(false); expect(submit).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
   });
   it("preserves relay settings when editing interface properties", async () => {
     const store = useControllerStore();
@@ -2149,42 +2213,41 @@ describe("October 17 frontend workflows", () => {
     await wrapper.getComponent(PhysicalInterfaceEditor).get("form").trigger("submit");
     expect(store.draft?.interfaces[0]!.dhcp_relay).toEqual({ enabled: true, servers: ["198.51.100.10"] });
   });
-  it.each(["invalid-server", "missing-ipv4", "dhcp-client"])("rejects %s in the dedicated relay editor without staging", async scenario => {
+  it.each(["invalid-server", "missing-ipv4", "dhcp-client"])("rejects %s in the inline relay controls without staging", async scenario => {
     const store = useControllerStore();
-    if (scenario !== "invalid-server") store.state.data!.desired.interfaces[0]!.addresses = [];
+    if (scenario !== "invalid-server") {
+      store.state.data!.desired.interfaces[0]!.addresses = [];
+      store.state.data!.desired.interfaces[0]!.dhcp_relay = { enabled: false, servers: ["198.51.100.10"] };
+    }
     if (scenario === "dhcp-client") store.state.data!.desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
-    await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
-    const fields = wrapper.findAllComponents(FieldInput);
-    fields.find(field => field.props("field").key === "enabled")!.vm.$emit("update:modelValue", true);
-    fields.find(field => field.props("field").key === "servers")!.vm.$emit("update:modelValue", [scenario === "invalid-server" ? "127.0.0.1" : "198.51.100.10"]);
-    await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
-    expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(true);
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
+    if (scenario === "invalid-server") {
+      await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
+      wrapper.findAllComponents({ name: "VTextField" }).find(field => field.attributes("aria-label") === "DHCPv4 relay servers")!.vm.$emit("update:modelValue", "127.0.0.1");
+      await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    } else {
+      wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("aria-label") === "Relay enabled for lab0")!.vm.$emit("update:modelValue", true);
+      await flushPromises();
+    }
+    expect(store.draft).toBeNull();
     expect(wrapper.get('[role="alert"]').text()).not.toBe("");
   });
-  it("guards relay cancellation and never stages discarded input", async () => {
-    const store = useControllerStore(), confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("discards inline relay input on cancel without staging", async () => {
+    const store = useControllerStore();
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
     await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
-    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "servers")!.vm.$emit("update:modelValue", ["198.51.100.10"]);
+    wrapper.findAllComponents({ name: "VTextField" }).find(field => field.attributes("aria-label") === "DHCPv4 relay servers")!.vm.$emit("update:modelValue", "198.51.100.10");
     await flushPromises();
-    const cancel = wrapper.findAll("button").find(button => button.text() === "Cancel")!;
-    await cancel.trigger("click");
-    expect(confirm).toHaveBeenCalledOnce(); expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
-    expect(store.editorDirty).toBe(true);
-    confirm.mockReturnValue(true); await cancel.trigger("click");
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
-    expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(false);
-    confirm.mockRestore();
+    await wrapper.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+    expect(wrapper.findAll("button").some(button => button.text() === "Save")).toBe(false);
+    expect(store.draft).toBeNull();
   });
   it("blocks relay edits when the controller becomes read-only", async () => {
     const store = useControllerStore(), wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
-    await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
     store.connected = false; await flushPromises();
-    expect(wrapper.findAll("button").find(button => button.text() === "Save")!.attributes("disabled")).toBeDefined();
-    expect(wrapper.findAllComponents(FieldInput).every(field => field.props("field").disabled)).toBe(true);
+    expect(wrapper.get('button[aria-label="Edit DHCP relay lab0"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.findAllComponents(stubs.VSwitch).every(item => item.props("disabled") === true)).toBe(true);
     expect(store.draft).toBeNull();
   });
   it("requires explicit repair and shows permissions from pending settings, not draft", async () => {

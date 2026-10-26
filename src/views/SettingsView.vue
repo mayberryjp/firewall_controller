@@ -8,7 +8,14 @@ const store = useControllerStore();
 const selectedConfig = computed(() => store.draft ?? store.state.data?.desired);
 const allowICMP = ref(true);
 const enableIPv6 = ref(true);
+const overrideDhcpDns = ref(true);
+const dnsOverrideChanged = ref(false);
+const dnsOverrideMixed = computed(() => {
+  const values = selectedConfig.value?.interfaces.map(link => selectedConfig.value?.dns?.[link.name]?.override_dhcp_dns !== false) ?? [];
+  return values.some(Boolean) && values.some(value => !value);
+});
 const hostname = ref("");
+const domain = ref("");
 const timezone = ref<string | null>(null);
 const knownTimezones = ref<string[]>([]);
 const timezoneItems = computed(() => timezone.value && !knownTimezones.value.includes(timezone.value) ? [timezone.value, ...knownTimezones.value] : knownTimezones.value);
@@ -18,8 +25,12 @@ watch(() => selectedConfig.value?.firewall.allow_all_icmp, value => {
   if (value !== undefined) allowICMP.value = value;
 }, { immediate: true });
 watch(() => selectedConfig.value?.ipv6_enabled, value => { enableIPv6.value = value !== false; }, { immediate: true });
+watch(selectedConfig, value => {
+  overrideDhcpDns.value = value?.interfaces.every(link => value.dns?.[link.name]?.override_dhcp_dns !== false) ?? true;
+  dnsOverrideChanged.value = false;
+}, { immediate: true, deep: true });
 watch(() => selectedConfig.value?.system, value => {
-  hostname.value = value?.hostname ?? ""; timezone.value = value?.timezone || null;
+  hostname.value = value?.hostname ?? ""; domain.value = value?.domain ?? ""; timezone.value = value?.timezone || null;
 }, { immediate: true });
 const timezoneRequest = new AbortController();
 onMounted(async () => {
@@ -41,8 +52,19 @@ function stage(): void {
       if (conflicts.length) throw new Error(`Remove IPv6 settings before disabling IPv6: ${conflicts.join(", ")}.`);
     }
     candidate.firewall.allow_all_icmp = allowICMP.value;
-    const system = { hostname: hostname.value.trim(), timezone: timezone.value ?? "" };
-    if (candidate.system || system.hostname || system.timezone) candidate.system = system;
+    if (dnsOverrideChanged.value) {
+      candidate.dns ??= {};
+      for (const link of candidate.interfaces) {
+        candidate.dns[link.name] = {
+          ...candidate.dns[link.name],
+          servers: candidate.dns[link.name]?.servers ?? [],
+          domains: candidate.dns[link.name]?.domains ?? [],
+          override_dhcp_dns: overrideDhcpDns.value,
+        };
+      }
+    }
+    const system = { hostname: hostname.value.trim(), domain: domain.value.trim(), timezone: timezone.value ?? "" };
+    if (candidate.system || system.hostname || system.domain || system.timezone) candidate.system = system;
     const issues = validateConfig(candidate).filter(item => item.path.startsWith("system."));
     if (issues.length) throw new Error(issues.map(item => item.message).join(". "));
     store.stage(candidate);
@@ -100,6 +122,35 @@ function stage(): void {
             class="setting-desc"
           >
             Lowercase letters, digits and hyphens. Leave empty to stop managing the host name; the current name is kept.
+          </p>
+        </div>
+      </div>
+      <v-divider />
+      <div class="setting-row">
+        <label
+          for="general-domain"
+          class="setting-name"
+        >
+          Domain name
+        </label>
+        <div class="setting-control">
+          <v-text-field
+            id="general-domain"
+            v-model="domain"
+            aria-describedby="general-domain-description"
+            placeholder="example.test"
+            :disabled="blocked"
+            density="compact"
+            hide-details
+            class="setting-field"
+          />
+          <p
+            id="general-domain-description"
+            class="setting-desc"
+          >
+            Optional lowercase domain name used to display hostname.domain.
+            This is a cosmetic label only; it does not change the host, DNS resolver or search domains.
+            Leave empty to remove the domain label.
           </p>
         </div>
       </div>
@@ -186,6 +237,40 @@ function stage(): void {
               ICMPv6 is unchanged.
             </template>
             Disabling removes the exception, not a blanket block.
+          </p>
+        </div>
+      </div>
+      <v-divider />
+      <div class="setting-row">
+        <label
+          for="general-dhcp-dns"
+          class="setting-name"
+        >
+          Ignore DHCP-provided DNS servers
+        </label>
+        <div class="setting-control">
+          <v-switch
+            id="general-dhcp-dns"
+            v-model="overrideDhcpDns"
+            :indeterminate="dnsOverrideMixed && !dnsOverrideChanged"
+            aria-describedby="general-dhcp-dns-description"
+            :disabled="blocked || !selectedConfig?.interfaces.length"
+            density="compact"
+            hide-details
+            color="primary"
+            @update:model-value="dnsOverrideChanged = true"
+          />
+          <p
+            id="general-dhcp-dns-description"
+            class="setting-desc"
+          >
+            Apply this choice to all currently configured interfaces when saved.
+            When on, use only configured DNS servers; when off, also use DHCP-provided DNS servers.
+            Interfaces without configured DNS servers still use DHCP DNS. Search domains are unchanged.
+            After adding interfaces, set this choice again and save.
+            <template v-if="dnsOverrideMixed && !dnsOverrideChanged">
+              Current interfaces have different values. Toggle to choose one value for all.
+            </template>
           </p>
         </div>
       </div>

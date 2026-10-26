@@ -132,6 +132,7 @@ export const dhcpClientSchema = z.object({
 }).strict();
 export const dnsConfigSchema = z.object({
   ...annotation,
+  override_dhcp_dns: z.boolean().optional(),
   servers: z.array(z.string()).default([]),
   domains: z.array(z.object({ ...annotation, name: z.string(), route_only: z.boolean() }).strict()).default([]),
 }).strict();
@@ -159,7 +160,7 @@ export const blackholeSchema = z.object({
   name: z.string().default(""), action: z.enum(["blackhole", "unreachable", "prohibit"]).default("blackhole"),
 }).strict();
 export type BlackholeConfig = z.infer<typeof blackholeSchema>;
-export const systemSchema = z.object({ hostname: z.string().default(""), timezone: z.string().default("") }).strict();
+export const systemSchema = z.object({ hostname: z.string().default(""), domain: z.string().default(""), timezone: z.string().default("") }).strict();
 export type SystemConfig = z.infer<typeof systemSchema>;
 export const timezonesSchema = z.object({ timezones: z.array(z.string()) }).strict();
 export const dynamicDnsSecretReferenceSchema = z.object({ secret_ref: z.string().regex(/^[a-f0-9]{32}$/) }).strict();

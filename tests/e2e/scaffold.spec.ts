@@ -240,6 +240,43 @@ test("masquerading adds and edits inline without popups on desktop and mobile", 
   expect(dialogs).toEqual([]); expect(backend.writes).toHaveLength(0);
 });
 
+test("cosmetic device domain stages, commits and appears in the navbar without overflowing", async ({ page }, testInfo) => {
+  const initial = config();
+  initial.system = { hostname: "fw-1", domain: `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.example.test`, timezone: "UTC" };
+  const backend = await mockBackend(page, { initialConfig: initial });
+  await connect(page);
+  const identity = page.getByRole("banner").getByLabel("Device name", { exact: true });
+  await expect(identity).toHaveText(`fw-1.${initial.system.domain}`);
+  await expect(identity).toHaveAttribute("title", `fw-1.${initial.system.domain}`);
+  expect(await identity.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await navigate(page, "General");
+  await expect(page.getByLabel("Domain name", { exact: true })).toHaveValue(initial.system.domain);
+  await page.getByLabel("Domain name", { exact: true }).fill("Bad.Domain");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Domain name must be");
+  await page.getByLabel("Host name", { exact: true }).fill("edge");
+  await page.getByLabel("Domain name", { exact: true }).fill("home.example.test");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(identity).toHaveText(`fw-1.${initial.system.domain}`);
+  expect(backend.writes).toEqual([]);
+  await navigate(page, "SAVE");
+  await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("system.write");
+  await page.getByRole("button", { name: "Push changes", exact: true }).click();
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
+  expect(backend.writes[0]?.body).toMatchObject({ config: { system: { hostname: "edge", domain: "home.example.test", timezone: "UTC" } } });
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(identity).toHaveText("edge.home.example.test");
+  await page.reload();
+  await expect(identity).toHaveText("edge.home.example.test");
+  await navigate(page, "General");
+  await expect(page.getByLabel("Domain name", { exact: true })).toHaveValue("home.example.test");
+  await page.screenshot({ path: testInfo.outputPath("device-domain-general-settings.png"), fullPage: true, animations: "disabled" });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("global IPv6 setting hides IPv6 UI and persists through commit", async ({ page }, testInfo) => {
   const initial = config(), original = initial.interfaces[0]!;
   initial.ipv6_enabled = true;
@@ -1234,7 +1271,7 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("navbar-status.png"), fullPage: false, animations: "disabled" });
-  expect(await page.getByRole("banner").getByRole("link", { name: "Firewall Controller", exact: true }).evaluate(element => {
+  expect(await page.getByRole("banner").getByRole("link", { name: "Modan モダン", exact: true }).evaluate(element => {
     const bounds = element.getBoundingClientRect(), banner = element.closest("header")!.getBoundingClientRect();
     return bounds.top >= banner.top && bounds.bottom <= banner.bottom;
   })).toBe(true);
@@ -1469,10 +1506,10 @@ test("inline interface settings and multi-server relay stage together without au
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await navigate(page, "DHCPv4 relay");
   await page.getByRole("button", { name: "Edit DHCP relay lab0", exact: true }).click();
-  await page.getByLabel("Enable DHCPv4 relay", { exact: true }).check();
-  await page.getByLabel("DHCPv4 relay servers", { exact: true }).fill("198.51.100.10\n198.51.100.20");
-  await expect(page.getByRole("dialog")).toContainText("Relay address: 192.0.2.10/24");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByLabel("DHCPv4 relay servers", { exact: true }).fill("198.51.100.10, 198.51.100.20");
   await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Relay enabled for lab0", exact: true }).check();
   expect(backend.writes).toHaveLength(0);
   await navigate(page, "SAVE");
   await expect(page.getByRole("main")).toContainText("briefly disrupt relay on other interfaces");
@@ -1490,7 +1527,7 @@ test("relay repair is explicit, bodyless and keeps forbidden errors visible", as
   initial.softflowd[0]!.enabled = true;
   const backend = await mockBackend(page, { initialConfig: initial, serviceDenied: true }); await connect(page);
   await navigate(page, "DHCPv4 relay");
-  await expect(page.getByRole("main")).toContainText("Simulated");
+  await expect(page.getByRole("checkbox", { name: "Relay enabled for lab0", exact: true })).toBeChecked();
   expect(backend.writes).toHaveLength(0);
   await expect(page.getByRole("button", { name: "Reconcile all managed services", exact: true })).toHaveCount(0);
   await page.goto("/services/maintenance");

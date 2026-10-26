@@ -1,4 +1,4 @@
-# Firewall Controller / Netcontrol
+# Modan モダン (Firewall Controller / Netcontrol)
 
 Vue 3 + TypeScript + Vuetify administrative frontend for the **Netcontrol
 firewall control plane**, following the
@@ -80,7 +80,7 @@ review the backend's networkd/resolved and persistent-state prerequisites.
 | `/vlans`, `/vlans/:name` | VLAN-only creation, behavior editing and deletion, parent/tag validation and dependency review |
 | `/routes` | Static routes and managed-interface/table/metric validation; legacy `/policy-rules` redirects here |
 | `/firewall` | Default forward policy and ordered accept/drop rules; existing host/ingress policies preserved read-only |
-| `/settings`, `/settings/general` | Global IPv6 policy and IPv4 ICMP exception; settings join the shared draft |
+| `/settings`, `/settings/general` | Host name, cosmetic domain name, time zone, global IPv6 policy, IPv4 ICMP exception, and one DHCP DNS override control for all currently configured interfaces; settings join the shared draft |
 | `/settings/mqtt-streaming` | MQTT STREAMING (old `/settings/home-assistant` redirects here): MQTT broker, source interface, publish interval and write-only password replacement; shared draft and confirmed publisher status |
 | `/connections` | Live conntrack snapshots, filters/paging, exact nullable counters and explicitly confirmed state deletion |
 | `/nat` | Ordered IPv4/IPv6 masquerading with family-correct egress |
@@ -116,7 +116,7 @@ Connection health appears in an icon-only floating bottom-right bubble; hover or
 focus it for connection status, or open it for deployment
 details and Disconnect. There is no profile/person button. Interfaces
 contains Physical interfaces, Loopbacks and VLANs. Routing contains Static Routes
-and Gateway monitors. The Firewall Controller
+and Gateway monitors. The Modan モダン
 brand links to Overview; there is no separate Overview navigation button. Firewall
 contains forwarding, Host input, Connections and NAT; VPN contains WireGuard. The existing **Config rN**
 revision box opens `/config`; there is no separate Config navigation button.
@@ -155,6 +155,24 @@ acquisition timestamps are converted from Unix seconds for display.
 Each setting has one owning editor. Physical interfaces shows discovered non-loopback links, with
 rows and **Active Addresses** from `GET /api/v1/interfaces/discovered` (`state.read`).
 Managed configuration is joined by technical name for labels, roles and settings.
+General settings includes an optional **Domain name** beside **Host name**, stored
+as `system.domain` with the existing `system.write` permission. This is a cosmetic
+label only, not a host-domain or DNS search-domain setting. Use lowercase labels
+with no trailing dot (up to 253 characters, including the host name and separating
+dot when both are set). Clear the field to remove it. The navigation bar shows the
+committed `hostname.domain` in small text below the app title, or just the hostname
+when the domain is empty; drafts do not rename the connected device before commit.
+Long names are truncated visually with the full name available on hover.
+General settings owns the single **Ignore DHCP-provided DNS servers** control.
+Changing it and saving writes `dns[interface].override_dhcp_dns` for every currently
+configured interface, including down and unassigned links, without changing servers
+or search domains. Mixed existing values remain unchanged until the control is used.
+This is a frontend-wide control, not a backend global policy: DHCP DNS is still used
+on interfaces without configured DNS servers, even when the control is on. When off,
+the backend merges configured and DHCP servers. An omitted field defaults to on.
+After adding interfaces, set the control again and save to include them; interfaces
+added outside the UI are not automatically covered. Changes use the normal shared
+draft and SAVE/apply flow and require `interfaces.write`.
 The inventory table shows only active addresses; configured static addresses remain in
 the interface editor. DHCP/IPv6 assignments stay visible even with an empty static list,
 and live addresses never enter configuration drafts. Interface type, management state,
@@ -804,7 +822,7 @@ simulated states. There is no offline mutation queue.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `VITE_APP_NAME` | `Firewall Controller` | Header/browser title |
+| `VITE_APP_NAME` | `Modan モダン` | Header/browser title |
 | `VITE_APP_ENV` | Vite mode | Available frontend deployment metadata |
 | `VITE_DEPLOYMENT_LABEL` | `Unknown` | Operator-supplied lab/deployment label |
 | `VITE_BACKEND_MODE` | `Unknown` | Operator-supplied mode label, not API-discovered capability |

@@ -64,6 +64,53 @@ describe("native runtime parent diagnostics", () => {
 });
 
 describe("host Ethernet configuration", () => {
+  it("preserves the cosmetic system domain in imports and transactions with system.write", () => {
+    const candidate = config(), before = config();
+    candidate.system = { hostname: "fw-1", domain: "home.example.test", timezone: "UTC" };
+    expect(importConfig(encodeJson(candidate))).toEqual(candidate);
+    expect(transactionSchema.parse({ ...transaction(), candidate }).candidate).toEqual(candidate);
+    expect(requiredPermissions(differences(before, candidate))).toEqual(["transactions.write", "system.write"]);
+    expect(validateConfig(candidate)).toEqual([]);
+    expect(configSchema.parse({ ...before, system: { hostname: "fw-1", timezone: "" } }).system?.domain).toBe("");
+    expect(equalConfig(before, { ...before, system: { hostname: "", domain: "", timezone: "" } })).toBe(true);
+  });
+  it.each(["home.example.test", "lan", "123.example", "a-b.test", ""])("accepts cosmetic domain %j", domain => {
+    const candidate = config();
+    candidate.system = { hostname: "fw-1", domain, timezone: "" };
+    expect(validateConfig(candidate)).toEqual([]);
+  });
+  it.each(["Example.test", "example.test.", "-bad.test", "bad-.test", "bad_name.test", "a..test", "123", "192.0.2.1", "::1", "bad name", `${"a".repeat(64)}.test`])("rejects invalid cosmetic domain %j", domain => {
+    const candidate = config();
+    candidate.system = { hostname: "fw-1", domain, timezone: "" };
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "system.domain", page: "/settings/general" }));
+  });
+  it("enforces both domain and full-name length limits at exactly 253 characters", () => {
+    const candidate = config(), prefix = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.`;
+    candidate.system = { hostname: "", domain: prefix + "d".repeat(61), timezone: "" };
+    expect(candidate.system.domain).toHaveLength(253);
+    expect(validateConfig(candidate)).toEqual([]);
+    candidate.system.domain += "d";
+    expect(validateConfig(candidate).some(issue => issue.path === "system.domain")).toBe(true);
+    candidate.system.hostname = "fw";
+    candidate.system.domain = prefix + "d".repeat(58);
+    expect(`fw.${candidate.system.domain}`).toHaveLength(253);
+    expect(validateConfig(candidate)).toEqual([]);
+    candidate.system.domain += "d";
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "system.domain", message: "Host name and domain name together must not exceed 253 characters" }));
+  });
+  it.each([true, false])("round-trips DHCP DNS override %s through imports and transactions", override_dhcp_dns => {
+    const candidate = config();
+    candidate.dns = { lab0: { servers: ["192.0.2.53"], domains: [], override_dhcp_dns } };
+    expect(importConfig(encodeJson(candidate))).toEqual(candidate);
+    expect(transactionSchema.parse({ ...transaction(), candidate }).candidate).toEqual(candidate);
+    const before = config();
+    before.dns = { lab0: { servers: ["192.0.2.53"], domains: [] } };
+    expect(equalConfig(before, candidate)).toBe(override_dhcp_dns);
+    expect(requiredPermissions(differences(before, candidate))).toEqual(override_dhcp_dns ? ["transactions.write"] : ["transactions.write", "interfaces.write"]);
+  });
+  it.each([null, "true", 1])("rejects malformed DHCP DNS override %j", override_dhcp_dns => {
+    expect(configSchema.safeParse({ ...config(), dns: { lab0: { override_dhcp_dns } } }).success).toBe(false);
+  });
   it("preserves common metadata through imports and transactions without changing identities", () => {
     const candidate = config(), metadata = { display_name: "Office", description: "Staff devices\nPrimary network" };
     candidate.interfaces[0]!.metadata = metadata;

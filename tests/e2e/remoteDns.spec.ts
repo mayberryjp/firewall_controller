@@ -2,6 +2,32 @@ import { expect, test } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { config } from "../fixtures";
 
+for (const enabled of [true, false]) {
+  test(`General settings stages one DHCP DNS override control (${enabled})`, async ({ page }) => {
+    const initial = config();
+    initial.interfaces.push({ ...initial.interfaces[0]!, name: "wan0", role: "wan", kind: "ethernet", up: false });
+    initial.dns = Object.fromEntries(initial.interfaces.map(link => [
+      link.name, { servers: ["192.0.2.53"], domains: [], override_dhcp_dns: !enabled },
+    ]));
+    const backend = await mockBackend(page, { initialConfig: initial });
+    await page.goto("/connect");
+    await page.getByLabel("Registry admin password").fill("registry-test-password");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+    await page.goto("/settings/general");
+    const view = page.getByRole("region", { name: "General settings", exact: true });
+    const control = view.getByLabel("Ignore DHCP-provided DNS servers", { exact: true });
+    await expect(control).toHaveCount(1);
+    await control.setChecked(enabled);
+    await view.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(control).toBeChecked({ checked: enabled });
+    await expect(view).toContainText("Interfaces without configured DNS servers still use DHCP DNS");
+    expect(backend.writes).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}
+
 test("Remote DNS is accessible under Services and stages resolver settings without backend writes", async ({ page }) => {
   const initial = config();
   initial.interfaces.push({ ...initial.interfaces[0]!, name: "wan0", role: "wan", kind: "ethernet" });

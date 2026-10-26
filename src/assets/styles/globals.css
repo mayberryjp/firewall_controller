@@ -31,7 +31,7 @@ body {
 }
 
 .product-name {
-  color: #53cdba;
+  color: #d5ff38;
   font-weight: 700;
   text-align: start;
   line-height: 1.4;
@@ -41,7 +41,7 @@ body {
 
 .product-bar,
 .tagline-text {
-  color: #f5a623;
+  color: #bb91ff;
   font-weight: 700;
   line-height: 1.4;
 }

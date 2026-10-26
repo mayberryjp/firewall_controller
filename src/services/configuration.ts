@@ -25,6 +25,7 @@ export function normalize(config: Config): Config {
     if (!Object.keys(result[area] ?? {}).length) delete result[area];
   }
   for (const settings of Object.values(result.dns ?? {})) {
+    if (settings.override_dhcp_dns === true) delete settings.override_dhcp_dns;
     settings.servers.sort();
     settings.domains.sort((first, second) => first.name.localeCompare(second.name));
   }
@@ -316,8 +317,12 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   const validName = (name: string) => /^[a-zA-Z0-9_.-]{1,15}$/.test(name) && !["lo", ".", ".."].includes(name);
   const interfaces = new Map(config.interfaces.map((link) => [link.name, link]));
   if (config.system) {
-    const { hostname, timezone } = config.system, page = "/settings/general";
+    const { hostname, domain, timezone } = config.system, page = "/settings/general";
     if (hostname && !/^(?!-)[a-z0-9-]{1,63}(?<!-)$/.test(hostname)) issue("system.hostname", "Host name must be 1..63 lowercase letters, digits or hyphens, not starting or ending with a hyphen", page);
+    if (domain && (domain.length > 253 || /^[0-9.]+$/.test(domain) || !domain.split(".").every(label => /^(?!-)[a-z0-9-]{1,63}(?<!-)$/.test(label)))) {
+      issue("system.domain", "Domain name must be a lowercase dot-separated name up to 253 characters, with labels of 1..63 letters, digits or hyphens, no leading or trailing hyphens, no trailing dot, and not a bare IP address or all digits", page);
+    }
+    if (hostname && domain && hostname.length + 1 + domain.length > 253) issue("system.domain", "Host name and domain name together must not exceed 253 characters", page);
     if (timezone && (timezone.length > 64 || !/^[A-Za-z0-9_+-]+(\/[A-Za-z0-9_+-]+){0,2}$/.test(timezone))) issue("system.timezone", "Time zone must be an IANA name such as America/New_York", page);
   }
   if (config.mqtt) {

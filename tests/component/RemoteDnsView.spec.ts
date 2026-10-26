@@ -51,6 +51,16 @@ beforeEach(() => {
 });
 
 describe("Remote DNS", () => {
+  it.each([true, false])("preserves the DHCP DNS override (%s) while editing remote servers", async override_dhcp_dns => {
+    const store = useControllerStore();
+    store.state.data!.desired.dns!.lab0!.override_dhcp_dns = override_dhcp_dns;
+    const wrapper = render();
+    try {
+      await add(wrapper, "1.1.1.1");
+      expect(store.draft!.dns!.lab0!.override_dhcp_dns).toBe(override_dhcp_dns);
+      expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+    } finally { wrapper.unmount(); }
+  });
   it("stages every LAN/WAN interface, including down links and VLANs, preserving the shared draft and other settings", async () => {
     const store = useControllerStore();
     const desired = store.state.data!.desired;

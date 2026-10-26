@@ -8,6 +8,6 @@ import "@mdi/font/css/materialdesignicons.css";
 import "@/assets/styles/tokens.css";
 import "@/assets/styles/globals.css";
 
-document.title = import.meta.env.VITE_APP_NAME || "Firewall Controller";
+document.title = `${import.meta.env.VITE_APP_NAME || "Modan モダン"} | Know Your Network`;
 
 createApp(App).use(createPinia()).use(router).use(vuetify).mount("#app");
