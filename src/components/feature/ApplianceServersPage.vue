@@ -4,6 +4,7 @@ import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, validateConfig } from "@/services/configuration";
 import { formatTimestamp } from "@/services/timestamps";
 import { isApplianceStatus, type Config } from "@/types/domain";
+import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 
 interface Row { host: string; port?: number; transport?: string }
 const props = defineProps<{ service: "ntp" | "syslog" }>();
@@ -15,8 +16,8 @@ const rows = computed<Row[]>(() => props.service === "ntp"
   ? (editing.value?.ntp.servers ?? []).map(host => ({ host }))
   : (editing.value?.syslog.servers ?? []).map(({ host, port, transport }) => ({ host, port, transport })));
 const blocked = computed(() => Boolean(store.readOnlyReason) || !editing.value);
-const status = computed(() => props.service === "ntp" ? store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === "ntp") : undefined);
-const sampleAvailable = computed(() => status.value?.sample_status === "available");
+const status = computed(() => store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === props.service));
+const sampleAvailable = computed(() => !store.runtime.stale && !status.value?.retrying && !status.value?.error && status.value?.sample_status === "available");
 const statColumns = 5;
 const ms = (value: number | null | undefined, signed = false) =>
   value === null || value === undefined ? "—" : `${signed && value > 0 ? "+" : ""}${value.toFixed(3).replace(/\.?0+$/, "")} ms`;
@@ -29,11 +30,13 @@ const activeIndex = computed(() => {
 const statusText = computed(() => {
   const current = status.value;
   if (!current) return "";
+  if (store.runtime.stale) return `${current.state} · stale`;
   return sampleAvailable.value ? current.state : `${current.state} · ${(current.sample_status ?? "unavailable").replace("_", " ")}`;
 });
 const statusColor = computed(() => {
   const current = status.value;
   if (!current) return undefined;
+  if (current.retrying || store.runtime.stale) return "warning";
   const byState: Record<string, string> = { running: "success", simulated: "info", stopped: "warning", disabled: "default", error: "error" };
   const stateColor = byState[current.state] ?? "default";
   if (stateColor !== "success" && stateColor !== "info") return stateColor;
@@ -122,14 +125,15 @@ function remove(index: number): void {
         {{ service === 'ntp' ? 'Add NTP upstream server' : 'Add remote syslog server' }}
       </v-btn>
     </div>
-    <v-alert
-      v-if="status?.error"
-      type="warning"
-      variant="tonal"
-      class="mb-4"
+    <p
+      v-if="service === 'syslog' && status"
+      class="mb-3"
     >
-      {{ status.error }}
-    </v-alert>
+      <template v-if="store.runtime.stale">
+        Stale last-known state:
+      </template>
+      <ServiceWorkerStatus :status="status" />
+    </p>
     <v-table class="service-table">
       <thead>
         <tr>
@@ -184,7 +188,10 @@ function remove(index: number): void {
                     variant="tonal"
                     :color="statusColor"
                   >
-                    {{ statusText }}
+                    <ServiceWorkerStatus
+                      :status="status"
+                      :label="statusText"
+                    />
                   </v-chip>
                 </td>
                 <template v-if="sampleAvailable">

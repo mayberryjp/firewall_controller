@@ -22,6 +22,46 @@ async function openNavigation(page: Page): Promise<void> {
   await expect(page.getByRole("navigation", { name: "Main navigation" })).toBeVisible();
 }
 
+test("consolidated health issues stay compact and never interrupt configuration", async ({ page }, testInfo) => {
+  await page.clock.install();
+  const backend = await mockBackend(page);
+  const timestamp = "2026-10-27T01:02:03.987Z";
+  const alert = { id: "ntp:upstream", component: "appliance_services", resource: "ntp", severity: "warning", code: "future_condition", message: "NTP upstream samples unavailable", retrying: false, first_seen_at: timestamp, last_seen_at: timestamp };
+  let alerts = [alert, alert];
+  await page.route("**/proxy/platform/status", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({
+    process_health: { status: "healthy", healthy: true, collected_at: timestamp, stale: false,
+      components: [{ id: "ntp", component: "appliance_services", resource: "ntp", state: "running", healthy: true, retrying: false, collected_at: timestamp }] },
+    active_alerts: alerts,
+  }) }));
+  await connect(page);
+  const bubble = page.locator(".connection-bubble");
+  const panel = page.getByRole("region", { name: "Health and issues", exact: true });
+  await expect(bubble).toHaveAttribute("aria-label", "Issues");
+  await expect(panel).not.toBeVisible();
+  await expect(bubble).toHaveText("");
+  const size = await bubble.boundingBox();
+  expect(size?.width).toBe(40); expect(size?.height).toBe(40);
+  await expect(page.locator("main .v-alert")).toHaveCount(0);
+  await bubble.click();
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("list", { name: "Active alerts" }).locator("li")).toHaveCount(1);
+  await expect(panel).toContainText("Process health: Healthy");
+  await expect(panel).toContainText("First seen (UTC): 2026-10-27 01:02:03");
+  await expect(panel.locator(".v-alert")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("consolidated-health-issues.png"), fullPage: true, animations: "disabled" });
+  alerts = [];
+  await page.clock.fastForward(3500);
+  await expect(panel.getByRole("list", { name: "Active alerts" })).toHaveCount(0);
+  await expect(panel).toContainText("No active alerts.");
+  await page.keyboard.press("Escape");
+  await expect(panel).not.toBeVisible();
+  await page.goto("/services/syslog");
+  await expect(page.getByRole("button", { name: "Add remote syslog server", exact: true })).toBeEnabled();
+  await expect(page.locator("main .v-alert")).toHaveCount(0);
+  expect(backend.writes).toHaveLength(0);
+});
+
 test("overview packet counters abbreviate totals and show exact poll changes", async ({ page }, testInfo) => {
   await page.clock.install();
   await mockBackend(page);

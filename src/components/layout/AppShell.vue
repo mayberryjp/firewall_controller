@@ -1,11 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useControllerStore } from "@/stores/controller";
 import AppHeader from "@/components/layout/AppHeader.vue";
-import SafetyBanner from "@/components/layout/SafetyBanner.vue";
 import DisconnectDialog from "@/components/layout/DisconnectDialog.vue";
 import ConnectionBubble from "@/components/layout/ConnectionBubble.vue";
-const store = useControllerStore();
 const disconnectDialog = ref(false);
 </script>
 <template>
@@ -20,7 +17,6 @@ const disconnectDialog = ref(false);
       tabindex="-1"
     >
       <div class="app-content">
-        <SafetyBanner v-if="store.connected" />
         <slot />
       </div>
     </v-main>

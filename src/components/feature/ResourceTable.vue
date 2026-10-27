@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
+import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 import { formatTimestamp } from "@/services/timestamps";
 import { useControllerStore } from "@/stores/controller";
 import { configSchema, type DiscoveredInterface } from "@/types/domain";
@@ -113,11 +114,8 @@ function observedColor(row: Record<string, unknown>): string {
   if (observed === "Unknown") return "default";
   return (observed === "True") !== (row.enabled !== false) ? "warning" : observed === "True" ? "success" : "default";
 }
-const stateLabels: Record<string, string> = {
-  running: "Running", disabled: "Disabled", simulated: "Simulated", not_running: "Not running", unhealthy: "Unhealthy", exited: "Exited",
-};
 function stateColor(state?: string): string {
-  return state === "running" ? "success" : ["unhealthy", "not_running", "exited"].includes(state ?? "") ? "error" : "default";
+  return state === "running" ? "success" : ["unhealthy", "not_running", "exited", "error"].includes(state ?? "") ? "error" : "default";
 }
 const countFormat = new Intl.NumberFormat("en-US");
 function droppedColor(value?: string): string {
@@ -324,7 +322,7 @@ function staged(value: unknown): string {
             :name="String(row.value.name)"
             summary
           >
-            <template #default="{ measurements, healthColor, metricIndicators, error }">
+            <template #default="{ measurements, healthColor, metricIndicators, worker }">
               <td
                 v-for="metric in monitorMetrics"
                 :key="metric"
@@ -337,20 +335,21 @@ function staged(value: unknown): string {
                   aria-hidden="true"
                 >{{ metric }}</span>
                 <v-chip
-                  :color="metric === 'Health' ? healthColor : metricIndicators[metric]?.color"
+                  :color="metric === 'Health' ? (worker?.retrying ? 'warning' : healthColor) : metricIndicators[metric]?.color"
                   :title="metricIndicators[metric]?.tooltip"
                   :aria-label="metricIndicators[metric] ? `${metric}: ${measurements[metric] ?? 'Unavailable'} (${metricIndicators[metric].rating})` : undefined"
                   size="small"
                   variant="tonal"
                 >
-                  {{ measurements[metric] ?? (metric === "Health" ? "unknown" : "Unavailable") }}
+                  <ServiceWorkerStatus
+                    v-if="metric === 'Health'"
+                    :status="worker"
+                    :label="String(measurements[metric] ?? 'unknown')"
+                  />
+                  <template v-else>
+                    {{ measurements[metric] ?? 'Unavailable' }}
+                  </template>
                 </v-chip>
-                <p
-                  v-if="metric === 'Health' && error"
-                  role="alert"
-                >
-                  {{ error }}
-                </p>
               </td>
             </template>
           </GatewayStatisticsPanel>
@@ -367,12 +366,12 @@ function staged(value: unknown): string {
             </td>
             <td>
               <v-chip
-                :color="stateColor(softflowStatus(row.value.name)?.state)"
+                :color="softflowStatus(row.value.name)?.retrying ? 'warning' : stateColor(softflowStatus(row.value.name)?.state)"
                 size="small"
                 variant="tonal"
                 :title="runtime(row.value.name)"
               >
-                {{ softflowStatus(row.value.name) ? stateLabels[softflowStatus(row.value.name)!.state] ?? softflowStatus(row.value.name)!.state : 'Unknown' }}
+                <ServiceWorkerStatus :status="softflowStatus(row.value.name)" />
               </v-chip>
             </td>
             <td>

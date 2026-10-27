@@ -226,7 +226,31 @@ export const transactionsSchema = z.record(transactionSchema).nullable().transfo
     if (key !== transaction.id) context.addIssue({ code: z.ZodIssueCode.custom, path: [key, "id"], message: "Transaction map key does not match ID" });
   }
 });
+export const processHealthSchema = z.object({
+  status: z.string(), healthy: z.boolean().nullable(), collected_at: timestamp.nullable(),
+  stale: z.boolean(), runtime_available: z.boolean().optional(),
+  daemon: z.object({
+    pid: integer.nonnegative(), state: z.string(), healthy: z.boolean().nullable(),
+    uptime_seconds: z.number().finite().nonnegative(), watchdog_enabled: z.boolean(),
+  }).optional(),
+  components: z.array(z.object({
+    id: z.string(), component: z.string(), resource: z.string().nullable(), state: z.string(),
+    healthy: z.boolean().nullable(), retrying: z.boolean(), collected_at: timestamp.nullable(),
+  })),
+});
+export const activeAlertSchema = z.object({
+  id: z.string(), component: z.string(), resource: z.string().nullable(), severity: z.string(),
+  code: z.string(), message: z.string(), retrying: z.boolean(),
+  first_seen_at: timestamp.nullable(), last_seen_at: timestamp.nullable(),
+});
+export const platformStatusSchema = z.object({ process_health: processHealthSchema, active_alerts: z.array(activeAlertSchema) });
+export type PlatformStatus = z.infer<typeof platformStatusSchema>;
+const platformFields = {
+  process_health: processHealthSchema.optional().catch(undefined),
+  active_alerts: z.array(activeAlertSchema).optional().catch(undefined),
+};
 export const stateSchema: z.ZodType<StateView, z.ZodTypeDef, unknown> = z.object({
+  ...platformFields,
   revision: revisionSchema, desired: configSchema, observed: z.unknown(),
   drift: z.boolean().catch(false), active_transaction: transactionSchema.optional().catch(undefined),
 }).passthrough();
@@ -240,13 +264,19 @@ export const parentSchema = z.object({
     }
   }
 });
+const supervisionFields = {
+  retrying: z.boolean().optional(), restart_count: integer.nonnegative().optional(),
+  last_error: z.string().optional(),
+};
 export const serviceStatusSchema = z.object({
+  ...supervisionFields,
   name: z.string(), state: z.string(), pid: integer.optional(),
   started_at: timestamp.nullable().optional(), error: optionalText,
   dropped_packets: z.string().regex(/^(0|[1-9]\d*)$/).optional(),
   statistics_complete: z.boolean().optional(),
 });
 export const dhcpRelayStatusSchema = z.object({
+  ...supervisionFields,
   interface: z.string(), state: z.string(), pid: integer.optional(),
   started_at: timestamp.nullable().optional(), error: optionalText,
 });
@@ -255,6 +285,7 @@ export const dhcpRelayStatusPageSchema = z.object({
 });
 const metric = z.number().finite().nonnegative().nullable();
 export const gatewayStatisticsSchema = z.object({
+  ...supervisionFields,
   name: z.string(), process_state: z.string(), sample_status: z.string(), health: z.string(),
   mode: z.enum(["explicit", "dhcp"]).optional(), interface: z.string().optional(),
   resolved_source_address: z.string().nullable().optional(), resolved_gateway: z.string().nullable().optional(),
@@ -274,6 +305,10 @@ export const gatewayStatisticsPageSchema = z.object({ sample: sampleSchema, moni
 export const gatewayStatisticsDetailSchema = z.object({ sample: sampleSchema, monitor: gatewayStatisticsSchema });
 export const gatewayStatusPageSchema = z.object({ monitors: list(gatewayStatisticsSchema), error: optionalText });
 export const applianceStatusSchema = z.object({
+  ...supervisionFields,
+  destination_errors: z.array(z.string()).optional(),
+  captured_records: integer.nonnegative().optional(), forwarded_records: integer.nonnegative().optional(),
+  failed_deliveries: integer.nonnegative().optional(),
   name: z.string(), scope: z.enum(["host", "managed"]), state: z.string(),
   pid: integer.optional(), started_at: timestamp.nullable().optional(),
   database_directory: optionalText, error: optionalText,
@@ -291,6 +326,7 @@ export const mdnsCounterNames = [
 ] as const;
 const decimalCounter = z.string().regex(/^(0|[1-9]\d*)$/);
 export const mdnsStatusSchema = z.object({
+  ...supervisionFields,
   name: z.literal("mdns"), scope: z.literal("managed"), enabled: z.boolean(),
   state: z.enum(["disabled", "simulated", "running", "stopped", "error"]),
   started_at: timestamp.nullable(), collected_at: timestamp.nullable(), error: z.string().nullable(),
@@ -319,6 +355,7 @@ export const runtimeSchema = z.preprocess(value => {
   }
   return value;
 }, z.object({
+  ...platformFields,
   capabilities: z.object({
     gateway_monitor_modes: z.array(z.string()).optional(),
     dhcp_gateway_monitor_address_families: z.array(z.string()).optional(),
@@ -382,6 +419,8 @@ export type SoftflowdConfig = z.infer<typeof softflowdSchema>;
 export type Peer = z.infer<typeof peerSchema>;
 export type Transaction = z.infer<typeof transactionSchema>;
 export interface StateView {
+  process_health?: PlatformStatus["process_health"];
+  active_alerts?: PlatformStatus["active_alerts"];
   revision: string;
   desired: Config;
   observed?: unknown;

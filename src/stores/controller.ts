@@ -4,7 +4,7 @@ import { ApiFailure, onUnauthorized, setApiDevice } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import {
   configSchema, knownStatuses, terminal,
-  type Config, type StateView, type RuntimeState, type Transaction,
+  type Config, type StateView, type RuntimeState, type Transaction, type PlatformStatus,
   type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, stableJson, syncWireGuardRoutes, validateConfig } from "@/services/configuration";
@@ -31,6 +31,21 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 export const useControllerStore = defineStore("controller", () => {
   const connected = ref(false), connecting = ref(false), authError = ref<string | null>(null);
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
+  const platform = dataset<PlatformStatus>();
+  const platformUnsupported = ref(false);
+  const healthStatus = computed(() => {
+    const sources = [state, runtime, platform].filter(query => query.data?.process_health);
+    sources.sort((left, right) => {
+      const time = (query: typeof sources[number]) => Date.parse(query.data?.process_health?.collected_at ?? "") || query.lastSuccess || 0;
+      return time(right) - time(left) || (right.lastSuccess ?? 0) - (left.lastSuccess ?? 0);
+    });
+    const source = sources[0];
+    return source?.data?.process_health ? {
+      process_health: source.data.process_health,
+      active_alerts: [...new Map((source.data.active_alerts ?? []).map(alert => [alert.id, alert])).values()],
+      stale: source.stale || source.data.process_health.stale,
+    } : null;
+  });
   const transactions = dataset<Record<string, Transaction>>(), statistics = dataset<Statistics>();
   const gatewayStatistics = dataset<GatewayStatisticsPage>();
   const hostHealth = dataset<HostHealth>(), mqttStatus = dataset<z.infer<typeof mqttStatusSchema>>();
@@ -60,7 +75,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, platform, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -144,6 +159,17 @@ export const useControllerStore = defineStore("controller", () => {
   }
   const refreshState = () => load(state, api.getState);
   const refreshRuntime = () => load(runtime, api.getRuntime);
+  async function refreshPlatformStatus(): Promise<void> {
+    if (platformUnsupported.value) return;
+    const session = epoch;
+    await load(platform, async signal => {
+      try { return await api.getPlatformStatus(signal); }
+      catch (error) {
+        if (session === epoch && error instanceof ApiFailure && [403, 404, 405].includes(error.status ?? 0)) platformUnsupported.value = true;
+        throw error;
+      }
+    });
+  }
   async function refreshUpgrade(): Promise<void> {
     const session = epoch;
     await load(upgrade, api.getSystemUpgrade);
@@ -218,6 +244,7 @@ export const useControllerStore = defineStore("controller", () => {
     catch (error) { authError.value = error instanceof Error ? error.message : "Invalid saved firewall"; return false; }
     connecting.value = true; authError.value = null;
     invalidateReads();
+    platform.data = null; platformUnsupported.value = false;
     hostHealth.data = null; mqttStatus.data = null; mdnsStatus.data = null;
     await load(transactions, api.getTransactions);
     if (transactions.stale) {
@@ -236,6 +263,7 @@ export const useControllerStore = defineStore("controller", () => {
   function disconnect(): void {
     rememberRegistryDevice("");
     setApiDevice(""); connected.value = false; invalidateReads();
+    platformUnsupported.value = false;
     allDatasets.forEach((query) => { query.data = null; query.error = null; query.lastSuccess = null; query.incompatible = false; });
     draft.value = null; baseline.value = null; baseRevision.value = null; submitted.value = null;
     uncertain.value = null; actionError.value = null; notice.value = null; authError.value = null; ignoredFields.value = [];
@@ -449,6 +477,7 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale) revisionCache.set(id, comparisonRevision.data);
   }
   return {
+    platform, platformUnsupported, healthStatus, refreshPlatformStatus,
     connected, connecting, authError, state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, revisions, revisionDetail,
     nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, ignoredFields, uncertain, editorDirty,
     monitoring, gatewayMonitoring, activeTransactions, unknownStatus, incompatible, draftStale, diff, validation, freshState,

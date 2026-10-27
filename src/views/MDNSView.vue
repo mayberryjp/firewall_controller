@@ -7,6 +7,7 @@ import { mdnsCounterNames, mdnsSchema, type MDNSConfig } from "@/types/domain";
 import { formatTimestamp } from "@/services/timestamps";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import ServiceRepair from "@/components/feature/ServiceRepair.vue";
+import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 
 const store = useControllerStore();
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
@@ -235,14 +236,6 @@ function stage(): void {
       :query="store.mdnsStatus"
       label="mDNS status"
     />
-    <v-alert
-      v-if="store.mdnsStatus.data?.error || status?.error"
-      type="warning"
-      variant="tonal"
-      class="mb-3"
-    >
-      {{ store.mdnsStatus.data?.error || status?.error }}
-    </v-alert>
     <p class="mb-2">
       Committed configured membership: {{ committedMembership.join(', ') || 'None' }}
     </p>
@@ -254,7 +247,10 @@ function stage(): void {
     </p>
     <template v-if="status">
       <p class="mb-2">
-        {{ store.mdnsStatus.stale ? 'Stale last-known state' : 'State' }}: {{ status.state }}{{ provisional ? ' (provisional)' : '' }}.
+        {{ store.mdnsStatus.stale ? 'Stale last-known state' : 'State' }}: <ServiceWorkerStatus
+          :status="status"
+          :label="status.state"
+        />{{ provisional ? ' (provisional)' : '' }}.
         Applied membership: {{ status.effective_interfaces.join(', ') || 'None' }}.
         Applied families: {{ status.effective_families.join(', ') || 'None' }}.
       </p>
@@ -263,28 +259,14 @@ function stage(): void {
         Applied publishing: {{ status.publishing_enabled ? 'On' : 'Off' }}.
         Running means local readiness, not verified discovery or delivery.
       </p>
-      <v-alert
-        v-for="warning in status.warnings.slice(0, 8)"
-        :key="warning"
-        type="warning"
-        variant="tonal"
-        class="mb-2"
-      >
-        {{ warning.slice(0, 512) }}
-      </v-alert>
-      <p v-if="status.warnings.length > 8">
-        {{ status.warnings.length - 8 }} additional warnings.
-      </p>
-      <v-alert
-        v-if="!status.statistics_complete"
-        type="info"
-        variant="tonal"
-        class="my-3"
-      >
-        Statistics are incomplete or not measured. Counters reset when the worker starts; successful sends do not verify client receipt.
-      </v-alert>
       <details class="my-4">
         <summary>Traffic counters and sample times</summary>
+        <p
+          v-if="!status.statistics_complete"
+          class="text-caption text-medium-emphasis mt-2"
+        >
+          Statistics are incomplete or not measured. Successful sends do not verify client receipt.
+        </p>
         <p class="my-3">
           Started (UTC): {{ formatTimestamp(status.started_at) }}.
           Collected (UTC): {{ formatTimestamp(status.collected_at) }}.

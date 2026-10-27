@@ -96,6 +96,45 @@ Status failures retain local edits and do not globally lock configuration.
 Repair uses committed/pending settings, never the draft, and requires `mdns.write`
 for enabled mDNS even through another service's aggregate repair endpoint.
 
+Service recovery follows the [October 27 handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-27.md).
+Optional `retrying`, `restart_count`, and `last_error` fields are retained for NTP,
+syslog, vnStat, mDNS, DHCP relay, flow export, and gateway workers. Explicit retrying
+status displays **Recovering**; its tooltip preserves restart count and last failure
+after recovery. Missing fields remain compatible with older backends. Service pages
+poll runtime every five seconds without overlapping reads; gateway/mDNS reads use
+three-second intervals with failure backoff capped at five seconds. Desired settings
+and unsaved edits are not changed by recovery. Manual reconciliation remains optional,
+not required to retry a worker. A matching rebuilt backend is required for automatic
+recovery; these backend changes remain **Unreleased**.
+
+Syslog delivery conditions appear in the consolidated issues panel even while its worker
+is running. Failed sends are not replayed, and successful writes are not delivery receipts. Stale samples
+remain identified as stale; recovering NTP workers do not present retained measurements
+as current synchronization, and recovering gateway workers do not receive fresh health
+or metric ratings.
+
+### Consolidated Health And Issues
+
+The fixed-size, icon-only connection bubble is the single on-demand location for
+passive health warnings and configuration-recovery issues. It never expands, opens
+automatically, or places repeated yellow/red banners above pages. Service rows retain
+compact factual status; form validation and explicit operation failures remain inline.
+
+The [October 27 platform handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-27.md#2026-10-27-02-watchdog-process-health-and-active-alerts)
+adds optional `process_health` and `active_alerts` to state/runtime plus cached
+`GET /platform/status`. Cached health polls every three seconds, non-overlapping,
+with a five-second maximum failure backoff and hidden/disconnected-tab pause. It stays
+available independently of configuration observation. Unsupported or forbidden cached
+endpoints stop polling for the session; existing service status remains compatible.
+The panel shows backend-reported aggregate/component states, freshness and active
+alerts, deduplicated by stable ID. First/last-seen times use UTC seconds. Unknown codes
+remain readable; recovery removes resolved alerts. There is no dismiss, acknowledgement,
+stored alert history or automatic repair. Stale/unavailable data never implies healthy.
+These observations never enter drafts or write requests, change desired settings,
+block configuration operations, or trigger service/daemon restarts. Backend watchdog
+deployment remains a separate operator-approved action; no backend deployment is made
+by the frontend.
+
 Deploy a matching rebuilt backend: native mDNS remains **Unreleased**. Linux
 namespace/host-service opt-in, usable local addresses, exclusive UDP 5353 ownership,
 and one reflector per connected domain are required. No competing daemon is

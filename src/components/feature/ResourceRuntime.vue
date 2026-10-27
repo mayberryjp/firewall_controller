@@ -16,12 +16,5 @@ const store = useControllerStore();
       :query="store.runtime"
       :label="section === 'interfaces' ? 'Interface / relay runtime' : 'Service runtime'"
     />
-    <v-alert
-      v-if="store.runtime.data?.error"
-      :type="section === 'interfaces' ? 'error' : 'warning'"
-      class="mb-4"
-    >
-      {{ store.runtime.data.error }}
-    </v-alert>
   </template>
 </template>

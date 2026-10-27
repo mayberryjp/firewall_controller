@@ -5,6 +5,7 @@ import { formatMetric, gatewayHealth, gatewayMetricIndicator, gatewaySampleState
 import { formatTimestamp } from "@/services/timestamps";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
+import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 const props = defineProps<{ name?: string; statusOnly?: boolean; summary?: boolean }>();
 const store = useControllerStore();
 const now = ref(Date.now());
@@ -36,7 +37,7 @@ const measurements = computed<Record<string, string | number | undefined>>(() =>
     Loss: formatMetric(row.data.loss_percent, "%"),
     "Mean RTT": formatMetric(row.data.rtt_avg_ms, "ms"),
     Stddev: formatMetric(row.data.rtt_stddev_ms, "ms"),
-    Worker: label(row.data.process_state, workerStates),
+    Worker: row.data.retrying ? "Recovering" : label(row.data.process_state, workerStates),
     "Minimum RTT": formatMetric(row.data.rtt_min_ms, "ms"),
     "Maximum RTT": formatMetric(row.data.rtt_max_ms, "ms"),
     "P50 RTT": formatMetric(row.data.rtt_p50_ms, "ms"),
@@ -86,6 +87,7 @@ function label(state: string, known: string[]): string {
     :health-color="healthColor"
     :metric-indicators="metricIndicators"
     :error="detailRow?.data?.error"
+    :worker="detailRow?.data"
   />
   <section
     v-else
@@ -121,6 +123,11 @@ function label(state: string, known: string[]): string {
             >
               {{ value }}
             </v-chip>
+            <ServiceWorkerStatus
+              v-else-if="key === 'Worker'"
+              :status="detailRow.data"
+              :label="String(value)"
+            />
             <template v-else>
               {{ value }}
             </template>
@@ -129,12 +136,6 @@ function label(state: string, known: string[]): string {
       </dl>
       <p v-else>
         Unknown (no monitor sample)
-      </p>
-      <p
-        v-if="detailRow?.data?.error"
-        role="alert"
-      >
-        {{ detailRow.data.error }}
       </p>
     </template>
     <v-table v-else-if="!statusOnly">
@@ -152,6 +153,7 @@ function label(state: string, known: string[]): string {
             <td>{{ formatMetric(row.data.rtt_avg_ms, "ms") }}</td>
             <td>{{ formatMetric(row.data.rtt_stddev_ms, "ms") }}</td>
             <td>
+              <ServiceWorkerStatus :status="row.data" />
               <JsonPanel
                 label="Measurements"
                 :value="{
@@ -180,12 +182,6 @@ function label(state: string, known: string[]): string {
               />
               <p v-if="row.data.reason">
                 {{ row.data.reason }}
-              </p>
-              <p
-                v-if="row.data.error"
-                role="alert"
-              >
-                {{ row.data.error }}
               </p>
             </td>
           </template>

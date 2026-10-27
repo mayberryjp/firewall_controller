@@ -4,13 +4,14 @@ import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, validateConfig } from "@/services/configuration";
 import { dhcpRelaySchema } from "@/types/domain";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
+import RelayStatus from "@/components/feature/RelayStatus.vue";
 
 const store = useControllerStore();
 const stored = computed(() => store.draft ?? store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
 const links = computed(() => (stored.value?.interfaces ?? []).filter(link => link.kind !== "wireguard").sort((a, b) => a.name.localeCompare(b.name)));
 const blocked = computed(() => Boolean(store.readOnlyReason) || !stored.value);
 const editing = ref<string | null>(null), servers = ref(""), error = ref("");
-const runtimeError = (name: string) => store.runtime.data?.dhcp_relay.find(item => item.interface === name)?.error;
+const runtimeStatus = (name: string) => store.runtime.data?.dhcp_relay.find(item => item.interface === name);
 
 function commit(name: string, mutate: (relay: { enabled: boolean; servers: string[] }) => void): void {
   if (!stored.value) throw new Error("Committed configuration is unavailable.");
@@ -56,13 +57,6 @@ function toggle(name: string, enabled: boolean): void {
       label="DHCP relay runtime"
     />
     <v-alert
-      v-if="store.runtime.data?.error"
-      type="error"
-      class="mb-4"
-    >
-      {{ store.runtime.data.error }}
-    </v-alert>
-    <v-alert
       v-if="error"
       type="error"
       role="alert"
@@ -103,11 +97,11 @@ function toggle(name: string, enabled: boolean): void {
             class="mono"
           >
             {{ link.dhcp_relay.servers.join(", ") || "None" }}
-            <span
-              v-if="runtimeError(link.name)"
-              role="alert"
-              class="text-error"
-            > · {{ runtimeError(link.name) }}</span>
+            <RelayStatus
+              v-if="runtimeStatus(link.name)"
+              :status="runtimeStatus(link.name)"
+              class="text-caption ml-2"
+            />
           </td>
           <td>
             <v-switch

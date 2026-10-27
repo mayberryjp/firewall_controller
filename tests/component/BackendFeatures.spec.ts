@@ -18,6 +18,7 @@ import WireGuardView from "@/views/WireGuardView.vue";
 import TunnelsView from "@/views/TunnelsView.vue";
 import DHCPRelayView from "@/views/DHCPRelayView.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
+import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 import ServiceRepair from "@/components/feature/ServiceRepair.vue";
 import SystemUpgrade from "@/components/feature/SystemUpgrade.vue";
 import FieldInput from "@/components/base/FieldInput.vue";
@@ -78,6 +79,72 @@ function cellValue(cell: Pick<DOMWrapper<Element>, "element">): string {
   return (content.textContent ?? "").trim();
 }
 describe("October 17 frontend workflows", () => {
+  it("shows recovering workers and retains last failure history without changing configuration", async () => {
+    const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
+    const wrapper = mount(ServiceWorkerStatus, { props: { status: {
+      state: "error", retrying: true, restart_count: 2, error: "Link down", last_error: "Link down",
+    } } });
+    expect(wrapper.text()).toBe("Recovering");
+    expect(wrapper.attributes("title")).toContain("Restart count: 2");
+    await wrapper.setProps({ status: { state: "running", retrying: false, restart_count: 2, last_error: "Link down" } });
+    expect(wrapper.text()).toBe("Running");
+    expect(wrapper.attributes("title")).toContain("Last failure: Link down");
+    expect(wrapper.attributes("title")).not.toContain("Current error");
+    expect(store.draft).toBeNull(); expect(store.state.data!.desired).toEqual(desired);
+    wrapper.unmount();
+  });
+  it("keeps syslog delivery failures out of page banners and leaves the editor usable", async () => {
+    const store = useControllerStore();
+    store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{
+      name: "syslog", scope: "host", state: "running", destination_errors: ["collector.example: disconnected"],
+      failed_deliveries: 3, captured_records: 10, forwarded_records: 7,
+    }] });
+    const wrapper = await render(SyslogView, "/services/syslog");
+    expect(wrapper.text()).toContain("Running");
+    expect(wrapper.text()).not.toContain("missed destination deliveries");
+    expect(wrapper.text()).not.toContain("collector.example: disconnected");
+    expect(wrapper.findComponent({ name: "VAlert" }).exists()).toBe(false);
+    expect(wrapper.findAll("button").find(button => button.text() === "Add remote syslog server")!.attributes("disabled")).toBeUndefined();
+    expect(store.draft).toBeNull();
+    store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{
+      name: "syslog", scope: "host", state: "running", destination_errors: [], failed_deliveries: 0,
+      last_error: "collector.example: disconnected",
+    }] });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("missed destination deliveries");
+    expect(wrapper.find('[title*="Last failure: collector.example: disconnected"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+  it("shows NTP recovery without displaying retained measurements as fresh", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.ntp = { enabled: true, servers: ["clock.example"] };
+    store.runtime.stale = false;
+    store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{
+      name: "ntp", scope: "host", state: "error", retrying: true, restart_count: 2,
+      last_error: "Clock permission denied", sample_status: "available", offset_ms: 17.2,
+    }] });
+    const wrapper = await render(NTPView, "/services/ntp");
+    expect(wrapper.text()).toContain("Recovering");
+    expect(wrapper.text()).not.toContain("17.2 ms");
+    expect(wrapper.find('[title*="Clock permission denied"]').exists()).toBe(true);
+    expect(store.readOnlyReason).toBe("");
+    wrapper.unmount();
+  });
+  it("shows recovering gateways without presenting retained samples as fresh", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.gateway_monitors = [monitor()];
+    store.gatewayStatistics.stale = false;
+    const sample = { ...gatewayStatistics(), retrying: true, restart_count: 2, last_error: "Link down" };
+    store.gatewayStatistics.data = { sample: statistics().sample, monitors: [sample] };
+    const wrapper = await render(GatewayStatisticsPanel, "/gateway-monitors", { name: sample.name });
+    const measurement = (key: string) => wrapper.findAll("dt").find(item => item.text() === key)!.element.nextElementSibling!.textContent!.trim();
+    expect(measurement("Worker")).toBe("Recovering");
+    expect(measurement("Sample")).toBe("stale");
+    expect(measurement("Health")).toBe("unknown");
+    expect(wrapper.find('[title*="Restart count: 2"]').exists()).toBe(true);
+    expect(store.draft).toBeNull();
+    wrapper.unmount();
+  });
   it.each([true, false])("stages one DHCP DNS override choice (%s) for every configured interface", async value => {
     const store = useControllerStore(), desired = store.state.data!.desired;
     desired.interfaces.push(
@@ -319,7 +386,10 @@ describe("October 17 frontend workflows", () => {
         expect(chip.attributes("data-color")).toBe("default");
         expect(chip.attributes("aria-label")).toContain("Unrated");
       }
-      if (condition === "error") expect(wrapper.get('[role="alert"]').text()).toContain("Probe unavailable");
+      if (condition === "error") {
+        expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+        expect(wrapper.find('[title*="Current error: Probe unavailable"]').exists()).toBe(true);
+      }
     } finally { wrapper.unmount(); }
   });
   it.each([
@@ -2195,7 +2265,8 @@ describe("October 17 frontend workflows", () => {
     ["unhealthy", "Unhealthy"], ["exited", "Exited"], ["future", "Unknown (future)"],
   ])("labels %s relay state truthfully", (state, label) => {
     const wrapper = mount(RelayStatus, { props: { status: { interface: "lab0", state, pid: 123, error: "explicit error" } } });
-    expect(wrapper.text()).toContain(label); expect(wrapper.attributes("title")).toContain("PID 123"); expect(wrapper.text()).toContain("explicit error");
+    expect(wrapper.text()).toContain(label); expect(wrapper.attributes("title")).toContain("PID 123");
+    expect(wrapper.text()).not.toContain("explicit error"); expect(wrapper.find('[title*="Current error: explicit error"]').exists()).toBe(true);
   });
   it("does not synthesize a runtime state when status is missing", () => {
     expect(mount(RelayStatus).text()).toBe("Unknown");
@@ -2206,7 +2277,8 @@ describe("October 17 frontend workflows", () => {
     store.runtime.data!.error = "Observation failed";
     store.runtime.data!.dhcp_relay = [{ interface: "lab0", state: "exited", error: "child exited" }];
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
-    expect(wrapper.text()).toContain("Observation failed"); expect(wrapper.text()).toContain("child exited");
+    expect(wrapper.text()).not.toContain("Observation failed"); expect(wrapper.text()).not.toContain("child exited");
+    expect(wrapper.find('[title*="Current error: child exited"]').exists()).toBe(true);
     const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("aria-label") === "Relay enabled for lab0")!;
     expect(toggle.props("modelValue")).toBe(true);
     expect(wrapper.find("thead").text()).not.toMatch(/Relay address|Enabled/);

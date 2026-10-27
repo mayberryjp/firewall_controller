@@ -329,6 +329,41 @@ describe("controller-proxied API boundary", () => {
       expect(error.uncertain).toBe(true); expect(adapter).toHaveBeenCalledOnce();
     }
   });
+  it("reads cached platform health and preserves unknown alert codes in state and runtime", async () => {
+    const snapshot = {
+      process_health: { status: "unknown", healthy: null, collected_at: null, stale: true, components: [] },
+      active_alerts: [{ id: "future:condition", component: "future", resource: null, severity: "warning", code: "future_condition", message: "Condition reported", retrying: false, first_seen_at: null, last_seen_at: null }],
+    };
+    body = encodeJson(snapshot);
+    expect(await net.getPlatformStatus()).toEqual(snapshot);
+    expect(captured?.url).toBe("/platform/status"); expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
+    body = encodeJson({ ...state(), ...snapshot });
+    expect((await net.getState()).active_alerts).toEqual(snapshot.active_alerts);
+    body = encodeJson({ ...runtime(), ...snapshot });
+    expect((await net.getRuntime()).process_health).toEqual(snapshot.process_health);
+  });
+  it("retains optional service recovery and syslog delivery status fields", async () => {
+    body = encodeJson({ ...runtime(), appliance_services: [{
+      name: "syslog", scope: "host", state: "running", retrying: false,
+      restart_count: 2, last_error: "Collector disconnected", destination_errors: ["collector.example: unavailable"],
+      captured_records: 20, forwarded_records: 10, failed_deliveries: 10,
+    }, { ...mdnsStatus(), retrying: true, restart_count: 1, last_error: "Link down" }],
+    softflowd: [{ name: "capture", state: "error", retrying: true, restart_count: 1, last_error: "Link down" }],
+    dhcp_relay: [{ interface: "lab0", state: "error", retrying: true, restart_count: 1, last_error: "Link down" }],
+    gateway_monitors: [{ ...gatewayStatistics(), retrying: true, restart_count: 1, last_error: "Link down" }],
+    });
+    const result = await net.getRuntime();
+    expect(result.appliance_services[0]).toMatchObject({
+      retrying: false, restart_count: 2, last_error: "Collector disconnected",
+      destination_errors: ["collector.example: unavailable"], captured_records: 20, forwarded_records: 10, failed_deliveries: 10,
+    });
+    expect(result.softflowd[0]).toMatchObject({ retrying: true, restart_count: 1, last_error: "Link down" });
+    for (const worker of [result.appliance_services[1], result.dhcp_relay[0], result.gateway_monitors[0]]) {
+      expect(worker).toMatchObject({ retrying: true, restart_count: 1, last_error: "Link down" });
+    }
+    body = encodeJson({ instances: [{ ...mdnsStatus(), retrying: true, restart_count: 1, last_error: "Link down" }], error: "" });
+    expect((await net.getMDNSStatus()).instances[0]).toMatchObject({ retrying: true, restart_count: 1, last_error: "Link down" });
+  });
   it("reads valid configuration without requiring healthy or compatible observation diagnostics", async () => {
     body = encodeJson({ revision: "0", desired: config(), active_transaction: { error: "observation unavailable" }, service_health: "failed" });
     const result = await net.getState();

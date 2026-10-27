@@ -7,7 +7,7 @@ import ApplyConfigurationDialog from "@/components/feature/ApplyConfigurationDia
 import SafetyBanner from "@/components/layout/SafetyBanner.vue";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import { useControllerStore } from "@/stores/controller";
-import { config, state, transaction, monitor } from "../fixtures";
+import { config, state, transaction, monitor, runtime } from "../fixtures";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
@@ -44,6 +44,36 @@ function saveDialog() {
   return mount(ApplyConfigurationDialog, { props: { modelValue: true }, global: { stubs } });
 }
 describe("navbar firewall status", () => {
+  it("consolidates backend health alerts in the fixed-size issue panel without health write locks", async () => {
+    const store = useControllerStore();
+    const alert = { id: "ntp:warning", component: "appliance_services", resource: "ntp", severity: "warning", code: "future_code", message: "Upstream unavailable", retrying: true, first_seen_at: "2026-10-27T01:02:03.987Z", last_seen_at: null };
+    store.platform.data = { process_health: { status: "healthy", healthy: true, stale: false, collected_at: "2026-10-27T01:02:03.987Z", components: [] }, active_alerts: [alert, alert] };
+    store.platform.stale = false;
+    const wrapper = mount(ConnectionBubble, { global: { stubs, directives: { tooltip: () => {} } } });
+    expect(wrapper.get(".connection-bubble").text()).toBe("");
+    expect(wrapper.get(".connection-bubble").attributes("size")).toBe("40");
+    expect(wrapper.findComponent({ name: "VAlert" }).exists()).toBe(false);
+    expect(wrapper.get('[aria-label="Active alerts"]').findAll("li")).toHaveLength(1);
+    expect(wrapper.text()).toContain("First seen (UTC): 2026-10-27 01:02:03");
+    expect(wrapper.text()).toContain("Last seen (UTC): Unavailable");
+    expect(store.readOnlyReason).toBe("");
+    store.platform.data = { ...store.platform.data, active_alerts: [] }; await flushPromises();
+    expect(wrapper.find('[aria-label="Active alerts"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it("consolidates legacy service errors without adding page banners", () => {
+    const store = useControllerStore();
+    store.runtime.data = { ...runtime(), error: "Observation failed", appliance_services: [{
+      name: "syslog", scope: "host", state: "running", destination_errors: ["Collector unavailable"], failed_deliveries: 3,
+    }], dhcp_relay: [{ interface: "lab0", state: "exited", error: "Relay exited" }] };
+    const wrapper = mount(ConnectionBubble, { global: { stubs, directives: { tooltip: () => {} } } });
+    expect(wrapper.get('[aria-label="Service issues"]').text()).toContain("Collector unavailable");
+    expect(wrapper.get('[aria-label="Service issues"]').text()).toContain("3 missed destination deliveries");
+    expect(wrapper.get('[aria-label="Service issues"]').text()).toContain("Relay exited");
+    expect(wrapper.findComponent({ name: "VAlert" }).exists()).toBe(false);
+    expect(wrapper.get(".connection-bubble").text()).toBe("");
+    wrapper.unmount();
+  });
   it("keeps initial and slow discovery off the page", async () => {
     const store = useControllerStore();
     for (const query of [store.state, store.transactions]) {
@@ -70,8 +100,9 @@ describe("navbar firewall status", () => {
     const wrapper = mount(SafetyBanner, { global: { stubs } });
     const bubble = mount(ConnectionBubble, { global: { stubs, directives: { tooltip: () => {} } } });
     expect(wrapper.find('[aria-label="Global safety state"]').exists()).toBe(false);
-    expect(bubble.get(".connection-bubble").text()).toBe("Read failed");
-    expect(bubble.get(".connection-bubble").classes()).toContain("connection-bubble--expanded");
+    expect(bubble.get(".connection-bubble").text()).toBe("");
+    expect(bubble.get(".connection-bubble").attributes("aria-label")).toBe("Read failed");
+    expect(bubble.get(".connection-bubble").attributes("size")).toBe("40");
     expect(bubble.text()).toContain("Observation read failed"); expect(bubble.text()).toContain("Commit discovery failed");
     expect(store.canApply).toBe(false);
     await bubble.findAll("button").find(button => button.text() === "Retry")!.trigger("click");
@@ -118,8 +149,8 @@ describe("navbar firewall status", () => {
     store.connected = false; await flushPromises();
     expect(wrapper.get(".connection-bubble").attributes("aria-label")).toBe("Offline");
     expect(wrapper.get(".connection-bubble").attributes("color")).toBe("error");
-    expect(wrapper.get(".connection-bubble").attributes("prepend-icon")).toBe("mdi-lan-disconnect");
-    expect(wrapper.get(".connection-bubble").text()).toBe("Offline");
+    expect(wrapper.get(".connection-bubble").attributes("icon")).toBe("mdi-lan-disconnect");
+    expect(wrapper.get(".connection-bubble").text()).toBe("");
     expect(tooltip.mock.calls.at(-1)![1].value).toBe("Offline");
     expect(wrapper.findAll("button").some(button => button.text() === "Disconnect")).toBe(false);
   });

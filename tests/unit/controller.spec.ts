@@ -11,6 +11,7 @@ vi.mock("@/services/netcontrol", () => ({
   submitPackage: vi.fn(), confirmTransaction: vi.fn(), rollbackTransaction: vi.fn(),
   restoreRevision: vi.fn(), reconcileServices: vi.fn(),
   getSystemUpgrade: vi.fn(), startSystemUpgrade: vi.fn(),
+  getPlatformStatus: vi.fn(),
 }));
 beforeEach(() => {
   setActivePinia(createPinia()); vi.resetAllMocks();
@@ -29,6 +30,22 @@ async function connected() {
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("deduplicates platform alerts, clears recovered conditions, and never copies health into drafts", async () => {
+    const store = await connected();
+    const alert = { id: "ntp:worker", component: "appliance_services", resource: "ntp", severity: "error", code: "future_code", message: "NTP recovering", retrying: true, first_seen_at: "2026-10-27T00:00:00.123Z", last_seen_at: null };
+    const snapshot = { process_health: { status: "unhealthy", healthy: false, collected_at: "2026-10-27T00:00:00.123Z", stale: false, components: [] }, active_alerts: [alert, alert] };
+    vi.mocked(api.getPlatformStatus).mockResolvedValue(snapshot);
+    vi.mocked(api.getState).mockRejectedValue(new Error("Observation unavailable"));
+    await store.refreshState(); await store.refreshPlatformStatus();
+    expect(store.healthStatus?.active_alerts).toEqual([alert]);
+    expect(store.readOnlyReason).toBe("");
+    store.stage(config());
+    expect(store.draft).not.toHaveProperty("process_health"); expect(store.draft).not.toHaveProperty("active_alerts");
+    vi.mocked(api.getPlatformStatus).mockResolvedValue({ ...snapshot, process_health: { ...snapshot.process_health, status: "healthy", healthy: true }, active_alerts: [] });
+    await store.refreshPlatformStatus();
+    expect(store.healthStatus?.active_alerts).toEqual([]);
+    store.disconnect(); expect(store.platform.data).toBeNull();
+  });
   it("connects through readable configuration when transaction discovery is unavailable", async () => {
     vi.mocked(api.getTransactions).mockRejectedValue(new ApiFailure("transactions unavailable", 503));
     const store = await connected();

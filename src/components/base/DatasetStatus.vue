@@ -18,17 +18,16 @@ defineProps<{ query: Dataset<unknown>; label: string }>();
   >
     Loading {{ label.toLowerCase() }} is taking longer than usual.
   </p>
-  <v-alert
+  <p
     v-if="query.error"
-    :type="query.incompatible ? 'error' : 'warning'"
-    variant="tonal"
-    class="mb-4"
+    class="text-caption text-medium-emphasis mb-3"
+    role="status"
   >
     {{ label }}: {{ query.error }}
-    <div v-if="query.lastSuccess">
+    <span v-if="query.lastSuccess">
       Showing previously loaded data.
-    </div>
-  </v-alert>
+    </span>
+  </p>
   <p
     v-else-if="query.stale && query.lastSuccess"
     class="text-caption text-medium-emphasis mb-3"

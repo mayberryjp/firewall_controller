@@ -8,6 +8,7 @@ import { record, type Field } from "@/types/forms";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import FieldInput from "@/components/base/FieldInput.vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
+import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 const props = defineProps<{ service: ApplianceService }>();
 const store = useControllerStore();
 const service = toRef(props, "service");
@@ -60,10 +61,6 @@ const statusNames = computed(() => service.value === "vnstat" ? ["vnstat-host", 
 const statusRows = computed(() => statusNames.value.map(name => ({
   name, status: store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === name),
 })));
-const statusLabels: Record<string, string> = {
-  disabled: "Disabled", simulated: "Simulated", unavailable: "Unavailable", not_running: "Not running",
-  running: "Running", unhealthy: "Unhealthy", exited: "Exited",
-};
 const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?.error));
 </script>
 <template>
@@ -76,13 +73,6 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
       :query="store.runtime"
       label="Appliance service runtime"
     />
-    <v-alert
-      v-if="store.runtime.data?.error"
-      type="error"
-      class="mb-4"
-    >
-      {{ store.runtime.data.error }}
-    </v-alert>
     <v-alert
       v-if="store.readOnlyNotice"
       type="warning"
@@ -107,7 +97,7 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
         >
           <td>{{ name }}</td>
           <td>{{ status?.scope ?? "Unknown" }}</td>
-          <td>{{ status ? statusLabels[status.state] ?? `Unknown (${status.state})` : "Unknown" }}</td>
+          <td><ServiceWorkerStatus :status="status" /></td>
           <td :title="status?.started_at ? `Started ${formatTimestamp(status.started_at)} UTC` : undefined">
             {{ status?.pid ?? "—" }}
           </td>

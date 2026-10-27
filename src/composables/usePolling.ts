@@ -30,12 +30,14 @@ export function usePolling(): void {
     });
   }
   onMounted(() => {
+    schedule(store.refreshPlatformStatus, () => 3000, () => Boolean(store.platform.error), () => true, true, 5000);
     schedule(store.refreshState, () => store.activeTransactions.length || store.uncertain ? 1000 : 5000, () => Boolean(store.state.error));
-    schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error));
-    schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error), () => route.path.startsWith("/wireguard") || route.path === "/routes", true);
+    schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error), () =>
+      route.path === "/overview" || route.path.startsWith("/wireguard") || route.path === "/routes" ||
+      route.path.startsWith("/services/"), true, 5000);
     schedule(store.refreshTransactions, () => store.activeTransactions.length || store.uncertain ? 1000 : 10000, () => Boolean(store.transactions.error));
     schedule(store.refreshStatistics, () => 3000, () => Boolean(store.statistics.error), () => store.monitoring);
-    schedule(store.refreshGatewayStatistics, () => 3000, () => Boolean(store.gatewayStatistics.error), () => store.gatewayMonitoring && ["/overview", "/gateway-monitors"].includes(route.path), true);
+    schedule(store.refreshGatewayStatistics, () => 3000, () => Boolean(store.gatewayStatistics.error), () => store.gatewayMonitoring && ["/overview", "/gateway-monitors"].includes(route.path), true, 5000);
     schedule(store.refreshHostHealth, () => 3000, () => Boolean(store.hostHealth.error));
     schedule(store.refreshMqttStatus, () => 7500, () => Boolean(store.mqttStatus.error), () => route.path === "/settings/mqtt-streaming", true);
     schedule(store.refreshDynamicDnsStatus, () => 7500, () => Boolean(store.dynamicDnsStatus.error), () => route.path === "/settings/dynamic-dns", true);

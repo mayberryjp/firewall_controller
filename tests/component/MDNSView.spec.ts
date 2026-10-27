@@ -47,6 +47,23 @@ beforeEach(() => {
 });
 
 describe("mDNS / Discovery", () => {
+  it("shows automatic recovery and retains unsaved edits and stale sample timestamps", async () => {
+    const store = useControllerStore();
+    const sample = { ...mdnsStatus(), state: "error" as const, retrying: true, restart_count: 2, last_error: "Link down" };
+    store.mdnsStatus.data = { instances: [sample], error: "" };
+    store.mdnsStatus.stale = true;
+    const wrapper = mount(MDNSView, { global });
+    await wrapper.get('textarea[aria-label="Discovery filters"]').setValue("printer.local.");
+    expect(wrapper.text()).toContain("Recovering");
+    expect(wrapper.text()).toContain("Stale last-known state");
+    expect(wrapper.find('[title*="Last failure: Link down"]').exists()).toBe(true);
+    store.mdnsStatus.data = { instances: [{ ...sample, state: "running", retrying: false }], error: "" };
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Recovering");
+    expect(wrapper.get<HTMLTextAreaElement>('textarea[aria-label="Discovery filters"]').element.value).toBe("printer.local.");
+    expect(store.editorDirty).toBe(true); expect(store.readOnlyReason).toBe("");
+    wrapper.unmount();
+  });
   it("stages the full shared draft, normalizes filters and retains metadata without a backend write or popup", async () => {
     const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
     store.stage(desired); store.draft!.ntp = { enabled: true, servers: ["time.example.com"] };

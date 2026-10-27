@@ -43,7 +43,7 @@ async function repair(): Promise<void> {
           v-if="stored?.mdns?.enabled || service === 'mdns'"
           class="mt-3"
         >
-          mDNS repair restarts discovery workers and resets counters. Interface lifecycle failures require explicit repair; no competing UDP 5353 owner is stopped.
+          mDNS repair restarts discovery workers and resets counters. Link failures recover automatically; no competing UDP 5353 owner is stopped.
         </p>
         <p class="mt-3">
           Required permissions across stored enabled services: <span class="mono">{{ permissions }}</span>. The backend checks authorization under its engine lock; this client has no permission-discovery endpoint.

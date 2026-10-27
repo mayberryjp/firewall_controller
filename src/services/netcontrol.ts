@@ -10,6 +10,7 @@ import {
   applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, mdnsSchema, mdnsStatusPageSchema,
   gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
   connectionDeletionSchema, upgradeVersionSchema, upgradeJobSchema, upgradeStatusSchema, type Connection,
+  platformStatusSchema,
 } from "@/types/domain";
 
 const id = encodeURIComponent;
@@ -39,6 +40,7 @@ export async function uploadMqttPassword(password: string, signal?: AbortSignal)
   }
 }
 export const getState = (signal?: AbortSignal) => request("GET", "/state", stateSchema, undefined, signal);
+export const getPlatformStatus = (signal?: AbortSignal) => request("GET", "/platform/status", platformStatusSchema, undefined, signal);
 export const getRuntime = (signal?: AbortSignal) => request("GET", "/runtime", runtimeSchema, undefined, signal);
 export const getDiscoveredInterfaces = (signal?: AbortSignal) => request("GET", "/interfaces/discovered", discoveredInterfacesSchema, undefined, signal);
 export const retryDHCP = (name: string) => request("POST", `/interfaces/${id(name)}/dhcp/retry`, dhcpRetrySchema);

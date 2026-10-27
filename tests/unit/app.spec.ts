@@ -117,6 +117,58 @@ describe("app store", () => {
 });
 
 describe("page-scoped polling", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "getPlatformStatus").mockResolvedValue({ process_health: {
+      status: "unknown", healthy: null, collected_at: null, stale: true, components: [],
+    }, active_alerts: [] });
+  });
+  it("polls cached health independently of failed configuration reads without overlapping or changing drafts", async () => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    store.state.data = state(); store.stage(state().desired); store.state.error = "Observation unavailable";
+    const draft = JSON.stringify(store.draft);
+    vi.spyOn(store, "refreshUpgrade").mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let finish!: (value: Awaited<ReturnType<typeof api.getPlatformStatus>>) => void;
+    const read = vi.mocked(api.getPlatformStatus).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push("/config/changes");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(12000); expect(read).toHaveBeenCalledTimes(1);
+      finish({ process_health: { status: "unknown", healthy: null, collected_at: null, stale: true, components: [] }, active_alerts: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(3000); expect(read).toHaveBeenCalledTimes(2);
+      visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(9000); expect(read).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(store.draft)).toBe(draft);
+    } finally { wrapper.unmount(); visibility.mockRestore(); vi.useRealTimers(); }
+  });
+  it.each(["/services/ntp", "/services/syslog", "/services/vnstat", "/services/dhcp-relay", "/services/netflow", "/services/netflow/capture"])("polls recovering service runtime on %s without overlapping reads", async path => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    for (const action of ["refreshState", "refreshTransactions", "refreshStatistics", "refreshGatewayStatistics", "refreshUpgrade", "refreshHostHealth"] as const) {
+      vi.spyOn(store, action).mockResolvedValue();
+    }
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let finish!: () => void;
+    const read = vi.spyOn(store, "refreshRuntime").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue();
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push(path);
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(15000); expect(read).toHaveBeenCalledTimes(1);
+      finish(); await vi.advanceTimersByTimeAsync(0);
+      store.runtime.error = "Service status unavailable";
+      await vi.advanceTimersByTimeAsync(4999); expect(read).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1); expect(read).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(20000); expect(read).toHaveBeenCalledTimes(6);
+      await router.push("/config/changes"); await vi.advanceTimersByTimeAsync(10000);
+      expect(read).toHaveBeenCalledTimes(6);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
   it("polls mDNS only on its page at 3..5 seconds, deduplicating in-flight reads and pausing hidden/disconnected tabs", async () => {
     vi.useFakeTimers();
     const pinia = createPinia(); setActivePinia(pinia);
@@ -202,7 +254,7 @@ describe("page-scoped polling", () => {
       await vi.advanceTimersByTimeAsync(6000); expect(refreshGatewayStatistics).toHaveBeenCalledTimes(2);
     } finally { wrapper.unmount(); vi.useRealTimers(); }
   });
-  it.each(["/interfaces", "/interfaces/lab0", "/services/ntp", "/config/commits/tx-test", "/config/changes", "/config/revisions"])("keeps %s manual even during pending transactions", async path => {
+  it.each(["/interfaces", "/interfaces/lab0", "/config/commits/tx-test", "/config/changes", "/config/revisions"])("keeps %s manual even during pending transactions", async path => {
     vi.useFakeTimers();
     const pinia = createPinia();
     setActivePinia(pinia);

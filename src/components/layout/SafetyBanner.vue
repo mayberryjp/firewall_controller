@@ -21,20 +21,16 @@ function resolve(): void {
   <section
     v-if="visible"
     aria-label="Global safety state"
-    class="mb-6"
+    class="mt-4"
   >
-    <v-alert
+    <p
       v-if="store.incompatible"
-      type="error"
-      variant="tonal"
       class="mb-3"
     >
       Some diagnostic or transaction data could not be interpreted. Configuration editing remains available when the configuration can be read.
-    </v-alert>
-    <v-alert
+    </p>
+    <div
       v-if="store.uncertain"
-      type="error"
-      variant="tonal"
       class="mb-3"
     >
       <strong>Outcome unknown: {{ store.uncertain.operation }}.</strong>
@@ -68,12 +64,10 @@ function resolve(): void {
       >
         {{ error }}
       </p>
-    </v-alert>
-    <v-alert
+    </div>
+    <div
       v-for="transaction in store.activeTransactions.filter(item => item.status !== 'pending_confirmation')"
       :key="transaction.id"
-      :type="transaction.status === 'recovery_failed' ? 'error' : 'warning'"
-      variant="tonal"
       class="mb-3"
     >
       <strong>{{ transaction.status === "recovery_failed" ? "Critical: recovery failed" : transaction.status.replaceAll("_", " ") }}</strong>
@@ -87,11 +81,9 @@ function resolve(): void {
         {{ transaction.error }}
       </p>
       <TransactionActions :transaction="transaction" />
-    </v-alert>
-    <v-alert
+    </div>
+    <div
       v-if="store.state.data?.drift"
-      type="warning"
-      variant="tonal"
       class="mb-3"
     >
       Expected live state differs from observation. Configuration changes remain available; the firewall decides whether to accept them.
@@ -101,33 +93,25 @@ function resolve(): void {
       >
         Inspect comparison
       </v-btn>
-    </v-alert>
-    <v-alert
+    </div>
+    <p
       v-if="store.draftStale"
-      type="warning"
-      variant="tonal"
       class="mb-3"
     >
       Draft base {{ store.baseRevision }} differs from latest committed revision. Export/compare and explicitly restart; no automatic rebase.
-    </v-alert>
-    <v-alert
+    </p>
+    <p
       v-if="store.actionError"
-      type="error"
-      variant="tonal"
       class="mb-3"
     >
       {{ store.actionError }}
-    </v-alert>
-    <v-alert
+    </p>
+    <p
       v-if="store.notice && !store.activeTransactions.some(item => item.status === 'pending_confirmation')"
-      type="info"
-      variant="tonal"
       class="mb-3"
-      closable
-      @click:close="store.notice = null"
     >
       {{ store.notice }}
-    </v-alert>
+    </p>
   </section>
 </template>
 
