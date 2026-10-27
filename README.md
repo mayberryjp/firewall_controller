@@ -265,9 +265,9 @@ values only; subsequent link changes and deletion belong to Interfaces.
 Read-only summaries can still appear elsewhere. Navbar **Save** leads to
 **Review changes**, the single place for apply options and provisional submission.
 If apply is disabled, the review page and apply dialog identify the blocking
-condition. Use **Refresh state** on the review page to reload observation and
-transaction discovery without discarding the draft. Refresh does not repair drift,
-resolve an active transaction, or rebase a draft onto a newer committed revision.
+condition. **Commit & push** automatically refreshes committed configuration
+without discarding the draft or waiting for runtime and service diagnostics.
+Refreshing does not rebase a draft onto a newer committed revision.
 Input and forwarding default policies remain separate because they control
 different traffic paths.
 
@@ -290,6 +290,16 @@ one minute; `state.read` is needed to observe them. Errors remain inline. It nev
 automatically repeats the POST; inspect runtime before retrying after a timeout.
 
 ## Safety model
+
+Service health is informational, not a configuration permission gate. Failed NTP
+or other services, drift, unknown transaction statuses, and unavailable runtime,
+transaction-list, or upgrade-status reads do not lock configuration editing or
+push review when committed configuration remains readable. Observation metadata
+is optional; desired configuration and revision are still validated. The backend
+decides whether to accept a write. Polling failures never automatically stop,
+restart, reconcile, roll back, or upgrade services. Authentication, configuration
+validation, revision conflicts, and an outstanding submitted or uncertain write
+still protect configuration operations from accidental loss or duplicate writes.
 
 Firewall > Connections reads `GET /api/v1/statistics/connections` with `state.read`.
 Opening Connections collapses the desktop section navigation to a hamburger-only
@@ -481,7 +491,7 @@ copying a leased address into static configuration; IPv6 still needs an address.
   are persisted in the central registry; the controller attaches the selected
   key when proxying requests to the firewall.
 - Apply validates the complete package, its cross-resource references, captured
-  revision, fresh transaction discovery, drift, and actual serialized UTF-8 size.
+  revision against freshly read configuration, and actual serialized UTF-8 size.
   Pre-submit reads are UX checks, not a server concurrency guarantee.
 - `202` is provisional, **not committed**. Frozen snapshots cannot be edited.
   Confirm changes is an explicit action in the same push dialog, without another

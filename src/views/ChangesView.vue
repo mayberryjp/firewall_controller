@@ -18,7 +18,7 @@ async function reviewPush(): Promise<void> {
   checking.value = true;
   try {
     error.value = "";
-    await store.refresh();
+    await store.refreshState();
     if (store.canApply && !store.editorDirty) applyDialog.value = true;
   }
   catch (failure) { await showError(failure); }

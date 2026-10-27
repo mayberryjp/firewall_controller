@@ -82,14 +82,12 @@ export const useControllerStore = defineStore("controller", () => {
   const draftStale = computed(() => draft.value !== null && baseRevision.value !== state.data?.revision);
   const diff = computed(() => baseline.value && draft.value ? differences(baseline.value, draft.value) : []);
   const validation = computed(() => draft.value ? validateConfig(draft.value, runtime.data?.parent_interfaces, baseline.value ?? undefined) : []);
-  const freshState = computed(() => Boolean(connected.value && state.data && !state.stale && !state.error && !transactions.stale &&
+  const freshState = computed(() => Boolean(connected.value && state.data && !state.stale && !state.error &&
     state.lastSuccess && Date.now() - state.lastSuccess < 20_000));
   const sortedTransactions = computed(() => Object.values(transactions.data ?? {}).sort((a, b) =>
     (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || a.id.localeCompare(b.id)));
   const readOnlyNotice = computed(() => {
     if (!connected.value) return "Sign in and select a registered firewall.";
-    if (upgradePending.value || upgradeBlockedReason.value) return upgradeBlockedReason.value || "Submitting system upgrade. Writes are blocked.";
-    if (incompatible.value) return "Incompatible API data or unknown lifecycle state. Editing is disabled; retain diagnostics.";
     if (busy.value || submitted.value || uncertain.value) return "A submitted snapshot or uncertain write is frozen. Reconcile its server outcome first.";
     return "";
   });
@@ -97,14 +95,10 @@ export const useControllerStore = defineStore("controller", () => {
     (!state.data ? "Committed desired configuration is unavailable. Recovery remains accessible." : ""));
   const applyBlockedReason = computed(() => {
     if (readOnlyReason.value) return readOnlyReason.value;
-    if (activeTransactions.value.length) return `An active commit blocks applying: ${activeTransactions.value.map(item => `${item.id} (${item.status})`).join(", ")}. Review it in Commits before applying another configuration.`;
-    if (state.data?.drift) return "Modeled drift blocks applying: live configuration differs from expected state. Inspect the comparison on Overview; refreshing does not repair drift.";
     if (draftStale.value) return `Draft base revision ${baseRevision.value} differs from committed revision ${state.data?.revision}. Compare the revisions before discarding changes and starting over.`;
     if (state.error) return `Unable to check the current firewall configuration: ${state.error}. Try Commit & push again.`;
-    if (transactions.error) return `Unable to check existing commits: ${transactions.error}. Try Commit & push again.`;
     if (!freshState.value) return "Current firewall state will be checked before pushing. Your changes are retained.";
     if (!draft.value || !diff.value.length) return "No changes to apply.";
-    if (draft.value.gateway_monitors.some(monitor => monitor.mode === "dhcp") && !supportsDhcpGatewayMonitors.value) return "Refresh runtime capabilities: the selected backend must advertise DHCP IPv4 gateway monitoring before applying.";
     if (validation.value.length) return "Resolve validation errors before applying.";
     return "";
   });
@@ -227,9 +221,12 @@ export const useControllerStore = defineStore("controller", () => {
     hostHealth.data = null; mqttStatus.data = null; mdnsStatus.data = null;
     await load(transactions, api.getTransactions);
     if (transactions.stale) {
-      setApiDevice(""); connecting.value = false;
-      authError.value = transactions.error ?? authError.value ?? "Unable to establish read access";
-      return false;
+      await refreshState();
+      if (state.stale) {
+        setApiDevice(""); connecting.value = false;
+        authError.value = state.error ?? authError.value ?? "Unable to establish read access";
+        return false;
+      }
     }
     connected.value = true; connecting.value = false;
     rememberRegistryDevice(deviceId);
@@ -364,7 +361,7 @@ export const useControllerStore = defineStore("controller", () => {
     const trimmed = validateWindow(seconds, description);
     if (!canApply.value || !draft.value || baseRevision.value === null) throw new Error(applyBlockedReason.value || "Draft base revision is unavailable");
     const captured = cloneConfig(draft.value), capturedBase = baseRevision.value;
-    await Promise.all([refreshState(), refreshTransactions(), checkMaintenance()]);
+    await refreshState();
     if (!canApply.value || state.data?.revision !== capturedBase || !draft.value || !equalConfig(captured, draft.value)) throw new Error("Pre-submit state changed; review again");
     const request = { base_revision: capturedBase, config: captured, confirm_timeout_seconds: seconds, description: trimmed };
     if (utf8Size(encodeJson(request)) > 1_048_576) throw new Error("Complete request exceeds 1 MiB");
@@ -376,8 +373,6 @@ export const useControllerStore = defineStore("controller", () => {
     });
   }
   async function lifecycle(id: string, action: "confirm" | "rollback"): Promise<Transaction | null> {
-    await checkMaintenance();
-    if (incompatible.value) throw new Error("Incompatible server state; lifecycle assumptions disabled");
     const transaction = await readTransaction(id);
     if (!transaction || !knownStatuses.includes(transaction.status)) throw new Error("Unable to obtain a compatible fresh transaction");
     if (action === "confirm" && (transaction.status !== "pending_confirmation" || Date.parse(transaction.confirmation_deadline) <= Date.now())) throw new Error("Confirmation is not currently available; await server outcome");
@@ -387,15 +382,13 @@ export const useControllerStore = defineStore("controller", () => {
   }
   async function restore(revision: string, seconds: number, description: string): Promise<Transaction | null> {
     const trimmed = validateWindow(seconds, description);
-    await checkMaintenance();
-    await Promise.all([refreshState(), refreshTransactions()]);
-    if (!freshState.value || incompatible.value || busy.value || uncertain.value || draft.value ||
-      submitted.value || activeTransactions.value.length || !state.data || state.data.drift) throw new Error("Restore requires fresh drift-free state, no draft, and no active/uncertain write");
+    await refreshState();
+    if (!freshState.value || busy.value || uncertain.value || draft.value ||
+      submitted.value || !state.data) throw new Error("Restore requires fresh configuration, no draft, and no submitted or uncertain write");
     const capturedBase = state.data.revision;
     const history = await api.getRevision(revision);
     if (!freshState.value || !state.lastSuccess || Date.now() - state.lastSuccess >= 20_000 ||
-      busy.value || uncertain.value || submitted.value || draft.value || activeTransactions.value.length ||
-      incompatible.value || state.data?.revision !== capturedBase || state.data.drift) {
+      busy.value || uncertain.value || submitted.value || draft.value || state.data?.revision !== capturedBase) {
       throw new Error("Pre-restore state changed; review the current state before restoring");
     }
     submitted.value = { config: cloneConfig(history.config) };

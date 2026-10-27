@@ -48,34 +48,38 @@ describe("commit and push checks", () => {
     expect(wrapper.text()).not.toContain("Import configuration");
     await button(wrapper, "Commit & push").trigger("click"); await flushPromises();
     expect(api.getState).toHaveBeenCalledOnce();
-    expect(api.getTransactions).toHaveBeenCalledOnce();
+    expect(api.getTransactions).not.toHaveBeenCalled();
     expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(true);
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
     expect(store.draft).toEqual(draft); expect(store.baseline).toEqual(baseline);
     expect(store.baseRevision).toBe("0"); expect(store.submitted).toBeNull();
   });
-  it.each(["state", "transactions"] as const)("reports a failed %s refresh instead of enabling apply", async dataset => {
+  it("reports a failed configuration refresh instead of enabling apply", async () => {
     const store = useControllerStore(), wrapper = review();
-    vi.mocked(dataset === "state" ? api.getState : api.getTransactions).mockRejectedValue(new Error("Backend observation failed"));
+    vi.mocked(api.getState).mockRejectedValue(new Error("Backend observation failed"));
     await button(wrapper, "Commit & push").trigger("click"); await flushPromises();
     expect(wrapper.get('[role="status"]').text()).toContain("Backend observation failed");
     expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(false);
     expect(store.draft?.routes[0]?.metric).toBe(42);
   });
-  it("keeps drift blocked after a successful refresh and explains that refresh cannot repair it", async () => {
+  it("allows push review despite drift and unavailable diagnostic endpoints", async () => {
     vi.mocked(api.getState).mockResolvedValue({ ...state(), drift: true });
+    vi.mocked(api.getTransactions).mockRejectedValue(new Error("Transactions unavailable"));
+    vi.mocked(api.getRuntime).mockRejectedValue(new Error("Runtime unavailable"));
     const wrapper = review();
     await button(wrapper, "Commit & push").trigger("click"); await flushPromises();
-    expect(wrapper.get('[role="status"]').text()).toContain("Modeled drift");
-    expect(wrapper.get('[role="status"]').text()).toContain("refreshing does not repair drift");
-    expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(false);
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(true);
+    expect(api.getTransactions).not.toHaveBeenCalled();
+    expect(api.getRuntime).not.toHaveBeenCalled();
   });
-  it("identifies the active transaction instead of recommending a refresh as a repair", () => {
+  it("leaves transaction acceptance to the backend rather than locking configuration review", async () => {
     const pending = transaction();
     useControllerStore().transactions.data = { [pending.id]: pending };
     const wrapper = review();
-    expect(wrapper.get('[role="status"]').text()).toContain(`${pending.id} (${pending.status})`);
-    expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(false);
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    await button(wrapper, "Commit & push").trigger("click"); await flushPromises();
+    expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(true);
   });
   it("retains the old base and requires explicit comparison/restart after a revision change", async () => {
     const latest = { ...state(), revision: "1" }; latest.desired.interfaces[0]!.mtu = 1400;

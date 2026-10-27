@@ -17,8 +17,8 @@ const compareID = ref(""), error = ref(""), restoreDialog = ref(false);
 const comparison = computed(() => store.comparisonRevision.data?.config);
 const seconds = ref<number | string>(120), description = ref(""), acknowledged = ref(false);
 const { exportConfig, exportError } = useConfigExport();
-const canRestore = computed(() => store.freshState && !store.state.data?.drift && !store.draft && !store.submitted &&
-  !store.busy && !store.uncertain && !store.activeTransactions.length && !store.incompatible);
+const canRestore = computed(() => store.freshState && !store.draft && !store.submitted &&
+  !store.busy && !store.uncertain);
 const restorePermissions = computed(() => detail.value && store.state.data
   ? ["state.read", ...requiredPermissions(differences(store.state.data.desired, detail.value.config))] : []);
 watch(id, async (value) => {

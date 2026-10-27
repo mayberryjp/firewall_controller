@@ -29,7 +29,7 @@ function resolve(): void {
       variant="tonal"
       class="mb-3"
     >
-      Incompatible response or unknown transaction state. Unsafe editing/lifecycle assumptions are disabled. Keep read-only diagnostics and contact the operator.
+      Some diagnostic or transaction data could not be interpreted. Configuration editing remains available when the configuration can be read.
     </v-alert>
     <v-alert
       v-if="store.uncertain"
@@ -94,7 +94,7 @@ function resolve(): void {
       variant="tonal"
       class="mb-3"
     >
-      Modeled drift detected. Expected live state differs from observation. No force apply or automatic repair is available.
+      Expected live state differs from observation. Configuration changes remain available; the firewall decides whether to accept them.
       <v-btn
         variant="text"
         to="/overview"

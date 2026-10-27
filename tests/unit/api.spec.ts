@@ -329,6 +329,13 @@ describe("controller-proxied API boundary", () => {
       expect(error.uncertain).toBe(true); expect(adapter).toHaveBeenCalledOnce();
     }
   });
+  it("reads valid configuration without requiring healthy or compatible observation diagnostics", async () => {
+    body = encodeJson({ revision: "0", desired: config(), active_transaction: { error: "observation unavailable" }, service_health: "failed" });
+    const result = await net.getState();
+    expect(result.desired).toEqual(config());
+    expect(result.revision).toBe("0");
+    expect(result.active_transaction).toBeUndefined();
+  });
   it("rejects malformed successful response visibly rather than inventing empty state", async () => {
     body = '{"revision":0,"desired":{}}';
     await expect(net.getState()).rejects.toMatchObject({ incompatible: true });

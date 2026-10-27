@@ -12,7 +12,7 @@ const timer = setInterval(() => { now.value = Date.now(); }, 1000);
 onUnmounted(() => clearInterval(timer));
 const remaining = computed(() => Math.max(0, Math.ceil((Date.parse(props.transaction.confirmation_deadline) - now.value) / 1000)));
 async function execute(action: "confirm" | "rollback"): Promise<void> {
-  if (store.busy || store.incompatible || (action === "confirm" && (!remaining.value || props.transaction.status !== "pending_confirmation"))) return;
+  if (store.busy || (action === "confirm" && (!remaining.value || props.transaction.status !== "pending_confirmation"))) return;
   error.value = null;
   try {
     const result = await store.lifecycle(props.transaction.id, action);
@@ -47,7 +47,7 @@ async function execute(action: "confirm" | "rollback"): Promise<void> {
       <v-btn
         v-if="transaction.status === 'pending_confirmation'"
         color="success"
-        :disabled="!remaining || store.busy || store.incompatible"
+        :disabled="!remaining || store.busy"
         @click="execute('confirm')"
       >
         Confirm changes
@@ -56,7 +56,7 @@ async function execute(action: "confirm" | "rollback"): Promise<void> {
         v-if="['pending_confirmation', 'recovery_failed'].includes(transaction.status)"
         color="error"
         variant="outlined"
-        :disabled="store.busy || store.incompatible"
+        :disabled="store.busy"
         @click="dialog = 'rollback'"
       >
         {{ transaction.status === "recovery_failed" ? "Retry rollback" : "Roll back" }}
@@ -87,7 +87,7 @@ async function execute(action: "confirm" | "rollback"): Promise<void> {
           <v-btn
             color="error"
             :loading="store.busy"
-            :disabled="store.busy || store.incompatible"
+            :disabled="store.busy"
             @click="execute('rollback')"
           >
             Roll back configuration

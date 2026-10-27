@@ -226,12 +226,10 @@ export const transactionsSchema = z.record(transactionSchema).nullable().transfo
     if (key !== transaction.id) context.addIssue({ code: z.ZodIssueCode.custom, path: [key, "id"], message: "Transaction map key does not match ID" });
   }
 });
-export const stateSchema = z.object({
+export const stateSchema: z.ZodType<StateView, z.ZodTypeDef, unknown> = z.object({
   revision: revisionSchema, desired: configSchema, observed: z.unknown(),
-  drift: z.boolean(), active_transaction: transactionSchema.optional(),
-}).strict().superRefine((value, context) => {
-  if (value.observed === undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: ["observed"], message: "Observed diagnostics must be present" });
-});
+  drift: z.boolean().catch(false), active_transaction: transactionSchema.optional().catch(undefined),
+}).passthrough();
 export const parentSchema = z.object({
   name: z.string(), kind: optionalText, index: integer.optional(), mac: optionalText,
   mtu: integer.optional(), up: z.boolean().optional(), available: z.boolean(), error: optionalText,
@@ -383,7 +381,13 @@ export type MasqueradeRule = z.infer<typeof masqueradeSchema>;
 export type SoftflowdConfig = z.infer<typeof softflowdSchema>;
 export type Peer = z.infer<typeof peerSchema>;
 export type Transaction = z.infer<typeof transactionSchema>;
-export type StateView = z.infer<typeof stateSchema>;
+export interface StateView {
+  revision: string;
+  desired: Config;
+  observed?: unknown;
+  drift: boolean;
+  active_transaction?: Transaction;
+}
 export type RuntimeState = z.infer<typeof runtimeSchema>;
 export type DHCPRelayStatus = z.infer<typeof dhcpRelayStatusSchema>;
 export type ParentInterface = z.infer<typeof parentSchema>;

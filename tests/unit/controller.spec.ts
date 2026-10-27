@@ -29,6 +29,33 @@ async function connected() {
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("connects through readable configuration when transaction discovery is unavailable", async () => {
+    vi.mocked(api.getTransactions).mockRejectedValue(new ApiFailure("transactions unavailable", 503));
+    const store = await connected();
+    expect(store.readOnlyReason).toBe("");
+    const candidate = config(); candidate.routes[0]!.metric = 42;
+    store.stage(candidate);
+    expect(store.canApply).toBe(true);
+  });
+  it("pushes configuration despite failed runtime, transaction and upgrade status reads", async () => {
+    const store = await connected();
+    vi.mocked(api.getRuntime).mockRejectedValue(new ApiFailure("NTP unavailable", 503));
+    vi.mocked(api.getTransactions).mockRejectedValue(new ApiFailure("transactions unavailable", 503));
+    vi.mocked(api.getSystemUpgrade).mockRejectedValue(new ApiFailure("upgrade status unavailable", 503));
+    await store.refresh(); await store.refreshUpgrade();
+    store.state.data = { ...state(), drift: true };
+    const candidate = config(); candidate.routes[0]!.metric = 42;
+    store.stage(candidate);
+    const pending = transaction(); pending.candidate = candidate;
+    vi.mocked(api.submitPackage).mockResolvedValue(pending);
+    const upgradeReads = vi.mocked(api.getSystemUpgrade).mock.calls.length;
+    await store.apply(120, "Repair configuration");
+    expect(api.submitPackage).toHaveBeenCalledWith(expect.objectContaining({ config: candidate }));
+    expect(api.getSystemUpgrade).toHaveBeenCalledTimes(upgradeReads);
+    expect(api.reconcileServices).not.toHaveBeenCalled();
+    expect(api.startSystemUpgrade).not.toHaveBeenCalled();
+    expect(api.rollbackTransaction).not.toHaveBeenCalled();
+  });
   it("backfills peer routes atomically on WireGuard staging and preserves other draft edits", async () => {
     const store = await connected(), candidate = cloneConfig(store.state.data!.desired);
     const link = {
@@ -98,7 +125,7 @@ describe("independent reads and complete shared draft", () => {
     const store = await connected();
     const candidate = config(); candidate.routes[0]!.metric = 42; store.stage(candidate);
     await store.startUpgrade("1.2.3", "operator/appliance");
-    expect(store.readOnlyReason).toContain("queued"); expect(store.draft?.routes[0]?.metric).toBe(42);
+    expect(store.readOnlyReason).toBe(""); expect(store.draft?.routes[0]?.metric).toBe(42);
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "recovery_required" } });
     await expect(store.checkMaintenance()).rejects.toThrow("console recovery");
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "rolled_back" } });
@@ -253,13 +280,14 @@ describe("provisional transaction safety", () => {
     expect(api.submitPackage).toHaveBeenCalledWith(expect.objectContaining({ config: candidate, description: "route change" }));
     expect(() => store.stage(config())).toThrow("frozen");
   });
-  it("blocks apply on modeled drift, unknown status, failed recovery or unavailable discovery", async () => {
+  it("keeps configuration writable despite drift, unknown status, failed recovery or unavailable transaction discovery", async () => {
     const store = await connected(); const candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
-    store.state.data = { ...state(), drift: true }; expect(store.canApply).toBe(false);
+    store.state.data = { ...state(), drift: true }; expect(store.canApply).toBe(true);
     store.state.data = state();
-    store.transactions.data = { future: transaction("future_status") }; expect(store.incompatible).toBe(true); expect(store.canApply).toBe(false);
-    store.transactions.data = { failure: transaction("recovery_failed") }; expect(store.canApply).toBe(false);
-    store.transactions.data = {}; store.transactions.stale = true; expect(store.canApply).toBe(false);
+    store.transactions.data = { future: transaction("future_status") }; expect(store.incompatible).toBe(true); expect(store.canApply).toBe(true);
+    store.transactions.data = { failure: transaction("recovery_failed") }; expect(store.canApply).toBe(true);
+    store.transactions.data = {}; store.transactions.stale = true; expect(store.canApply).toBe(true);
+    expect(store.readOnlyReason).toBe("");
   });
   it("freezes unknown writes with no automatic replay or false failure", async () => {
     const store = await connected(); const candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
@@ -372,7 +400,7 @@ describe("provisional transaction safety", () => {
     const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
     const rolledBack = transaction("rolled_back"); rolledBack.candidate = candidate;
     vi.mocked(api.submitPackage).mockResolvedValue(rolledBack);
-    vi.mocked(api.getTransactions).mockResolvedValueOnce({}).mockResolvedValue({ [rolledBack.id]: rolledBack });
+    vi.mocked(api.getTransactions).mockResolvedValue({ [rolledBack.id]: rolledBack });
     await store.apply(120, "");
     expect(store.draft).toEqual(candidate); expect(store.submitted).toBeNull(); expect(store.baseRevision).toBe("0");
     expect(store.notice).toContain("Server verified rollback");
