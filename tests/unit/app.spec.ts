@@ -7,7 +7,7 @@ import { useAppStore } from "@/stores/app";
 import { useControllerStore } from "@/stores/controller";
 import { usePolling } from "@/composables/usePolling";
 import * as api from "@/services/netcontrol";
-import { state, runtime, transaction, healthSnapshot } from "../fixtures";
+import { state, runtime, transaction, healthSnapshot, mdnsStatus } from "../fixtures";
 import privateRoutes from "@/router/routes/privateRoutes";
 import { navigationSections, primaryNavigationSections } from "@/constants/navigation";
 import { resourceTitles } from "@/services/resourceCollections";
@@ -117,6 +117,45 @@ describe("app store", () => {
 });
 
 describe("page-scoped polling", () => {
+  it("polls mDNS only on its page at 3..5 seconds, deduplicating in-flight reads and pausing hidden/disconnected tabs", async () => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    for (const action of ["refreshState", "refreshRuntime", "refreshTransactions", "refreshStatistics", "refreshGatewayStatistics", "refreshUpgrade", "refreshHostHealth"] as const) {
+      vi.spyOn(store, action).mockResolvedValue();
+    }
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let finish!: (value: { instances: ReturnType<typeof mdnsStatus>[]; error: string }) => void;
+    const read = vi.spyOn(api, "getMDNSStatus").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push("/services/mdns");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      expect(read).toHaveBeenCalledTimes(1);
+      void store.refreshMDNSStatus();
+      window.dispatchEvent(new Event("online"));
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(read).toHaveBeenCalledTimes(1);
+      finish({ instances: [mdnsStatus()], error: "" });
+      await vi.advanceTimersByTimeAsync(0);
+      read.mockRejectedValue(new Error("status unavailable"));
+      await vi.advanceTimersByTimeAsync(2999); expect(read).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1); expect(read).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(3000); expect(read).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledTimes(5);
+      visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(10000); expect(read).toHaveBeenCalledTimes(5);
+      visibility.mockReturnValue("visible"); read.mockResolvedValue({ instances: [mdnsStatus()], error: "" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0); expect(read).toHaveBeenCalledTimes(6);
+      await router.push("/services/ntp"); await vi.advanceTimersByTimeAsync(10000);
+      expect(read).toHaveBeenCalledTimes(6);
+      await router.push("/services/mdns"); await vi.advanceTimersByTimeAsync(0); expect(read).toHaveBeenCalledTimes(7);
+      store.disconnect(); await vi.advanceTimersByTimeAsync(10000);
+      expect(read).toHaveBeenCalledTimes(7); expect(store.mdnsStatus.data).toBeNull();
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
   it("keeps host and MQTT polling route-scoped, non-overlapping, hidden-tab paused and stopped on unmount", async () => {
     vi.useFakeTimers();
     const pinia = createPinia(); setActivePinia(pinia);

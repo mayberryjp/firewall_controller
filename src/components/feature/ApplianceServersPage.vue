@@ -3,7 +3,7 @@ import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, validateConfig } from "@/services/configuration";
 import { formatTimestamp } from "@/services/timestamps";
-import type { Config } from "@/types/domain";
+import { isApplianceStatus, type Config } from "@/types/domain";
 
 interface Row { host: string; port?: number; transport?: string }
 const props = defineProps<{ service: "ntp" | "syslog" }>();
@@ -15,7 +15,7 @@ const rows = computed<Row[]>(() => props.service === "ntp"
   ? (editing.value?.ntp.servers ?? []).map(host => ({ host }))
   : (editing.value?.syslog.servers ?? []).map(({ host, port, transport }) => ({ host, port, transport })));
 const blocked = computed(() => Boolean(store.readOnlyReason) || !editing.value);
-const status = computed(() => props.service === "ntp" ? store.runtime.data?.appliance_services.find(item => item.name === "ntp") : undefined);
+const status = computed(() => props.service === "ntp" ? store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === "ntp") : undefined);
 const sampleAvailable = computed(() => status.value?.sample_status === "available");
 const statColumns = 5;
 const ms = (value: number | null | undefined, signed = false) =>

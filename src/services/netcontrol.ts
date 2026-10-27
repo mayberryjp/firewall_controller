@@ -7,7 +7,7 @@ import {
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
   revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
-  applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema,
+  applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, mdnsSchema, mdnsStatusPageSchema,
   gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
   connectionDeletionSchema, upgradeVersionSchema, upgradeJobSchema, upgradeStatusSchema, type Connection,
 } from "@/types/domain";
@@ -17,6 +17,8 @@ const submittedTransactionSchema = transactionSchema.extend({ ignored_fields: z.
 export const getHostHealth = (signal?: AbortSignal) => request("GET", "/statistics/host", hostHealthSchema, undefined, signal);
 export const getMqttStatus = (signal?: AbortSignal) => request("GET", "/services/mqtt/status", mqttStatusSchema, undefined, signal);
 export const getDynamicDnsStatus = (signal?: AbortSignal) => request("GET", "/services/dynamic-dns/status", dynamicDnsStatusSchema, undefined, signal);
+export const getMDNSConfig = (signal?: AbortSignal) => request("GET", "/services/mdns", mdnsSchema, undefined, signal);
+export const getMDNSStatus = (signal?: AbortSignal) => request("GET", "/services/mdns/status", mdnsStatusPageSchema, undefined, signal);
 export const getTimezones = (signal?: AbortSignal) => request("GET", "/system/timezones", timezonesSchema, undefined, signal);
 export async function uploadDynamicDnsSecret(secret: string, signal?: AbortSignal) {
   if (!secret || secret.includes("\0") || new TextEncoder().encode(secret).length > 4096) throw new Error("Client secret must be 1..4096 UTF-8 bytes without NUL");

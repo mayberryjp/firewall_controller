@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
-import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot } from "../fixtures";
+import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot, mdnsStatus } from "../fixtures";
+import { mdnsSchema } from "../../src/types/domain";
+import { mdnsInterfaces } from "../../src/services/mdns";
 import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics, RuntimeState } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
 import { defaultOverviewLayout, overviewLayoutSchema } from "../../src/services/overviewLayout";
@@ -11,6 +13,19 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
   const writes: Array<{ path: string; body: unknown }> = [];
   const activeConfig = () => Object.values(transactions).find(item => item.status === "pending_confirmation")?.candidate ?? committed;
+  const discoveryStatus = () => {
+    const settings = activeConfig().mdns;
+    return {
+      ...mdnsStatus(), enabled: settings?.enabled ?? false, state: settings?.enabled ? "simulated" : "disabled",
+      effective_interfaces: settings?.enabled ? mdnsInterfaces(activeConfig()) : [],
+      effective_families: settings?.enabled ? [
+        ...(settings.ipv4 ? ["ipv4"] : []),
+        ...(settings.ipv6 && activeConfig().ipv6_enabled !== false ? ["ipv6"] : []),
+      ] : [],
+      reflection_enabled: Boolean(settings?.enabled && settings.reflection.enabled),
+      publishing_enabled: Boolean(settings?.enabled && settings.publishing.enabled),
+    };
+  };
   const gatewayRows = () => options.gatewayRows ?? activeConfig().gateway_monitors.map(item => ({
     ...gatewayStatistics(), name: item.name, process_state: item.enabled ? "simulated" : "disabled", sample_status: item.enabled ? "simulated" : "disabled",
     health: "unknown", sent: 0, received: 0, lost: 0, pending: 0, variation_pairs: 0,
@@ -22,10 +37,10 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       ...runtime(), capabilities: options.runtimeCapabilities,
       dhcp_relay: stored.interfaces.map(link => ({ interface: link.name, state: link.dhcp_relay.enabled ? "simulated" : "disabled" })),
       gateway_monitors: gatewayRows(),
-      appliance_services: runtime().appliance_services.map(item => ({
+      appliance_services: [...runtime().appliance_services.map(item => ({
         ...item, state: stored[item.name === "ntp" ? "ntp" : item.name === "syslog" ? "syslog" : "vnstat"].enabled ? "simulated" : "disabled",
         database_directory: item.name.startsWith("vnstat") ? `/test-diagnostic/${item.scope}` : undefined,
-      })),
+      })), discoveryStatus()],
     };
   };
   await page.route("**/api/v1/**", async route => {
@@ -93,6 +108,8 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       if (path === "/system/upgrade") return reply({ enabled: false, repository: null, job: null, last_successful_version: null });
       if (path === "/interfaces/discovered") return reply(options.discoveredInterfaces ?? []);
       if (path === "/services/dhcp-relay/status") return reply({ interfaces: runtimeState().dhcp_relay, error: "" });
+      if (path === "/services/mdns") return reply(committed.mdns ?? mdnsSchema.parse({}));
+      if (path === "/services/mdns/status") return reply({ instances: [discoveryStatus()], error: "" });
       if (path === "/statistics") return reply(options.statistics ?? statistics());
       if (path === "/statistics/host") {
         const sample = healthSnapshot(); sample.sample.status = "simulated"; sample.sample.scope = "simulator"; sample.sample.boot_id = null;
@@ -143,7 +160,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         } else pending.status = "rolled_back";
         return reply(pending);
       }
-      if (/^\/services\/(softflowd|dhcp-relay|gateway-monitoring|ntp|syslog|vnstat)\/reconcile$/.test(path)) {
+      if (/^\/services\/(softflowd|dhcp-relay|gateway-monitoring|ntp|syslog|vnstat|mdns)\/reconcile$/.test(path)) {
         if (options.serviceDenied) return reply({ error: "interfaces.write permission required", transaction: null }, 403);
         return reply(runtimeState());
       }

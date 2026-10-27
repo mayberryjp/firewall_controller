@@ -124,6 +124,23 @@ export const syslogSchema = z.object({
   enabled: z.boolean().default(false), servers: list(syslogServerSchema).default([]),
 }).strict().default({ enabled: false, servers: [] });
 export const vnstatSchema = z.object({ ...annotation, enabled: z.boolean().default(false) }).strict().default({ enabled: false });
+export const mdnsSchema = z.object({
+  ...annotation,
+  enabled: z.boolean().default(false),
+  interface_mode: z.enum(["allow", "deny"]).default("allow"),
+  interfaces: z.array(z.string()).default([]),
+  ipv4: z.boolean().default(true), ipv6: z.boolean().default(true),
+  reflection: z.object({
+    enabled: z.boolean().default(false), filters: z.array(z.string()).default([]),
+  }).strict().default({}),
+  publishing: z.object({
+    enabled: z.boolean().default(false), hostname: z.string().default(""), domain: z.string().default("local."),
+    addresses: z.boolean().default(false), hinfo: z.boolean().default(false),
+    workstation: z.boolean().default(false), browse_domain: z.boolean().default(false),
+    aaaa_on_ipv4: z.boolean().default(false), a_on_ipv6: z.boolean().default(false),
+  }).strict().default({}),
+}).strict();
+export type MDNSConfig = z.infer<typeof mdnsSchema>;
 export const dhcpClientSchema = z.object({
   ...annotation,
   client_id: z.string().default(""), hostname: z.string().default(""),
@@ -185,6 +202,7 @@ export const configSchema = z.object({
   softflowd: list(softflowdSchema),
   gateway_monitors: list(gatewayMonitorSchema).default([]),
   ntp: ntpSchema, syslog: syslogSchema, vnstat: vnstatSchema,
+  mdns: mdnsSchema.optional(),
   mqtt: mqttSchema.optional(),
   dynamic_dns: list(dynamicDnsSchema).optional(),
   blackhole: blackholeSchema.optional(),
@@ -268,6 +286,34 @@ export const applianceStatusSchema = z.object({
   discipline: optionalText, collected_at: timestamp.nullable().optional(),
 });
 export const applianceStatusPageSchema = z.object({ instances: list(applianceStatusSchema), error: optionalText });
+export const mdnsCounterNames = [
+  "received_packets", "transmitted_packets", "received_bytes", "transmitted_bytes",
+  "malformed_packets", "hop_limit_drops", "policy_drops", "duplicate_drops", "rate_limit_drops",
+  "queue_drops", "oversize_drops", "unsupported_record_drops", "send_errors",
+] as const;
+const decimalCounter = z.string().regex(/^(0|[1-9]\d*)$/);
+export const mdnsStatusSchema = z.object({
+  name: z.literal("mdns"), scope: z.literal("managed"), enabled: z.boolean(),
+  state: z.enum(["disabled", "simulated", "running", "stopped", "error"]),
+  started_at: timestamp.nullable(), collected_at: timestamp.nullable(), error: z.string().nullable(),
+  effective_interfaces: z.array(z.string()), effective_families: z.array(z.enum(["ipv4", "ipv6"])),
+  reflection_enabled: z.boolean(), publishing_enabled: z.boolean(),
+  received_packets: decimalCounter, transmitted_packets: decimalCounter,
+  received_bytes: decimalCounter, transmitted_bytes: decimalCounter,
+  malformed_packets: decimalCounter, hop_limit_drops: decimalCounter,
+  policy_drops: decimalCounter, duplicate_drops: decimalCounter, rate_limit_drops: decimalCounter,
+  queue_drops: decimalCounter, oversize_drops: decimalCounter, unsupported_record_drops: decimalCounter,
+  send_errors: decimalCounter, receive_drops: decimalCounter.nullable(),
+  statistics_complete: z.boolean(), warnings: z.array(z.string()), limits: z.record(integer.nonnegative()),
+});
+export type MDNSStatus = z.infer<typeof mdnsStatusSchema>;
+export type ApplianceStatus = z.infer<typeof applianceStatusSchema>;
+export const mdnsStatusPageSchema = z.object({ instances: z.array(mdnsStatusSchema).length(1), error: z.string() });
+const runtimeApplianceStatusSchema = z.union([
+  mdnsStatusSchema,
+  applianceStatusSchema.refine(value => value.name !== "mdns", "Invalid mDNS status"),
+]);
+export const isApplianceStatus = (value: z.infer<typeof runtimeApplianceStatusSchema>): value is ApplianceStatus => value.name !== "mdns";
 export const runtimeSchema = z.preprocess(value => {
   if (value && typeof value === "object" && !Array.isArray(value) &&
       !("parent_interfaces" in value) && "parents" in value) {
@@ -281,7 +327,7 @@ export const runtimeSchema = z.preprocess(value => {
   }).optional(),
   parent_interfaces: list(parentSchema), softflowd: list(serviceStatusSchema), error: optionalText,
   dhcp_relay: list(dhcpRelayStatusSchema),
-  gateway_monitors: list(gatewayStatisticsSchema), appliance_services: list(applianceStatusSchema),
+  gateway_monitors: list(gatewayStatisticsSchema), appliance_services: list(runtimeApplianceStatusSchema),
   wireguard: list(z.object({
     interface: z.string(), public_key: z.string().nullable(), listen_port: integer.nullable(),
     peers: list(z.object({
@@ -383,7 +429,7 @@ export const upgradeStatusSchema = z.object({
 export type UpgradeJob = z.infer<typeof upgradeJobSchema>;
 export type UpgradeStatus = z.infer<typeof upgradeStatusSchema>;
 export type ApplianceService = "ntp" | "syslog" | "vnstat";
-export type RepairService = "softflowd" | "dhcp-relay" | "gateway-monitoring" | ApplianceService;
+export type RepairService = "softflowd" | "dhcp-relay" | "gateway-monitoring" | "mdns" | ApplianceService;
 export interface PackageRequest {
   base_revision: string;
   confirm_timeout_seconds: number;

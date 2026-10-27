@@ -10,7 +10,7 @@ import {
 import { cloneConfig, differences, equalConfig, stableJson, syncWireGuardRoutes, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
 import type { HostHealth } from "@/services/hostHealth";
-import { mqttStatusSchema, dynamicDnsStatusSchema } from "@/types/domain";
+import { mqttStatusSchema, dynamicDnsStatusSchema, mdnsStatusPageSchema } from "@/types/domain";
 import type { z } from "zod";
 import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
 
@@ -35,6 +35,7 @@ export const useControllerStore = defineStore("controller", () => {
   const gatewayStatistics = dataset<GatewayStatisticsPage>();
   const hostHealth = dataset<HostHealth>(), mqttStatus = dataset<z.infer<typeof mqttStatusSchema>>();
   const dynamicDnsStatus = dataset<z.infer<typeof dynamicDnsStatusSchema>>();
+  const mdnsStatus = dataset<z.infer<typeof mdnsStatusPageSchema>>();
   const upgrade = dataset<UpgradeStatus>();
   const upgradePending = ref(false), upgradeUncertain = ref(false), upgradeNeedsRefresh = ref(false);
   const acceptedUpgradeID = ref(""), requestedUpgradeVersion = ref(""), previousUpgradeID = ref("");
@@ -59,7 +60,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -208,6 +209,7 @@ export const useControllerStore = defineStore("controller", () => {
   const refreshHostHealth = () => load(hostHealth, api.getHostHealth);
   const refreshMqttStatus = () => load(mqttStatus, api.getMqttStatus);
   const refreshDynamicDnsStatus = () => load(dynamicDnsStatus, api.getDynamicDnsStatus);
+  const refreshMDNSStatus = () => load(mdnsStatus, api.getMDNSStatus);
   async function refresh(): Promise<void> {
     if (!connected.value) return;
     await Promise.all([refreshState(), refreshRuntime(), refreshTransactions()]);
@@ -222,7 +224,7 @@ export const useControllerStore = defineStore("controller", () => {
     catch (error) { authError.value = error instanceof Error ? error.message : "Invalid saved firewall"; return false; }
     connecting.value = true; authError.value = null;
     invalidateReads();
-    hostHealth.data = null; mqttStatus.data = null;
+    hostHealth.data = null; mqttStatus.data = null; mdnsStatus.data = null;
     await load(transactions, api.getTransactions);
     if (transactions.stale) {
       setApiDevice(""); connecting.value = false;
@@ -461,7 +463,7 @@ export const useControllerStore = defineStore("controller", () => {
     upgrade, upgradePending, upgradeUncertain, upgradeActive, upgradeBlockedReason, upgradeNotice, acceptedUpgradeID,
     refreshUpgrade, checkMaintenance, startUpgrade, supportsDhcpGatewayMonitors,
     connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics, refreshGatewayStatistics,
-    refreshHostHealth, refreshMqttStatus, dynamicDnsStatus, refreshDynamicDnsStatus,
+    refreshHostHealth, refreshMqttStatus, dynamicDnsStatus, refreshDynamicDnsStatus, mdnsStatus, refreshMDNSStatus,
     refreshRevisions, loadRevision, compareRevision, clearComparison, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
     readTransaction, resolveUncertainty,
   };

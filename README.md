@@ -68,6 +68,44 @@ whole-appliance log capture/delivery or real vnStat history. Native host mode
 can take ownership of physical NICs on first start; keep console access and
 review the backend's networkd/resolved and persistent-state prerequisites.
 
+### Native mDNS / Discovery
+
+Services > mDNS / Discovery (`/services/mdns`) follows the
+[October 25 mDNS handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-25.md#2026-10-25-17-native-mdns-implementation).
+It stages allow/deny LAN membership, IPv4/IPv6 preferences, reflection filters,
+explicit appliance publishing choices and metadata in the shared draft. Apply,
+confirm, rollback and revision restore use the existing SAVE workflow; mDNS
+changes, including metadata, require `mdns.write`. Config/import/export/history
+retain disabled preferences. Older backends may omit the section; the controller
+does not synthesize it until mDNS settings are staged.
+
+Only configured, up Ethernet/VLAN LAN links participate. Allow mode selects only
+listed links; deny mode includes all eligible links except those listed, including
+newly eligible links. SAVE highlights membership expansion. Reflection requires
+2..32 effective links; publishing alone requires 1..32. Filters are unique absolute
+local service/subtype/provider names (up to 64), with trailing dots and no patterns.
+Publishing is separate and opt-in; HINFO exposes Linux/architecture and workstation
+publishing uses port 9. Empty publishing hostname uses configured `system.hostname`,
+not ambient host state. Global IPv6 off suppresses IPv6 and all local AAAA publishing
+while retaining preferences.
+
+The page separates configured/draft membership from applied/provisional status,
+polls status without overlapping requests every 3 seconds (failure backoff capped
+at 5 seconds), and shows exact decimal counters, loss warnings and UTC sample times.
+Status failures retain local edits and do not globally lock configuration.
+Repair uses committed/pending settings, never the draft, and requires `mdns.write`
+for enabled mDNS even through another service's aggregate repair endpoint.
+
+Deploy a matching rebuilt backend: native mDNS remains **Unreleased**. Linux
+namespace/host-service opt-in, usable local addresses, exclusive UDP 5353 ownership,
+and one reflector per connected domain are required. No competing daemon is
+disabled. Restrictive host-input policy needs explicit UDP 5353 permits; no firewall
+rules, NAT or service access are added automatically. This is not SSDP or multicast
+media routing, and IPv6 link-local addresses do not become routable. Running means
+local readiness, not verified discovery. Frontend mock/browser tests do not establish
+VLAN/nftables/MLD paths, Apple/Windows/printer/Avahi interoperability, load, reboot
+or appliance acceptance.
+
 ## Screens
 
 | Browser route | Purpose |

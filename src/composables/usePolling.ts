@@ -6,7 +6,7 @@ export function usePolling(): void {
   const store = useControllerStore();
   const route = useRoute();
   const stops: Array<() => void> = [];
-  function schedule(action: () => Promise<void>, interval: () => number, failed: () => boolean, enabled = () => true, allRoutes = false): void {
+  function schedule(action: () => Promise<void>, interval: () => number, failed: () => boolean, enabled = () => true, allRoutes = false, maxBackoff = 10000): void {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false, running = false, failures = 0;
     async function run(): Promise<void> {
@@ -16,7 +16,7 @@ export function usePolling(): void {
         try { await action(); } finally { running = false; }
         failures = failed() ? Math.min(failures + 1, 4) : 0;
       }
-      if (!stopped) timer = setTimeout(() => { void run(); }, failures ? Math.max(interval(), [1000, 2000, 5000, 10000][failures - 1] ?? 10000) : interval());
+      if (!stopped) timer = setTimeout(() => { void run(); }, failures ? Math.min(maxBackoff, Math.max(interval(), [1000, 2000, 5000, 10000][failures - 1] ?? 10000)) : interval());
     }
     const wake = () => { clearTimeout(timer); void run(); };
     document.addEventListener("visibilitychange", wake);
@@ -39,6 +39,7 @@ export function usePolling(): void {
     schedule(store.refreshHostHealth, () => 3000, () => Boolean(store.hostHealth.error));
     schedule(store.refreshMqttStatus, () => 7500, () => Boolean(store.mqttStatus.error), () => route.path === "/settings/mqtt-streaming", true);
     schedule(store.refreshDynamicDnsStatus, () => 7500, () => Boolean(store.dynamicDnsStatus.error), () => route.path === "/settings/dynamic-dns", true);
+    schedule(store.refreshMDNSStatus, () => 3000, () => Boolean(store.mdnsStatus.error), () => route.path === "/services/mdns", true, 5000);
     schedule(store.refreshUpgrade, () => store.upgradeActive || store.upgradeUncertain ? 2000 : 15000, () => Boolean(store.upgrade.error), () => true, true);
   });
   onUnmounted(() => stops.forEach((stop) => stop()));

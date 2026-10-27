@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configSchema, gatewayMonitorSchema, gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, statisticsSchema, runtimeSchema } from "@/types/domain";
+import { configSchema, gatewayMonitorSchema, gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, statisticsSchema, runtimeSchema, isApplianceStatus } from "@/types/domain";
 import { decodeJson, encodeJson } from "@/services/json";
 import { differences, equalConfig, requiredPermissions, serviceRepairPermissions, validateConfig, validateServerHost } from "@/services/configuration";
 import { gatewayHealth, gatewayMetricIndicator, gatewaySampleState, formatMetric } from "@/services/gatewayHealth";
@@ -239,8 +239,9 @@ describe("appliance configuration and all-service repair", () => {
     }
   });
   it("keeps two vnStat scopes and per-row/top-level errors", () => {
-    const data = runtime(); data.appliance_services[2]!.database_directory = "/state/host";
-    data.appliance_services[3]!.database_directory = "/state/managed"; data.appliance_services[3]!.error = "inventory failed";
+    const data = runtime(), services = data.appliance_services.filter(isApplianceStatus);
+    services[2]!.database_directory = "/state/host";
+    services[3]!.database_directory = "/state/managed"; services[3]!.error = "inventory failed";
     data.error = "runtime failed";
     expect(runtimeSchema.parse(decodeJson(encodeJson(data)))).toEqual(data);
   });

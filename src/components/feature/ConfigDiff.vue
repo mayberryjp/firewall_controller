@@ -5,14 +5,17 @@ import { differenceContext, differences, normalize, stableJson } from "@/service
 import type { ApplianceService, Config } from "@/types/domain";
 import { record } from "@/types/forms";
 import ApplianceWarnings from "@/components/feature/ApplianceWarnings.vue";
+import { mdnsInterfaces } from "@/services/mdns";
 const props = defineProps<{ before: Config; after: Config }>();
 const diffID = useId();
 const changes = computed(() => differences(props.before, props.after));
 const changedServices = computed(() => (["ntp", "syslog", "vnstat"] as ApplianceService[]).filter(service => changes.value.some(item => item.area === service)));
 const relayChanged = computed(() => changes.value.some(item => item.area === "interfaces" &&
   (record(record(item.before).dhcp_relay).enabled === true || record(record(item.after).dhcp_relay).enabled === true)));
+const mdnsAddedLinks = computed(() => props.after.mdns?.interface_mode === "deny"
+  ? mdnsInterfaces(props.after).filter(name => !mdnsInterfaces(props.before).includes(name)) : []);
 const hasWarnings = computed(() => changedServices.value.length || relayChanged.value || changes.value.some(item =>
-  ["gateway_monitors", "firewall-icmp", "firewall-input"].includes(item.area)));
+  ["gateway_monitors", "firewall-icmp", "firewall-input", "mdns"].includes(item.area)) || mdnsAddedLinks.value.length);
 function source(value: unknown): string {
   return value === undefined ? "" : `${JSON.stringify(JSON.parse(stableJson(value)), null, 2)}\n`;
 }
@@ -41,6 +44,14 @@ const totals = computed(() => files.value.reduce((total, file) => ({
 }), { additions: 0, deletions: 0 }));
 </script>
 <template>
+  <v-alert
+    v-if="mdnsAddedLinks.length"
+    type="warning"
+    variant="tonal"
+    class="mb-4"
+  >
+    mDNS deny-mode membership expands to: {{ mdnsAddedLinks.join(', ') }}. Review discovery exposure on these LAN links before applying.
+  </v-alert>
   <details
     v-if="hasWarnings"
     class="diff-warnings"
@@ -51,6 +62,14 @@ const totals = computed(() => files.value.reduce((total, file) => ({
       :key="service"
       :service="service"
     />
+    <v-alert
+      v-if="changes.some(item => item.area === 'mdns')"
+      type="info"
+      variant="tonal"
+      class="mb-4"
+    >
+      mDNS needs exclusive UDP 5353 ownership and explicit input permits under restrictive policy. Reflection grants no unicast service access. Publishing exposes only selected appliance records; HINFO exposes Linux/architecture. Global IPv6 off suppresses all local AAAA records without deleting preferences.
+    </v-alert>
     <v-alert
       v-if="changes.some(item => item.area === 'gateway_monitors')"
       type="info"

@@ -3,7 +3,7 @@ import { formatTimestamp } from "@/services/timestamps";
 import { computed, onUnmounted, ref, watch, toRef } from "vue";
 import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
-import { ntpSchema, syslogSchema, vnstatSchema, type ApplianceService } from "@/types/domain";
+import { ntpSchema, syslogSchema, vnstatSchema, isApplianceStatus, type ApplianceService } from "@/types/domain";
 import { record, type Field } from "@/types/forms";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import FieldInput from "@/components/base/FieldInput.vue";
@@ -58,7 +58,7 @@ function stage(): void {
 }
 const statusNames = computed(() => service.value === "vnstat" ? ["vnstat-host", "vnstat-managed"] : [service.value]);
 const statusRows = computed(() => statusNames.value.map(name => ({
-  name, status: store.runtime.data?.appliance_services.find(item => item.name === name),
+  name, status: store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === name),
 })));
 const statusLabels: Record<string, string> = {
   disabled: "Disabled", simulated: "Simulated", unavailable: "Unavailable", not_running: "Not running",

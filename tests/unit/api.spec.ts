@@ -6,8 +6,8 @@ import * as net from "@/services/netcontrol";
 import { z } from "zod";
 import { decodeJson, encodeJson } from "@/services/json";
 import { differences, requiredPermissions } from "@/services/configuration";
-import { gatewayMonitorSchema, upgradeVersionSchema } from "@/types/domain";
-import { config, state, runtime, transaction, statistics, gatewayStatistics, connections } from "../fixtures";
+import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema } from "@/types/domain";
+import { config, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus } from "../fixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -20,6 +20,36 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("reads mDNS config/status without queries and sends bodyless repair, preserving heterogeneous runtime counters", async () => {
+    const mdns = mdnsSchema.parse({ metadata: { display_name: "Discovery", description: "Preserved" } });
+    body = encodeJson(mdns);
+    expect(await net.getMDNSConfig()).toEqual(mdns); expect(captured?.url).toBe("/services/mdns"); expect(captured?.data).toBeUndefined();
+    const row = mdnsStatus();
+    body = encodeJson({ instances: [row], error: "" });
+    expect((await net.getMDNSStatus()).instances[0]).toEqual(row); expect(captured?.url).toBe("/services/mdns/status");
+    body = encodeJson({ ...runtime(), appliance_services: [...runtime().appliance_services, row] });
+    expect((await net.reconcileServices("mdns")).appliance_services.at(-1)).toEqual(row);
+    expect(captured?.url).toBe("/services/mdns/reconcile"); expect(captured?.method).toBe("post"); expect(captured?.data).toBeUndefined();
+  });
+  it.each([401, 403, 409, 422, 503])("surfaces mDNS status/repair HTTP %s without retries", async code => {
+    status = code; body = encodeJson({ error: "mDNS operation rejected", transaction: null });
+    await expect(net.getMDNSStatus()).rejects.toMatchObject({ status: code });
+    await expect(net.reconcileServices("mdns")).rejects.toMatchObject({ status: code, uncertain: code >= 500 });
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("does not decode malformed mDNS runtime rows as generic appliance services", async () => {
+    body = encodeJson({ ...runtime(), appliance_services: [{ ...mdnsStatus(), received_packets: 42 }] });
+    await expect(net.getRuntime()).rejects.toMatchObject({ incompatible: true });
+  });
+  it("preserves mDNS through complete package submission including ignored-field warnings", async () => {
+    const candidate = config();
+    candidate.mdns = mdnsSchema.parse({ enabled: false, interfaces: ["lan0"], metadata: { display_name: "Discovery", description: "Disabled preferences" } });
+    body = encodeJson({ ...transaction(), candidate, ignored_fields: ["/config/mdns/future_option"] }); status = 202;
+    const result = await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 });
+    expect(result.candidate.mdns).toEqual(candidate.mdns);
+    expect(result.ignored_fields).toEqual(["/config/mdns/future_option"]);
+    expect(decodeJson(String(captured?.data))).toMatchObject({ config: { mdns: candidate.mdns } });
+  });
   it("tolerates unknown response keys, keeping unknown config sections intact for later submits", async () => {
     const pending = { ...transaction(), future_field: true, candidate: { ...config(), future_section: { enabled: true } }, previous: config() };
     pending.candidate.routes = [{ ...pending.candidate.routes[0]!, future_route_option: 1 }] as never;

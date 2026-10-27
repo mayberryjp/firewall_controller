@@ -41,6 +41,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "NetFlow/IPFIX", name: "netflow", path: "/services/netflow", icon: "mdi-chart-timeline-variant" },
     { title: "DHCPv4 relay", name: "dhcp-relay", path: "/services/dhcp-relay", icon: "mdi-lan-connect" },
     { title: "Remote DNS", name: "remote-dns", path: "/services/remote-dns", icon: "mdi-dns-outline" },
+    { title: "mDNS / Discovery", name: "mdns", path: "/services/mdns", icon: "mdi-access-point-network" },
     { title: "NTP", name: "ntp", path: "/services/ntp", icon: "mdi-clock-outline" },
     { title: "Syslog", name: "syslog", path: "/services/syslog", icon: "mdi-text-box-outline" },
     { title: "vnStat", name: "vnstat", path: "/services/vnstat", icon: "mdi-chart-bar" },

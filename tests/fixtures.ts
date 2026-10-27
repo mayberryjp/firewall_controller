@@ -1,4 +1,4 @@
-import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage } from "@/types/domain";
+import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus } from "@/types/domain";
 import type { HostHealth } from "../src/services/hostHealth";
 export function healthSnapshot(ticks = "9007199254740993", idle = "9007199254740993", uptime = 100): HostHealth {
   const unavailable = { status: "unavailable" as const, data: null, error: "Not supported" };
@@ -59,6 +59,19 @@ export function config(): Config {
 }
 export function state(): StateView {
   return { revision: "0", desired: config(), observed: config(), drift: false };
+}
+export function mdnsStatus(): MDNSStatus {
+  return {
+    name: "mdns", scope: "managed", enabled: true, state: "running",
+    started_at: "2026-10-25T12:00:00.123456Z", collected_at: "2026-10-25T12:00:01.987654Z", error: null,
+    effective_interfaces: ["lan0", "lan1"], effective_families: ["ipv4"],
+    reflection_enabled: true, publishing_enabled: false,
+    received_packets: "9007199254740993", transmitted_packets: "18446744073709551615",
+    received_bytes: "0", transmitted_bytes: "0", malformed_packets: "0", hop_limit_drops: "0",
+    policy_drops: "0", duplicate_drops: "0", rate_limit_drops: "0", queue_drops: "0",
+    oversize_drops: "0", unsupported_record_drops: "0", send_errors: "0", receive_drops: null,
+    statistics_complete: false, warnings: ["receive_loss_accounting_unavailable"], limits: { interfaces: 32, filters: 64 },
+  };
 }
 export function runtime(): RuntimeState { return {
   parent_interfaces: [], softflowd: [{ name: "capture", state: "simulated" }], dhcp_relay: [{ interface: "lab0", state: "disabled" }],

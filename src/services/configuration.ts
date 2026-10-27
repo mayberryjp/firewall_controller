@@ -1,6 +1,7 @@
 import ipaddr from "ipaddr.js";
 import { configSchema, mqttSchema, blackholeSchema, systemSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService, type Route } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
+import { normalizeMDNS, validateMDNS } from "@/services/mdns";
 
 export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
 export function stableJson(value: unknown): string {
@@ -48,6 +49,7 @@ export function normalize(config: Config): Config {
   result.softflowd.forEach((service) => { if (!service.capture_filter) delete service.capture_filter; });
   result.gateway_monitors.sort((a, b) => a.name.localeCompare(b.name));
   result.ntp.servers.sort();
+  if (result.mdns) normalizeMDNS(result.mdns);
   result.syslog.servers.sort((a, b) => {
     const first = `${a.transport}:${a.host}:${a.port}`, second = `${b.transport}:${b.host}:${b.port}`;
     return first < second ? -1 : first > second ? 1 : 0;
@@ -163,7 +165,7 @@ export function differences(before: Config, after: Config): Difference[] {
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
   named("dynamic_dns", old.dynamic_dns ?? [], next.dynamic_dns ?? [], item => item.name);
-  for (const area of ["ntp", "syslog", "vnstat", "mqtt", "blackhole", "system"] as const) {
+  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system"] as const) {
     if (stableJson(old[area]) !== stableJson(next[area])) result.push({
       area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
     });
@@ -227,7 +229,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     if (!doc.dhcp_clients) delete doc.dhcp_clients;
     if (!doc.dns) delete doc.dns;
     if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
-  } else if (["ntp", "syslog", "vnstat", "mqtt", "blackhole", "system", "kernel"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
+  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
   else if (change.area === "ipv6") doc.ipv6_enabled = change.after === false ? false : undefined;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
@@ -289,6 +291,7 @@ export function serviceRepairPermissions(config: Config, service: RepairService)
   for (const name of ["ntp", "syslog", "vnstat"] as const) {
     if (service === name || config[name].enabled) permissions.push(`${name}.write`);
   }
+  if (service === "mdns" || config.mdns?.enabled) permissions.push("mdns.write");
   return permissions;
 }
 export function validateServerHost(host: string): void {
@@ -337,7 +340,7 @@ export function ipv6Conflicts(config: Config): string[] {
   return conflicts;
 }
 export function validateConfig(config: Config, parents: ParentInterface[] = [], baseline?: Config): ValidationIssue[] {
-  const issues: ValidationIssue[] = [];
+  const issues: ValidationIssue[] = validateMDNS(config);
   const issue = (path: string, message: string, page: string) => issues.push({ path, message, page });
   if (config.ipv6_enabled === false) {
     for (const path of ipv6Conflicts(config)) issue(path, "IPv6 is disabled globally. Enable IPv6 in General settings or remove this setting.", "/settings/general");
@@ -663,7 +666,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     dhcp_clients: "interfaces.write", dns: "interfaces.write",
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
-    gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write",
+    gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write", mdns: "mdns.write",
     mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write",
   };
   for (const change of diff) {
