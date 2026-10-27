@@ -5,10 +5,11 @@ firewall control plane**, following the
 [frontend coding standards](https://github.com/mayberryjp/coding_standards/blob/main/FRONTEND_CODING_STANDARDS.md)
 and [Netcontrol frontend specification](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md).
 
-Backend contracts were checked against the October 24 README,
-[journal](https://github.com/mayberryjp/firewall_backend/blob/main/docs/journal/2026-10-24.md)
-and [frontend handoffs](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-24.md),
-including the breaking source-policy removal, signed upgrades and connection-state deletion.
+Backend contracts were checked against the October 25 and 27
+[journals](https://github.com/mayberryjp/firewall_backend/tree/main/docs/journal)
+and [frontend handoffs](https://github.com/mayberryjp/firewall_backend/tree/main/docs/frontend-handoffs),
+including native mDNS, journald-only syslog, resilient supervision and platform health,
+alongside the earlier source-policy removal, signed upgrades and connection-state deletion.
 These backend features are Unreleased; local mock tests do not establish deployment or native acceptance.
 Host-input filtering also follows the current
 [input-firewall contract](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md#661-host-input-filtering):
@@ -107,6 +108,17 @@ and unsaved edits are not changed by recovery. Manual reconciliation remains opt
 not required to retry a worker. A matching rebuilt backend is required for automatic
 recovery; these backend changes remain **Unreleased**.
 
+Native syslog receives only systemd/journald-forwarded records through the inherited
+`/run/systemd/journal/syslog` socket. Optional `source` and `host_source` status fields
+are preserved; the Syslog page shows the reported source with the socket path in a
+tooltip. It does not read `/dev/log`, `/dev/kmsg` or tail a backend log file directly.
+Deploy the backend's reviewed Ubuntu installer/full-source-upgrade logging units and
+journald configuration before enabling native forwarding. Direct/OpenRC launches lack
+the required systemd socket activation; signed API/package upgrades do not provision
+these host files. Disabling native syslog stops remote forwarding, not local journal
+capture. Bounded queued input may forward on later enable, but loss and restart can
+discard records; missed destination sends are not replayed.
+
 Syslog delivery conditions appear in the consolidated issues panel even while its worker
 is running. Failed sends are not replayed, and successful writes are not delivery receipts. Stale samples
 remain identified as stale; recovering NTP workers do not present retained measurements
@@ -129,11 +141,41 @@ endpoints stop polling for the session; existing service status remains compatib
 The panel shows backend-reported aggregate/component states, freshness and active
 alerts, deduplicated by stable ID. First/last-seen times use UTC seconds. Unknown codes
 remain readable; recovery removes resolved alerts. There is no dismiss, acknowledgement,
-stored alert history or automatic repair. Stale/unavailable data never implies healthy.
+stored alert history or automatic repair. A cached health read expires locally after
+15 seconds without a successful refresh, even if a request is still pending. Stale
+aggregates retain their alerts without suppressing newer service-local failures.
+Stale/unavailable data never implies healthy.
 These observations never enter drafts or write requests, change desired settings,
 block configuration operations, or trigger service/daemon restarts. Backend watchdog
 deployment remains a separate operator-approved action; no backend deployment is made
 by the frontend.
+
+### Committed Configuration Download
+
+Revision history provides **Download committed configuration**, using one read of
+`GET /revisions/latest`, independently of live observation. It saves only the returned
+`config` as `netcontrol-config-r<revision>.json`, preserving the exact uint64 revision.
+Historical revision exports remain available. A pending candidate may be running
+instead of the committed configuration. The existing export confirmation covers
+sensitive topology and key references; this is not a full-device backup and excludes
+external secret files, accounts/API keys and runtime state. Download errors remain
+inline and do not alter drafts. Older backends without this endpoint report an error;
+the controller does not substitute an empty configuration or restore anything.
+
+### Embedded SSH Deployment Default
+
+The October 25 backend installer and full source upgrade enable the embedded
+configuration SSH listener through `NETCONTROL_SSH_LISTEN=0.0.0.0:2222`. Manual daemon
+launches still default off; an explicit `--ssh-listen` takes precedence. The username
+is `apikey`, authenticated with a networking API key, not an account password. This
+is not an OS shell or separate SSH daemon. Review host-input policy before deployment:
+wildcard binding adds neither a firewall permit nor a protective WAN deny.
+Operators can override the address in `/etc/netcontrol/appliance.env` or opt out with
+a systemd drop-in containing `UnsetEnvironment=NETCONTROL_SSH_LISTEN`, also removing
+any explicit listener argument. Preserve the SSH host key and independent OS SSH or
+console access; restarting the backend interrupts its embedded SSH session.
+
+### Native mDNS Deployment
 
 Deploy a matching rebuilt backend: native mDNS remains **Unreleased**. Linux
 namespace/host-service opt-in, usable local addresses, exclusive UDP 5353 ownership,

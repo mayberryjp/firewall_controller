@@ -105,6 +105,10 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
           active_transaction: Object.values(transactions).find(item => !["committed", "rolled_back"].includes(item.status)) });
       }
       if (path === "/runtime") return reply(runtimeState());
+      if (path === "/platform/status") return reply({
+        process_health: { status: "healthy", healthy: true, stale: false, collected_at: "2026-10-27T01:02:03.987Z", components: [] },
+        active_alerts: [],
+      });
       if (path === "/system/upgrade") return reply({ enabled: false, repository: null, job: null, last_successful_version: null });
       if (path === "/interfaces/discovered") return reply(options.discoveredInterfaces ?? []);
       if (path === "/services/dhcp-relay/status") return reply({ interfaces: runtimeState().dhcp_relay, error: "" });

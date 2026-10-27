@@ -38,9 +38,9 @@ test("mDNS stages discovery, reviews and confirms a full package on desktop and 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
   await page.getByRole("link", { name: "Save configuration", exact: true }).click();
-  await expect(page.getByRole("main")).toContainText("mdns.write");
   await expect(page.getByRole("main")).toContainText("mdns / appliance service");
   await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("mdns.write");
   await page.getByRole("button", { name: "Push changes", exact: true }).click();
   await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   expect(backend.writes[0]).toMatchObject({

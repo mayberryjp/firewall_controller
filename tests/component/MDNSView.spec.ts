@@ -115,14 +115,16 @@ describe("mDNS / Discovery", () => {
     expect(wrapper.text()).toContain("9007199254740993"); expect(wrapper.text()).toContain("18446744073709551615");
     expect(wrapper.text()).toContain("2026-10-25 12:00:00"); expect(wrapper.text()).toContain("2026-10-25 12:00:01");
     expect(wrapper.text()).toContain("Started (UTC)"); expect(wrapper.text()).not.toContain(row.started_at);
-    expect(wrapper.text()).toContain("Statistics are incomplete"); expect(wrapper.text()).toContain("receive_loss_accounting_unavailable");
+    expect(wrapper.text()).toContain("Statistics are incomplete"); expect(wrapper.text()).not.toContain("receive_loss_accounting_unavailable");
     expect(store.mdnsStatus.data.instances[0]).toEqual(original);
   });
-  it("keeps status failures local and edits usable, with missing/invalid timestamp indicators", async () => {
+  it("keeps request failures inline and worker errors in tooltips without blocking edits", async () => {
     const store = useControllerStore(), row = { ...mdnsStatus(), state: "error" as const, error: "UDP 5353 is owned", started_at: null, collected_at: "invalid" };
     store.mdnsStatus.data = { instances: [row], error: "" }; store.mdnsStatus.error = "HTTP 503: status unavailable";
     const wrapper = mount(MDNSView, { global });
-    expect(wrapper.text()).toContain("UDP 5353 is owned"); expect(wrapper.text()).toContain("HTTP 503");
+    expect(wrapper.text()).not.toContain("UDP 5353 is owned");
+    expect(wrapper.find('[title*="UDP 5353 is owned"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain("HTTP 503");
     expect(wrapper.text()).toContain("Unavailable"); expect(wrapper.text()).toContain("Invalid timestamp");
     expect(wrapper.text()).toContain("Stale last-known state");
     expect(wrapper.findAll("button").find(button => button.text() === "Stage settings")!.attributes("disabled")).toBeUndefined();

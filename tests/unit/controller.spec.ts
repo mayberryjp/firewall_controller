@@ -30,6 +30,27 @@ async function connected() {
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("expires cached health even when an older successful state read masks failed health polling", async () => {
+    const store = await connected();
+    vi.useFakeTimers();
+    try {
+      const processHealth = { status: "healthy", healthy: true, collected_at: new Date().toISOString(), stale: false, components: [] };
+      store.state.data = { ...state(), process_health: processHealth, active_alerts: [] };
+      store.state.lastSuccess = Date.now();
+      vi.mocked(api.getPlatformStatus).mockRejectedValue(new ApiFailure("Health unavailable", 503));
+      await store.refreshPlatformStatus();
+      expect(store.healthStatus?.stale).toBe(false);
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(store.healthStatus?.stale).toBe(true);
+      expect(store.state.stale).toBe(false);
+      expect(store.readOnlyReason).toBe("");
+      await store.refreshState();
+      expect(store.healthStatus).toBeNull();
+      vi.mocked(api.getPlatformStatus).mockResolvedValue({ process_health: processHealth, active_alerts: [] });
+      await store.refreshPlatformStatus();
+      expect(store.healthStatus?.stale).toBe(false);
+    } finally { store.$dispose(); vi.useRealTimers(); }
+  });
   it("deduplicates platform alerts, clears recovered conditions, and never copies health into drafts", async () => {
     const store = await connected();
     const alert = { id: "ntp:worker", component: "appliance_services", resource: "ntp", severity: "error", code: "future_code", message: "NTP recovering", retrying: true, first_seen_at: "2026-10-27T00:00:00.123Z", last_seen_at: null };

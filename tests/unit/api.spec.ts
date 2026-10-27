@@ -3,6 +3,7 @@ import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios
 import api, { ApiFailure, onUnauthorized, request, setApiDevice } from "@/services/api";
 import { registryApiBaseUrl, setRegistrySessionToken } from "@/services/registry";
 import * as net from "@/services/netcontrol";
+import { useConfigExport } from "@/composables/useConfigExport";
 import { z } from "zod";
 import { decodeJson, encodeJson } from "@/services/json";
 import { differences, requiredPermissions } from "@/services/configuration";
@@ -20,6 +21,49 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("downloads only committed config and surfaces archive failures without exporting an empty fallback", async () => {
+    const createObjectURL = vi.fn<(blob: Blob) => string>(() => "blob:committed"), revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", class extends URL {
+      static createObjectURL = createObjectURL;
+      static revokeObjectURL = revokeObjectURL;
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const filenames: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filenames.push(this.download); });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const committed = config();
+      body = encodeJson({ revision: "18446744073709551615", current: true, submitted_at: null, committed_at: null, config: committed });
+      const download = useConfigExport();
+      await download.downloadCommittedConfig();
+      expect(filenames).toEqual(["netcontrol-config-r18446744073709551615.json"]);
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(confirm.mock.calls[0]![0]).toContain("a pending candidate may be running instead");
+      const blob = createObjectURL.mock.calls[0]![0] as unknown as Blob;
+      const text = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(blob);
+      });
+      expect(JSON.parse(text)).toEqual(committed);
+      status = 503; body = encodeJson({ error: "Archive unavailable", transaction: null });
+      await download.downloadCommittedConfig();
+      expect(download.exportError.value).toContain("Archive unavailable");
+      expect(download.downloading.value).toBe(false);
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect(adapter).toHaveBeenCalledTimes(2);
+    } finally {
+      await vi.runOnlyPendingTimersAsync(); vi.useRealTimers();
+      click.mockRestore(); confirm.mockRestore(); vi.unstubAllGlobals();
+    }
+  });
+  it("reads the latest committed revision in one request without losing uint64 precision", async () => {
+    body = encodeJson({ revision: "18446744073709551615", current: true, submitted_at: null, committed_at: null, config: config() });
+    const revision = await net.getLatestRevision();
+    expect(revision.revision).toBe("18446744073709551615");
+    expect(revision.config).toEqual(config());
+    expect(captured?.url).toBe("/revisions/latest");
+    expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
+    expect(adapter).toHaveBeenCalledOnce();
+  });
   it("reads mDNS config/status without queries and sends bodyless repair, preserving heterogeneous runtime counters", async () => {
     const mdns = mdnsSchema.parse({ metadata: { display_name: "Discovery", description: "Preserved" } });
     body = encodeJson(mdns);

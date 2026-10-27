@@ -49,6 +49,7 @@ describe("navbar firewall status", () => {
     const alert = { id: "ntp:warning", component: "appliance_services", resource: "ntp", severity: "warning", code: "future_code", message: "Upstream unavailable", retrying: true, first_seen_at: "2026-10-27T01:02:03.987Z", last_seen_at: null };
     store.platform.data = { process_health: { status: "healthy", healthy: true, stale: false, collected_at: "2026-10-27T01:02:03.987Z", components: [] }, active_alerts: [alert, alert] };
     store.platform.stale = false;
+    store.platform.lastSuccess = Date.now();
     const wrapper = mount(ConnectionBubble, { global: { stubs, directives: { tooltip: () => {} } } });
     expect(wrapper.get(".connection-bubble").text()).toBe("");
     expect(wrapper.get(".connection-bubble").attributes("size")).toBe("40");
@@ -60,6 +61,28 @@ describe("navbar firewall status", () => {
     store.platform.data = { ...store.platform.data, active_alerts: [] }; await flushPromises();
     expect(wrapper.find('[aria-label="Active alerts"]').exists()).toBe(false);
     wrapper.unmount();
+  });
+  it("shows current service failures alongside retained alerts when aggregate health expires", async () => {
+    const store = useControllerStore();
+    vi.useFakeTimers();
+    store.platform.data = {
+      process_health: { status: "healthy", healthy: true, stale: false, collected_at: "2026-10-27T01:02:03.987Z", components: [] },
+      active_alerts: [{ id: "ntp:warning", component: "appliance_services", resource: "ntp", severity: "warning", code: "sample_unavailable", message: "NTP sample unavailable", retrying: false, first_seen_at: null, last_seen_at: null }],
+    };
+    store.platform.stale = false; store.platform.lastSuccess = Date.now();
+    store.runtime.data = { ...runtime(), appliance_services: [{ name: "syslog", scope: "host", state: "running", destination_errors: ["Collector unavailable"] }] };
+    const wrapper = mount(ConnectionBubble, { global: { stubs, directives: { tooltip: () => {} } } });
+    try {
+      expect(wrapper.text()).toContain("Process health: Healthy");
+      expect(wrapper.find('[aria-label="Service issues"]').exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("No active alerts.");
+      await vi.advanceTimersByTimeAsync(15000); await flushPromises();
+      expect(wrapper.text()).toContain("Process health: Unknown");
+      expect(wrapper.text()).toContain("Stale last-known data");
+      expect(wrapper.get('[aria-label="Active alerts"]').text()).toContain("NTP sample unavailable");
+      expect(wrapper.get('[aria-label="Service issues"]').text()).toContain("Collector unavailable");
+      expect(store.readOnlyReason).toBe("");
+    } finally { wrapper.unmount(); store.$dispose(); vi.useRealTimers(); }
   });
   it("consolidates legacy service errors without adding page banners", () => {
     const store = useControllerStore();
@@ -237,11 +260,12 @@ describe("shared save safety", () => {
       await vi.advanceTimersByTimeAsync(10000); expect(read).toHaveBeenCalledTimes(count);
     } finally { wrapper.unmount(); vi.useRealTimers(); }
   });
-  it("shows the same specific blocker as the review page", () => {
+  it("does not turn modeled drift into a push blocker", () => {
     stageDraft(); useControllerStore().state.data!.drift = true;
     const wrapper = saveDialog();
-    expect(wrapper.text()).toContain(`Push blocked: ${useControllerStore().applyBlockedReason}`);
-    expect(wrapper.text()).toContain("Modeled drift");
+    expect(useControllerStore().applyBlockedReason).toBe("");
+    expect(wrapper.text()).not.toContain("Push blocked:");
+    expect(wrapper.findAll("button").find(button => button.text() === "Push changes")!.attributes("disabled")).toBeUndefined();
   });
   it("pushes and confirms in the same dialog then opens results without a Done step", async () => {
     stageDraft();

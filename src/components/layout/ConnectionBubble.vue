@@ -22,7 +22,7 @@ const readIssues = computed(() => [
   { label: "MQTT", query: store.mqttStatus }, { label: "Dynamic DNS", query: store.dynamicDnsStatus }, { label: "mDNS", query: store.mdnsStatus },
 ].flatMap(({ label, query }) => query.error ? [{ label, message: query.error }] : []));
 const serviceIssues = computed(() => {
-  if (health.value) return [];
+  if (health.value && !health.value.stale) return [];
   const issues = new Map<string, { resource: string; message: string; retrying?: boolean }>();
   const add = (worker: { name?: string; interface?: string; state?: string; process_state?: string; error?: string | null; retrying?: boolean; warnings?: string[]; destination_errors?: string[]; failed_deliveries?: number }, fallback: string) => {
     const resource = worker.name ?? worker.interface ?? fallback;
@@ -132,7 +132,7 @@ const connectionIcon = computed(() => !store.connected ? "mdi-lan-disconnect" : 
           </li>
         </ul>
         <ul
-          v-else-if="serviceIssues.length"
+          v-if="serviceIssues.length"
           class="issue-list"
           aria-label="Service issues"
         >
@@ -145,7 +145,7 @@ const connectionIcon = computed(() => !store.connected ? "mdi-lan-disconnect" : 
           </li>
         </ul>
         <p
-          v-else-if="health && !health.stale"
+          v-else-if="health && !health.stale && !health.active_alerts.length"
           class="text-caption"
         >
           No active alerts.

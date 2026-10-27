@@ -2,13 +2,31 @@
 import { onMounted } from "vue";
 import { formatTimestamp } from "@/services/timestamps";
 import { useControllerStore } from "@/stores/controller";
+import { useConfigExport } from "@/composables/useConfigExport";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 const store = useControllerStore();
+const { exportError, downloading, downloadCommittedConfig } = useConfigExport();
 onMounted(() => { void store.refreshRevisions(); });
 </script>
 
 <template>
   <section aria-label="PUSH REQUESTS">
+    <v-btn
+      prepend-icon="mdi-download"
+      class="mb-4"
+      :loading="downloading"
+      :disabled="!store.connected || downloading"
+      @click="downloadCommittedConfig"
+    >
+      Download committed configuration
+    </v-btn>
+    <v-alert
+      v-if="exportError"
+      type="error"
+      class="mb-4"
+    >
+      {{ exportError }}
+    </v-alert>
     <DatasetStatus
       :query="store.revisions"
       label="Revision history"

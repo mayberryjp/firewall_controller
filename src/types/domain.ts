@@ -311,7 +311,7 @@ export const applianceStatusSchema = z.object({
   failed_deliveries: integer.nonnegative().optional(),
   name: z.string(), scope: z.enum(["host", "managed"]), state: z.string(),
   pid: integer.optional(), started_at: timestamp.nullable().optional(),
-  database_directory: optionalText, error: optionalText,
+  database_directory: optionalText, source: optionalText, host_source: optionalText, error: optionalText,
   sample_status: optionalText, server: z.string().nullable().optional(),
   offset_ms: z.number().finite().nullable().optional(), delay_ms: z.number().finite().nullable().optional(),
   requested_slew_ms: z.number().finite().nullable().optional(),

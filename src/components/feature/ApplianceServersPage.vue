@@ -133,6 +133,12 @@ function remove(index: number): void {
         Stale last-known state:
       </template>
       <ServiceWorkerStatus :status="status" />
+      <span
+        v-if="status.source"
+        :title="status.host_source"
+      >
+        · Source: {{ status.source }}
+      </span>
     </p>
     <v-table class="service-table">
       <thead>

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { mockBackend } from "./mockBackend";
-import { config, gatewayStatistics, monitor, statistics, connections, healthSnapshot } from "../fixtures";
+import { config, gatewayStatistics, monitor, statistics, connections, healthSnapshot, runtime } from "../fixtures";
 import { navigationSections } from "../../src/constants/navigation";
 
 async function signInToRegistry(page: Page): Promise<void> {
@@ -60,6 +61,73 @@ test("consolidated health issues stay compact and never interrupt configuration"
   await expect(page.getByRole("button", { name: "Add remote syslog server", exact: true })).toBeEnabled();
   await expect(page.locator("main .v-alert")).toHaveCount(0);
   expect(backend.writes).toHaveLength(0);
+});
+
+test("expired aggregate health exposes current service failures without disturbing unsaved input", async ({ page }) => {
+  await page.clock.install();
+  await mockBackend(page);
+  let stalled = false, release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/proxy/platform/status", async route => {
+    if (stalled) await pending;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      process_health: { status: "healthy", healthy: true, stale: false, collected_at: "2026-10-27T01:02:03.987Z", components: [] }, active_alerts: [],
+    }) });
+  });
+  await page.route("**/proxy/runtime", route => route.fulfill({ contentType: "application/json", body: JSON.stringify({
+    ...runtime(), appliance_services: [{ name: "syslog", scope: "host", state: "running", destination_errors: ["Collector unavailable"] }],
+  }) }));
+  try {
+    await connect(page); await navigate(page, "General");
+    const domain = page.getByLabel("Domain name", { exact: true });
+    await domain.fill("retained.example");
+    await page.locator(".connection-bubble").click();
+    const panel = page.getByRole("region", { name: "Health and issues", exact: true });
+    await expect(panel).toContainText("Process health: Healthy");
+    await expect(panel.getByRole("list", { name: "Service issues" })).toHaveCount(0);
+    stalled = true;
+    await page.clock.fastForward(16000);
+    await expect(panel).toContainText("Process health: Unknown");
+    await expect(panel).toContainText("Stale last-known data");
+    await expect(panel.getByRole("list", { name: "Service issues" })).toContainText("Collector unavailable");
+    await expect(domain).toHaveValue("retained.example");
+    stalled = false; release();
+    await page.clock.fastForward(5000);
+    await expect(panel).toContainText("Process health: Healthy");
+    await expect(domain).toHaveValue("retained.example");
+  } finally { release(); }
+});
+
+test("committed downloads exclude staged changes and retain drafts on archive errors", async ({ page }) => {
+  const committed = config(), backend = await mockBackend(page, { initialConfig: committed });
+  let unavailable = false, reads = 0;
+  await page.route("**/proxy/revisions/latest", route => {
+    reads++;
+    return route.fulfill({ status: unavailable ? 503 : 200, contentType: "application/json", body: JSON.stringify(unavailable
+      ? { error: "Archive unavailable", transaction: null }
+      : { revision: "18446744073709551615", current: true, submitted_at: null, committed_at: null, config: committed }) });
+  });
+  await connect(page); await navigate(page, "Static Routes");
+  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await page.getByLabel("Metric", { exact: true }).fill("99");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  const history = navigationSections.flatMap(section => section.pages).find(entry => entry.path === "/config/revisions")!;
+  await navigate(page, history.title);
+  page.once("dialog", async dialog => {
+    expect(dialog.message()).toContain("a pending candidate may be running instead"); await dialog.accept();
+  });
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download committed configuration", exact: true }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe("netcontrol-config-r18446744073709551615.json");
+  expect(JSON.parse(await readFile((await download.path())!, "utf8"))).toEqual(committed);
+  expect(reads).toBe(1);
+  unavailable = true;
+  await page.getByRole("button", { name: "Download committed configuration", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Archive unavailable");
+  expect(reads).toBe(2); expect(backend.writes).toHaveLength(0);
+  await navigate(page, "SAVE");
+  await expect(page.getByRole("main")).toContainText("99");
 });
 
 test("overview packet counters abbreviate totals and show exact poll changes", async ({ page }, testInfo) => {
@@ -200,7 +268,7 @@ test("Home Assistant MQTT configuration and system stats use the staged confirme
   expect(errors).toEqual([]);
 });
 
-test("refresh discovery stays off the page and failures expand the connection circle", async ({ page }, testInfo) => {
+test("refresh discovery stays off the page and failures retain the fixed-size connection circle", async ({ page }, testInfo) => {
   await page.clock.install();
   await mockBackend(page);
   let releaseRead!: () => void, failed = false;
@@ -225,10 +293,10 @@ test("refresh discovery stays off the page and failures expand the connection ci
   await expect(page.locator('[aria-label="Committed revision 0"]')).toBeVisible();
   failed = true;
   await page.clock.fastForward(6000);
-  await expect(bubble).toHaveText("Read failed");
-  await expect(bubble).toHaveClass(/connection-bubble--expanded/);
+  await expect(bubble).toHaveAttribute("aria-label", "Read failed");
+  await expect(bubble).toHaveText("");
   const warning = (await bubble.boundingBox())!;
-  expect(warning.width).toBeGreaterThan(warning.height);
+  expect(warning.width).toBe(healthy.width); expect(warning.height).toBe(healthy.height);
   await expect(safety).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("connection-warning-bubble.png"), fullPage: true, animations: "disabled" });
@@ -461,7 +529,7 @@ test("top navigation opens routed sections in the black reference theme", async 
   await expect(navigation.getByRole("link", { name: "Interfaces", exact: true })).toHaveAttribute("aria-current", "page");
   if (isMobile) await page.keyboard.press("Escape");
   expect(await page.locator(".app-header").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(22, 27, 34)");
-  expect(await page.locator(".product-name").evaluate(element => getComputedStyle(element).color)).toBe("rgb(83, 205, 186)");
+  expect(await page.locator(".product-name").evaluate(element => getComputedStyle(element).color)).toBe("rgb(213, 255, 56)");
   expect(await page.locator(".v-application").evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgb(10, 12, 16)");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const header = await page.locator(".app-header").boundingBox();
@@ -498,7 +566,7 @@ test("top navigation opens routed sections in the black reference theme", async 
   await page.locator(".product-branding").click();
   await expect(page).toHaveURL(/\/overview$/);
   await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Connected", exact: true }).click();
+  await page.locator(".connection-bubble").click();
   await page.getByRole("list", { name: "Registry session" }).getByText("Disconnect", { exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Disconnect and clear local state?");
   await page.getByRole("button", { name: "Keep connected", exact: true }).click();
@@ -560,9 +628,9 @@ test("connection bubble stays bottom-right and settings uses the gear without a 
   await page.goto("/connect");
   const tooltip = page.getByRole("tooltip").filter({ has: page.locator(".v-overlay__content:visible") });
   const offline = page.getByRole("button", { name: "Offline", exact: true });
-  await expect(offline).toBeVisible(); await expect(offline).toHaveText("Offline");
+  await expect(offline).toBeVisible(); await expect(offline).toHaveText("");
   const offlineBounds = (await offline.boundingBox())!;
-  expect(offlineBounds.width).toBeGreaterThan(offlineBounds.height);
+  expect(offlineBounds.width).toBe(40); expect(offlineBounds.height).toBe(40);
   if (!isMobile) {
     await offline.hover();
     await expect(tooltip).toHaveText("Offline");
@@ -917,7 +985,7 @@ test("tables use compact spacing across resource, overview, and connection pages
     const row = table.locator("tbody > tr").first();
     await expect(row).toBeVisible();
     if (!isMobile) {
-      expect((await row.boundingBox())!.height, `${label} row height`).toBeLessThanOrEqual(44);
+      await expect.poll(async () => (await row.boundingBox())?.height ?? Infinity, { message: `${label} row height` }).toBeLessThanOrEqual(44);
     }
     if (label !== "DHCPv4 relay") {
       expect(await table.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth), `${label} table overflow`).toBe(true);
@@ -1127,6 +1195,7 @@ test("invalid stored firewall keys are proxied once and never sent to the browse
 test("recovery remains accessible when state observation is unavailable", async ({ page }) => {
   await mockBackend(page, { observationFailed: true, initialStatus: "recovery_failed" });
   await connect(page);
+  await page.locator(".connection-bubble").click();
   await expect(page.getByText("Critical: recovery failed", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry rollback", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -1357,13 +1426,17 @@ test("unknown write outcomes are frozen and never automatically replayed", async
   await navigate(page, "SAVE");
   await page.getByRole("button", { name: "Commit & push" }).click();
   await page.getByRole("button", { name: "Push changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("A submitted snapshot or uncertain write is frozen");
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Push changes", exact: true })).toBeDisabled();
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.locator(".connection-bubble").click();
   await expect(page.getByText("Outcome unknown: Apply package.", { exact: true })).toBeVisible();
   await page.waitForTimeout(1500);
   expect(backend.writes.filter(write => write.path === "/transactions")).toHaveLength(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test("only overview polls while other pages refresh on demand", async ({ page }) => {
+test("only overview polls operational data while background health remains independent", async ({ page }) => {
   await page.clock.install();
   await mockBackend(page, { initialStatus: "pending_confirmation" });
   await connect(page);
@@ -1373,7 +1446,8 @@ test("only overview polls while other pages refresh on demand", async ({ page })
   await expect(refreshTransaction).toBeEnabled();
   const reads: string[] = [];
   page.on("request", request => {
-    if (request.method() === "GET" && request.url().includes("/proxy/") && !request.url().includes("/system/upgrade")) reads.push(new URL(request.url()).pathname);
+    if (request.method() === "GET" && request.url().includes("/proxy/") &&
+      !request.url().includes("/system/upgrade") && !request.url().includes("/platform/status")) reads.push(new URL(request.url()).pathname);
   });
   await page.clock.fastForward(20000);
   expect(reads).toHaveLength(0);
@@ -1848,7 +1922,7 @@ test("operational pages keep content compact with readable details", async ({ pa
     await navigate(page, entry.title);
     const main = page.getByRole("main");
     await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections)/.test(entry.path) ? 1 : 0);
+    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections|services\/mdns)/.test(entry.path) ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
     await expect(main).not.toContainText("Operator prerequisites");
     await expect(main).not.toContainText("Last successful read");

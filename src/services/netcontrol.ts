@@ -82,6 +82,7 @@ export function startSystemUpgrade(version: string) {
 export const getRevisions = (before?: string) => request("GET",
   `/revisions?limit=50${before === undefined ? "" : `&before_revision=${id(before)}`}`, revisionPageSchema);
 export const getRevision = (revision: string) => request("GET", `/revisions/${id(revision)}`, revisionDetailSchema);
+export const getLatestRevision = () => request("GET", "/revisions/latest", revisionDetailSchema);
 export const submitPackage = (body: PackageRequest) => request("POST", "/transactions", submittedTransactionSchema, body);
 export const confirmTransaction = (value: string) => request("POST", `/transactions/${id(value)}/confirm`, transactionSchema);
 export const rollbackTransaction = (value: string) => request("POST", `/transactions/${id(value)}/rollback`, transactionSchema);

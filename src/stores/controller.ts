@@ -1,4 +1,4 @@
-import { computed, ref, shallowReactive } from "vue";
+import { computed, onScopeDispose, ref, shallowReactive, watch } from "vue";
 import { defineStore } from "pinia";
 import { ApiFailure, onUnauthorized, setApiDevice } from "@/services/api";
 import * as api from "@/services/netcontrol";
@@ -33,17 +33,29 @@ export const useControllerStore = defineStore("controller", () => {
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
   const platform = dataset<PlatformStatus>();
   const platformUnsupported = ref(false);
-  const healthStatus = computed(() => {
+  const healthSource = computed(() => {
     const sources = [state, runtime, platform].filter(query => query.data?.process_health);
     sources.sort((left, right) => {
       const time = (query: typeof sources[number]) => Date.parse(query.data?.process_health?.collected_at ?? "") || query.lastSuccess || 0;
       return time(right) - time(left) || (right.lastSuccess ?? 0) - (left.lastSuccess ?? 0);
     });
-    const source = sources[0];
+    return sources[0];
+  });
+  const healthExpired = ref(true);
+  let healthTimer: ReturnType<typeof setTimeout> | undefined;
+  watch(() => healthSource.value?.lastSuccess, lastSuccess => {
+    clearTimeout(healthTimer);
+    const remaining = lastSuccess === null || lastSuccess === undefined ? 0 : lastSuccess + 15000 - Date.now();
+    healthExpired.value = remaining <= 0;
+    if (remaining > 0) healthTimer = setTimeout(() => { healthExpired.value = true; }, remaining);
+  }, { immediate: true, flush: "sync" });
+  onScopeDispose(() => clearTimeout(healthTimer));
+  const healthStatus = computed(() => {
+    const source = healthSource.value;
     return source?.data?.process_health ? {
       process_health: source.data.process_health,
       active_alerts: [...new Map((source.data.active_alerts ?? []).map(alert => [alert.id, alert])).values()],
-      stale: source.stale || source.data.process_health.stale,
+      stale: source.stale || source.data.process_health.stale || healthExpired.value,
     } : null;
   });
   const transactions = dataset<Record<string, Transaction>>(), statistics = dataset<Statistics>();

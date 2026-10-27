@@ -97,10 +97,13 @@ describe("October 17 frontend workflows", () => {
     const store = useControllerStore();
     store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{
       name: "syslog", scope: "host", state: "running", destination_errors: ["collector.example: disconnected"],
+      source: "journald", host_source: "/run/systemd/journal/syslog",
       failed_deliveries: 3, captured_records: 10, forwarded_records: 7,
     }] });
     const wrapper = await render(SyslogView, "/services/syslog");
     expect(wrapper.text()).toContain("Running");
+    expect(wrapper.text()).toContain("Source: journald");
+    expect(wrapper.get('[title="/run/systemd/journal/syslog"]').text()).toContain("Source: journald");
     expect(wrapper.text()).not.toContain("missed destination deliveries");
     expect(wrapper.text()).not.toContain("collector.example: disconnected");
     expect(wrapper.findComponent({ name: "VAlert" }).exists()).toBe(false);
@@ -111,6 +114,7 @@ describe("October 17 frontend workflows", () => {
       last_error: "collector.example: disconnected",
     }] });
     await flushPromises();
+    expect(wrapper.text()).not.toContain("Source:");
     expect(wrapper.text()).not.toContain("missed destination deliveries");
     expect(wrapper.find('[title*="Last failure: collector.example: disconnected"]').exists()).toBe(true);
     wrapper.unmount();
@@ -470,17 +474,23 @@ describe("October 17 frontend workflows", () => {
       expect(submit).not.toHaveBeenCalled();
     } finally { wrapper.unmount(); }
   });
-  it("hides DHCP mode without advertised capabilities and blocks imported DHCP monitor submissions", async () => {
-    const store = useControllerStore(), wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
+  it("derives DHCP mode from valid configuration without requiring advertised capabilities", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.kind = "ethernet";
+    const wrapper = await render(GatewayMonitorsView, "/gateway-monitors");
     try {
       await wrapper.findAll("button").find(button => button.text() === "Add monitor")!.trigger("click");
       expect(wrapper.getComponent(ResourceRowEditor).props("fields").some(field => field.key === "mode")).toBe(false);
       store.state.stale = false; store.state.lastSuccess = Date.now(); store.transactions.stale = false; store.transactions.data = {};
       const candidate = cloneConfig(store.state.data!.desired);
+      candidate.interfaces[0]!.addresses = [];
+      candidate.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
+      candidate.routes = [];
       candidate.gateway_monitors = [configSchema.shape.gateway_monitors.parse([{ name: "wan-health", enabled: true, mode: "dhcp", interface: "lab0", target: "1.1.1.1" }])[0]!];
       store.stage(candidate);
-      expect(store.applyBlockedReason).toContain("advertise DHCP IPv4");
-      expect(store.canApply).toBe(false);
+      expect(store.validation).toEqual([]);
+      expect(store.applyBlockedReason).toBe("");
+      expect(store.canApply).toBe(true);
     } finally { wrapper.unmount(); }
   });
   it.each([
@@ -502,7 +512,11 @@ describe("October 17 frontend workflows", () => {
       if (save) expect(save.attributes("disabled")).toBeDefined();
       store.state.incompatible = true;
       await flushPromises();
-      expect(wrapper.text()).toContain("Incompatible API data");
+      expect(wrapper.text()).not.toContain("Incompatible API data");
+      expect(store.incompatible).toBe(true);
+      expect(store.readOnlyReason).toContain("Committed desired configuration is unavailable");
+      expect(store.canApply).toBe(false);
+      if (save) expect(save.attributes("disabled")).toBeDefined();
     } finally { wrapper.unmount(); }
   });
   it("requires explicit connection deletion and separate namespace flush confirmation without changing drafts", async () => {
