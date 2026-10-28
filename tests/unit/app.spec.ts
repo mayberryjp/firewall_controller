@@ -38,13 +38,14 @@ describe("routed navigation sections", () => {
     expect(vpn?.pages.find(page => page.name === "wireguard")?.icon).toBe("mdi-wan");
   });
   it("keeps Config routable without a duplicate primary navigation entry", () => {
-    expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall", "VPN", "Services", "Settings"]);
+    expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall", "VPN", "Services", "Diagnostics", "Settings"]);
     expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels"]);
     expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
     expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall", "firewall-input", "connections", "nat"]);
     expect(navigationSections.find(section => section.name === "vpn-section")?.pages.map(page => page.name)).toEqual(["wireguard"]);
+    expect(navigationSections.find(section => section.name === "diagnostics-section")?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health"]);
   });
   it("preserves every page URL and its authenticated section", () => {
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
@@ -75,6 +76,9 @@ describe("routed navigation sections", () => {
     expect(router.currentRoute.value.meta.authenticated).toBe(true);
     await router.push("/settings");
     expect(router.currentRoute.value.path).toBe("/settings/general");
+    expect(router.currentRoute.value.meta.authenticated).toBe(true);
+    await router.push("/diagnostics");
+    expect(router.currentRoute.value.path).toBe("/diagnostics/traffic");
     expect(router.currentRoute.value.meta.authenticated).toBe(true);
   });
   it("loads all page and detail views with distinct top-level pages", async () => {
@@ -121,6 +125,38 @@ describe("page-scoped polling", () => {
     vi.spyOn(api, "getPlatformStatus").mockResolvedValue({ process_health: {
       status: "unknown", healthy: null, collected_at: null, stale: true, components: [],
     }, active_alerts: [] });
+  });
+  it("polls live traffic only on its visible page and stops on navigation or unmount", async () => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    const refreshStatistics = vi.spyOn(store, "refreshStatistics").mockResolvedValue();
+    const refreshState = vi.spyOn(store, "refreshState").mockResolvedValue();
+    const refreshRuntime = vi.spyOn(store, "refreshRuntime").mockResolvedValue();
+    vi.spyOn(store, "refreshUpgrade").mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push("/diagnostics/traffic");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(6100);
+      expect(refreshStatistics).toHaveBeenCalledTimes(3);
+      expect(refreshState).not.toHaveBeenCalled(); expect(refreshRuntime).not.toHaveBeenCalled();
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(refreshStatistics).toHaveBeenCalledTimes(3);
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(refreshStatistics).toHaveBeenCalledTimes(4);
+      await router.push("/services/dhcp-relay");
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(refreshStatistics).toHaveBeenCalledTimes(4);
+      wrapper.unmount();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(refreshStatistics).toHaveBeenCalledTimes(4);
+    } finally { wrapper.unmount(); visibility.mockRestore(); vi.useRealTimers(); }
   });
   it("polls cached health independently of failed configuration reads without overlapping or changing drafts", async () => {
     vi.useFakeTimers();

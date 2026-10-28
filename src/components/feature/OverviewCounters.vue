@@ -69,6 +69,7 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
 <template>
   <OverviewWidget
     title="Interface counters"
+    title-to="/diagnostics/traffic"
     :note="note"
     :detail="store.statistics.error ?? undefined"
   >
@@ -93,7 +94,12 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
           :key="item.name"
         >
           <th scope="row">
-            {{ item.name }}
+            <RouterLink
+              :to="{ path: '/diagnostics/traffic', query: { interface: item.name } }"
+              class="counter-link"
+            >
+              {{ item.name }}
+            </RouterLink>
           </th>
           <td
             v-for="counter in counters"
@@ -130,4 +136,5 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
 
 <style scoped>
 .counter-value { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; }
+.counter-link { color: inherit; text-decoration: none; }
 </style>

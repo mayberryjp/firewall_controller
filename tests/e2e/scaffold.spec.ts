@@ -13,7 +13,7 @@ async function connect(page: Page): Promise<void> {
   await page.goto("/connect");
   await signInToRegistry(page);
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
 }
 async function openNavigation(page: Page): Promise<void> {
   const hamburger = page.getByRole("button", { name: "Open navigation menu", exact: true });
@@ -348,15 +348,13 @@ test("masquerading adds and edits inline without popups on desktop and mobile", 
   expect(dialogs).toEqual([]); expect(backend.writes).toHaveLength(0);
 });
 
-test("cosmetic device domain stages, commits and appears in the navbar without overflowing", async ({ page }, testInfo) => {
+test("cosmetic device domain stages and persists without adding a navbar identity", async ({ page }, testInfo) => {
   const initial = config();
   initial.system = { hostname: "fw-1", domain: `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.example.test`, timezone: "UTC" };
   const backend = await mockBackend(page, { initialConfig: initial });
   await connect(page);
   const identity = page.getByRole("banner").getByLabel("Device name", { exact: true });
-  await expect(identity).toHaveText(`fw-1.${initial.system.domain}`);
-  await expect(identity).toHaveAttribute("title", `fw-1.${initial.system.domain}`);
-  expect(await identity.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await expect(identity).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await navigate(page, "General");
   await expect(page.getByLabel("Domain name", { exact: true })).toHaveValue(initial.system.domain);
@@ -366,7 +364,7 @@ test("cosmetic device domain stages, commits and appears in the navbar without o
   await page.getByLabel("Host name", { exact: true }).fill("edge");
   await page.getByLabel("Domain name", { exact: true }).fill("home.example.test");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(identity).toHaveText(`fw-1.${initial.system.domain}`);
+  await expect(identity).toHaveCount(0);
   expect(backend.writes).toEqual([]);
   await navigate(page, "SAVE");
   await page.getByRole("button", { name: "Commit & push", exact: true }).click();
@@ -376,9 +374,9 @@ test("cosmetic device domain stages, commits and appears in the navbar without o
   expect(backend.writes[0]?.body).toMatchObject({ config: { system: { hostname: "edge", domain: "home.example.test", timezone: "UTC" } } });
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(identity).toHaveText("edge.home.example.test");
+  await expect(identity).toHaveCount(0);
   await page.reload();
-  await expect(identity).toHaveText("edge.home.example.test");
+  await expect(identity).toHaveCount(0);
   await navigate(page, "General");
   await expect(page.getByLabel("Domain name", { exact: true })).toHaveValue("home.example.test");
   await page.screenshot({ path: testInfo.outputPath("device-domain-general-settings.png"), fullPage: true, animations: "disabled" });
@@ -489,7 +487,7 @@ test("top navigation opens routed sections in the black reference theme", async 
   const navigation = page.getByRole("navigation", { name: "Main navigation" });
   for (const section of navigationSections) {
     await openNavigation(page);
-    await expect(navigation.getByRole("link").locator(".v-icon")).toHaveCount(6);
+    await expect(navigation.getByRole("link").locator(".v-icon")).toHaveCount(7);
     if (section.name === "overview-section") {
       await expect(navigation.getByRole("link", { name: "Overview", exact: true })).toHaveCount(0);
       if (isMobile) await page.keyboard.press("Escape");
@@ -501,7 +499,7 @@ test("top navigation opens routed sections in the black reference theme", async 
     } else await navigation.getByRole("link", { name: section.title, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`${section.pages[0]!.path}$`));
     const pages = page.getByRole("navigation", { name: `${section.title} pages` });
-    if (section.pages.length === 1 && section.name !== "settings-section") {
+    if (section.pages.length === 1 && !["settings-section", "diagnostics-section"].includes(section.name)) {
       await expect(pages).toHaveCount(0);
       const layout = await page.locator(".section-layout").boundingBox();
       const content = await page.locator(".section-content").boundingBox();
@@ -522,8 +520,8 @@ test("top navigation opens routed sections in the black reference theme", async 
   }
   await navigate(page, "Physical interfaces");
   await openNavigation(page);
-  await expect(navigation.getByRole("link")).toHaveCount(6);
-  for (const title of ["Interfaces", "Routing", "Firewall", "VPN", "Services", "Settings"]) {
+  await expect(navigation.getByRole("link")).toHaveCount(7);
+  for (const title of ["Interfaces", "Routing", "Firewall", "VPN", "Services", "Diagnostics", "Settings"]) {
     await expect(navigation.getByRole("link", { name: title, exact: true })).toBeVisible();
   }
   await expect(navigation.getByRole("link", { name: "Interfaces", exact: true })).toHaveAttribute("aria-current", "page");
@@ -581,19 +579,26 @@ test("compact overview contains four live status widgets without diagnostic clut
     wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [] },
   });
   counters.sample.status = "available";
-  counters.interfaces[0]!.status = "available"; counters.interfaces[0]!.oper_state = "UP";
-  counters.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UP", status: "available", counters: { rx_packets: "1250000", tx_packets: "2450000", rx_bytes: "42100", tx_bytes: "84200", rx_errors: "0", tx_errors: "0" } });
+  counters.interfaces[0]!.status = "available"; counters.interfaces[0]!.oper_state = "UNKNOWN";
+  counters.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UNKNOWN", status: "available", counters: { rx_packets: "1250000", tx_packets: "2450000", rx_bytes: "42100", tx_bytes: "84200", rx_errors: "0", tx_errors: "0" } });
+  counters.interfaces.push({ ...counters.interfaces[0]!, name: "lo", kind: "loopback", counters: { rx_bytes: "0", tx_bytes: "0" } });
   const backend = await mockBackend(page, { initialConfig: initial, statistics: counters, discoveredInterfaces: [
     { name: "lab0", kind: "dummy", index: 1, mac: null, mtu: 1500, up: true, ownership: "managed", addresses: ["192.0.2.99/24", "2001:db8:1234:5678:90ab:cdef:1234:5678/64"] },
     { name: "wg0", kind: "wireguard", index: 2, mac: null, mtu: 1420, up: true, ownership: "managed", addresses: ["10.0.0.1/24"] },
+    { name: "lo", kind: "loopback", index: 3, mac: null, mtu: 65536, up: true, ownership: "unmanaged", addresses: ["127.0.0.1/8", "::1/128"] },
   ] });
   await connect(page);
   const dashboard = page.getByRole("region", { name: "Overview", exact: true });
   await expect(dashboard.getByRole("heading", { level: 2 })).toHaveText(["Interfaces", "Gateways", "WireGuard", "System stats", "Interface counters"]);
-  await expect(dashboard.getByRole("region", { name: "Interfaces", exact: true }).getByRole("cell", { name: "Up", exact: true })).toHaveCount(2);
+  await expect(dashboard.getByRole("region", { name: "Interfaces", exact: true }).getByRole("cell", { name: "Up", exact: true })).toHaveCount(3);
   const interfaceWidget = dashboard.getByRole("region", { name: "Interfaces", exact: true });
-  await expect(interfaceWidget.getByRole("columnheader")).toHaveText(["Name", "Status", "Active IP", "Mode"]);
-  await expect(interfaceWidget.locator(".v-chip.text-success")).toHaveCount(2);
+  await expect(interfaceWidget.getByRole("columnheader")).toHaveText(["Name", "Admin state", "Operational state", "Active IP", "Mode"]);
+  await expect(interfaceWidget.locator(".v-chip.text-success")).toHaveCount(3);
+  for (const name of ["lab0", "wg0", "lo"]) {
+    const row = interfaceWidget.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
+    await expect(row.getByRole("cell").nth(1)).toHaveText("Up");
+    await expect(row.getByRole("cell").nth(2)).toHaveText("-");
+  }
   await expect(interfaceWidget).toContainText("192.0.2.99/24");
   await expect(interfaceWidget).toContainText("DHCP"); await expect(interfaceWidget).toContainText("Static");
   expect(await interfaceWidget.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -602,7 +607,8 @@ test("compact overview contains four live status widgets without diagnostic clut
   await expect(counterWidget.getByRole("cell", { name: "18.45 EB", exact: true })).toHaveAttribute("title", "18446744073709551615");
   await expect(counterWidget).toContainText("1.25M"); await expect(counterWidget).toContainText("2.45M");
   await expect(counterWidget).toContainText("42.1 KB"); await expect(counterWidget).toContainText("84.2 KB");
-  await expect(dashboard.getByRole("region", { name: "WireGuard", exact: true })).toContainText("51820");
+  await expect(dashboard.getByRole("region", { name: "WireGuard", exact: true }).getByRole("columnheader")).toHaveText(["Peer", "Last handshake", "Received", "Sent"]);
+  await expect(dashboard.getByRole("region", { name: "WireGuard", exact: true })).toContainText("No enabled WireGuard peers.");
   await expect(dashboard.getByRole("region", { name: "Gateways", exact: true })).toContainText("Simulated");
   await expect(dashboard).not.toContainText("Recent transactions");
   expect(backend.writes).toHaveLength(0);

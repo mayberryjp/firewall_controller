@@ -95,7 +95,7 @@ async function call<T>(method: "GET" | "POST", path: string, schema: z.ZodType<T
       const message = error.response?.data && typeof error.response.data === "object" &&
         "error" in error.response.data && typeof error.response.data.error === "string"
         ? error.response.data.error
-        : "Device registry request failed. Check the registry address, availability, and CORS settings.";
+        : "Device registry request failed. Check the registry address and availability.";
       throw new RegistryFailure(message, error.response?.status);
     }
     throw error;

@@ -1,4 +1,4 @@
-import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus } from "@/types/domain";
+import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus, PlatformStatus } from "@/types/domain";
 import type { HostHealth } from "../src/services/hostHealth";
 export function healthSnapshot(ticks = "9007199254740993", idle = "9007199254740993", uptime = 100): HostHealth {
   const unavailable = { status: "unavailable" as const, data: null, error: "Not supported" };
@@ -91,5 +91,42 @@ export function statistics(): Statistics {
     sample: { scope: "simulator:test", started_at: new Date().toISOString(), collected_at: new Date().toISOString(), status: "simulated" },
     interfaces: [{ name: "lab0", kind: "dummy", ownership: "managed", mtu: 1500, admin_up: true, oper_state: "UNKNOWN", status: "simulated", counters: { rx_bytes: "18446744073709551615", tx_bytes: "0" } }],
     protocols: [{ name: "snmp", status: "available", groups: { Tcp: { MaxConn: "-1" } } }],
+  };
+}
+export function trafficStatistics(seconds = 0, increment = 0n): Statistics {
+  return {
+    sample: {
+      scope: "managed:test", started_at: new Date(Date.UTC(2026, 9, 27, 12, 0, seconds)).toISOString(),
+      collected_at: new Date(Date.UTC(2026, 9, 27, 12, 0, seconds, 123)).toISOString(), status: "available",
+    },
+    interfaces: ["eth0", "eth1"].map((name, index) => ({
+      name, index: index + 1, kind: "ethernet", ownership: "managed", mtu: 1500,
+      admin_up: true, oper_state: "UP", status: "available", counter_bits: 64,
+      counters: {
+        rx_bytes: (1000n + increment * BigInt(index + 1)).toString(),
+        tx_bytes: (2000n + increment * 2n * BigInt(index + 1)).toString(),
+        rx_packets: (100n + increment * 3n * BigInt(index + 1)).toString(),
+        tx_packets: (200n + increment * 4n * BigInt(index + 1)).toString(),
+      },
+    })),
+    protocols: [],
+  };
+}
+export function processHealthSnapshot(): PlatformStatus {
+  const timestamp = "2026-10-27T01:02:03.987Z";
+  return {
+    process_health: {
+      status: "unhealthy", healthy: false, collected_at: timestamp, stale: false, runtime_available: true,
+      daemon: { pid: 123, state: "running", healthy: true, uptime_seconds: 900, watchdog_enabled: true },
+      components: [
+        { id: "ntp", component: "appliance_services", resource: "ntp", state: "error", healthy: false, retrying: true, collected_at: timestamp },
+        { id: "syslog", component: "appliance_services", resource: "syslog", state: "disabled", healthy: null, retrying: false, collected_at: timestamp },
+      ],
+    },
+    active_alerts: [{
+      id: "ntp:worker_unavailable", component: "appliance_services", resource: "ntp",
+      severity: "error", code: "worker_unavailable", message: "NTP worker is unavailable",
+      retrying: true, first_seen_at: timestamp, last_seen_at: timestamp,
+    }],
   };
 }

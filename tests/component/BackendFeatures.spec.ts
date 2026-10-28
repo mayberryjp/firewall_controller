@@ -243,7 +243,10 @@ describe("October 17 frontend workflows", () => {
     try {
       expect(wrapper.findAll("button").some(button => button.text() === "Add NetFlow/IPFIX export")).toBe(true);
       expect(wrapper.findAll("button").some(button => button.text() === "Add export")).toBe(false);
-      expect(wrapper.findAll("th").map(header => header.text())).toContain("Status");
+      expect(wrapper.findAll("thead th").map(header => header.text()).slice(-5)).toEqual(["Observed", "State", "Dropped packets", "Status", "Actions"]);
+      const cells = wrapper.findAll("tbody tr")[0]!.findAll("td");
+      expect(cells.at(-2)!.find('[aria-label="Export enabled for capture"]').exists()).toBe(true);
+      expect(cells.at(-1)!.find('button[aria-label="Edit / stage"]').exists()).toBe(true);
       const toggle = () => wrapper.get<HTMLInputElement>('[aria-label="Export enabled for capture"] input');
       const enabled = before.softflowd[0]!.enabled;
       await toggle().setValue(!enabled); await flushPromises();
@@ -344,7 +347,7 @@ describe("October 17 frontend workflows", () => {
       expect(measurement("RTT variation")).toBe("Unavailable"); expect(measurement("Loss")).toBe("33.33 %");
       expect(summary.text()).not.toContain("no monitor sample");
       expect(summary.get('[data-metric="Loss"]').attributes("title")).toBe("33.33 %");
-      expect(wrapper.findAll("thead th").map(item => item.text())).toEqual(["Name", "Interface", "Status", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Actions"]);
+      expect(wrapper.findAll("thead th").map(item => item.text())).toEqual(["Name", "Interface", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions"]);
       expect(summary.findAll("td")).toHaveLength(9);
       expect(summary.get(".status-chip").attributes("data-color")).toBe("success");
       expect(summary.get(".status-chip").text()).toBe("up");
@@ -357,7 +360,7 @@ describe("October 17 frontend workflows", () => {
       const row = summary.element.closest("tr")!;
       expect(row.textContent).toContain("uplink");
       expect(row.querySelector('[aria-label="Monitoring enabled for uplink"]')?.closest("td")).not.toBe(row.querySelector('[aria-label="Edit / stage"]')?.closest("td"));
-      expect(summary.findAll("td")[2]!.find('[aria-label="Monitoring enabled for uplink"]').exists()).toBe(true);
+      expect(summary.findAll("td")[7]!.find('[aria-label="Monitoring enabled for uplink"]').exists()).toBe(true);
       expect(wrapper.findAll("tbody > tr")).toHaveLength(1);
       expect(wrapper.find('[aria-label="uplink live statistics"]').exists()).toBe(false);
       expect(wrapper.get('[aria-label="Live statistics for uplink"]').attributes("aria-expanded")).toBe("false");
@@ -2295,10 +2298,40 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.find('[title*="Current error: child exited"]').exists()).toBe(true);
     const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("aria-label") === "Relay enabled for lab0")!;
     expect(toggle.props("modelValue")).toBe(true);
-    expect(wrapper.find("thead").text()).not.toMatch(/Relay address|Enabled/);
+    expect(wrapper.findAll("thead th").map(header => header.text())).toEqual(["Interface", "Servers", "Status", "Enabled", "Actions"]);
+    const cells = wrapper.findAll("tbody tr")[0]!.findAll("td");
+    expect(cells[1]!.text()).toBe("198.51.100.1, 198.51.100.2");
+    expect(cells[2]!.get(".status-chip").text()).toBe("Exited");
+    expect(cells[2]!.get(".status-chip").attributes("data-color")).toBe("error");
+    expect(cells[3]!.findComponent(stubs.VSwitch).exists()).toBe(true);
     expect(wrapper.text()).toContain("198.51.100.1, 198.51.100.2");
     expect(wrapper.text()).not.toContain("Relay address");
     expect(store.state.data!.desired.interfaces[0]!.dhcp_relay.enabled).toBe(true);
+  });
+  it.each([
+    ["running", false, "Running", "success"],
+    ["disabled", false, "Disabled", "default"],
+    ["simulated", false, "Simulated", "info"],
+    ["error", true, "Recovering", "warning"],
+    [undefined, false, "Unknown", "default"],
+  ] as const)("shows DHCP relay runtime %s in a separate status chip while editing", async (state, retrying, label, color) => {
+    const store = useControllerStore();
+    store.runtime.data!.dhcp_relay = state ? [{ interface: "lab0", state, retrying }] : [];
+    const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
+    const cells = wrapper.findAll("tbody tr")[0]!.findAll("td");
+    expect(cells).toHaveLength(5);
+    expect(cells[1]!.findComponent({ name: "VTextField" }).exists()).toBe(true);
+    expect(cells[2]!.get(".status-chip").text()).toBe(label);
+    expect(cells[2]!.get(".status-chip").attributes("data-color")).toBe(color);
+    expect(cells[3]!.findComponent(stubs.VSwitch).exists()).toBe(true);
+  });
+  it("spans all DHCP relay columns when no interfaces are available", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces = [];
+    const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    expect(wrapper.get("tbody td").attributes("colspan")).toBe("5");
+    expect(wrapper.get("tbody td").text()).toBe("No interface records available.");
   });
   it("edits DHCP relay servers inline and toggles it without a dialog, preserving the interface", async () => {
     const store = useControllerStore(), original = structuredClone(config()), submit = vi.spyOn(api, "submitPackage");

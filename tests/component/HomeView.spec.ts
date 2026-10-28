@@ -8,7 +8,7 @@ import FieldInput from "@/components/base/FieldInput.vue";
 import { useControllerStore } from "@/stores/controller";
 import * as registry from "@/services/registry";
 import * as api from "@/services/netcontrol";
-import { state, statistics, monitor, gatewayStatistics, healthSnapshot } from "../fixtures";
+import { state, runtime, statistics, monitor, gatewayStatistics, healthSnapshot } from "../fixtures";
 import { navigationSections } from "@/constants/navigation";
 import { defaultOverviewLayout, type OverviewLayout } from "@/services/overviewLayout";
 vi.mock("vue-router", () => ({ useRouter: () => ({ replace: vi.fn() }), useRoute: () => ({ query: {} }) }));
@@ -84,8 +84,25 @@ describe("compact overview dashboard", () => {
     } } });
   }
   function button(wrapper: ReturnType<typeof dashboard>, text: string) {
-    return wrapper.findAll("a, button").find(item => item.text() === text)!;
+    return wrapper.findAll("a, button").find(item => (item.attributes("aria-label") || item.text()) === text)!;
   }
+  it("uses an accessible pencil control without a visible page heading", async () => {
+    const wrapper = dashboard();
+    try {
+      expect(button(wrapper, "Customize layout").attributes("disabled")).toBe("true");
+      await flushPromises();
+      expect(wrapper.find("h1").exists()).toBe(false);
+      expect(wrapper.find('section[aria-label="Overview"]').exists()).toBe(true);
+      const customize = button(wrapper, "Customize layout");
+      expect(customize.text()).toBe("");
+      expect(customize.attributes("icon")).toBe("mdi-pencil-outline");
+      expect(customize.attributes("title")).toBe("Customize layout");
+      expect(customize.attributes("disabled")).toBe("false");
+      await customize.trigger("click");
+      expect(button(wrapper, "Save layout").exists()).toBe(true);
+      expect(button(wrapper, "Cancel").exists()).toBe(true);
+    } finally { wrapper.unmount(); }
+  });
   it("loads the registry layout and saves moved and hidden boxes without staging firewall changes", async () => {
     const saved: OverviewLayout = { version: 1, columns: [["system", "interfaces"], ["gateways"]] };
     vi.mocked(registry.getOverviewLayout).mockResolvedValue(saved);
@@ -207,15 +224,16 @@ describe("compact overview dashboard", () => {
   it.each([
     { oper: "UP", status: "Up", color: "success" },
     { oper: "DOWN", status: "Down", color: "error" },
-    { oper: "UNKNOWN", status: "Unknown", color: "default" },
-  ])("shows a $color chip for an interface that is $status", ({ oper, status, color }) => {
+    { oper: "UNKNOWN", status: "-", color: "default" },
+  ])("separates admin Up from an operational $status interface", ({ oper, status, color }) => {
     const store = useControllerStore();
     store.statistics.data!.sample.status = "available";
     Object.assign(store.statistics.data!.interfaces[0]!, { status: "available", oper_state: oper });
     const wrapper = dashboard();
     try {
-      const chip = wrapper.get('[aria-label="Interfaces"] .status-chip');
-      expect(chip.text()).toBe(status); expect(chip.attributes("data-color")).toBe(color);
+      const chips = wrapper.findAll('[aria-label="Interfaces"] .status-chip');
+      expect(chips[0]!.text()).toBe("Up"); expect(chips[0]!.attributes("data-color")).toBe("success");
+      expect(chips[1]!.text()).toBe(status); expect(chips[1]!.attributes("data-color")).toBe(color);
     } finally { wrapper.unmount(); }
   });
   it("shows discovered active addresses and DHCP/static mode instead of MTU without substituting configured addresses", async () => {
@@ -231,9 +249,9 @@ describe("compact overview dashboard", () => {
     try {
       await flushPromises();
       const widget = wrapper.get('[aria-label="Interfaces"]');
-      expect(widget.findAll("thead th").map(cell => cell.text())).toEqual(["Name", "Status", "Active IP", "Mode"]);
-      expect(widget.findAll("tbody tr").map(row => row.findAll("td").map(cell => cell.text()).slice(2))).toEqual([
-        ["192.0.2.99/24", "Static"], ["198.51.100.20/24", "DHCP"], ["None", "Unknown"],
+      expect(widget.findAll("thead th").map(cell => cell.text())).toEqual(["Name", "Admin state", "Operational state", "Active IP", "Mode"]);
+      expect(widget.findAll("tbody tr").map(row => row.findAll("td").map(cell => cell.text()).slice(3))).toEqual([
+        ["192.0.2.99/24", "Static"], ["198.51.100.20/24", "DHCP"], ["None", "-"],
       ]);
       expect(widget.text()).not.toContain("192.0.2.10");
       vi.mocked(api.getDiscoveredInterfaces).mockRejectedValueOnce(new Error("Discovery failed"));
@@ -358,7 +376,7 @@ describe("compact overview dashboard", () => {
     const interfacesLink = wrapper.get('[aria-label="Interfaces"] header a');
     expect(interfacesLink.attributes("aria-label")).toBe("Open Interfaces");
     expect(interfacesLink.attributes("to")).toBe("/interfaces");
-    expect(wrapper.get('[aria-label="Interface counters"]').find("a").exists()).toBe(false);
+    expect(wrapper.get('[aria-label="Interface counters"] h2 a').attributes("href")).toBe("/diagnostics/traffic");
     expect(wrapper.get('[aria-label="Gateways"] header a').attributes("aria-label")).toBe("Open Gateways");
     expect(wrapper.get('[aria-label="WireGuard"] header a').attributes("aria-label")).toBe("Open WireGuard");
   });
@@ -380,7 +398,7 @@ describe("compact overview dashboard", () => {
     expect(widget.find("tbody a").exists()).toBe(false);
     expect(navigationSections.flatMap(section => section.pages).some(page => page.path === "/parents")).toBe(false);
   });
-  it("shows WireGuard link state and configured peers without claiming handshake health", () => {
+  it("shows only the four WireGuard metric columns and does not invent missing runtime metrics", () => {
     const store = useControllerStore();
     store.state.data!.desired.interfaces.push({
       name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [], dhcp_relay: { enabled: false, servers: [] },
@@ -389,10 +407,11 @@ describe("compact overview dashboard", () => {
     store.statistics.data!.sample.status = "available";
     store.statistics.data!.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UP", status: "available", counters: null });
     const widget = dashboard().get('[aria-label="WireGuard"]');
-    expect(widget.text()).toContain("wg0"); expect(widget.text()).toContain("Up");
-    expect(widget.get("tbody td").text()).toBe("wg0");
+    expect(widget.text()).not.toContain("wg0"); expect(widget.text()).toContain("Unavailable");
+    expect(widget.get("tbody td").text()).toBe("—");
     expect(widget.find("tbody a").exists()).toBe(false);
-    expect(widget.text()).toContain("Configured peers"); expect(widget.text()).toContain("51820");
+    expect(widget.findAll("th").map(cell => cell.text())).toEqual(["Peer", "Last handshake", "Received", "Sent"]);
+    expect(widget.findAll("tbody td").map(cell => cell.text())).toEqual(["—", "Unavailable", "Unavailable", "Unavailable"]);
     expect(widget.text()).not.toMatch(/Active peers|Connected/);
   });
   it("does not present stale interface or gateway data as healthy", async () => {
@@ -410,6 +429,104 @@ describe("compact overview dashboard", () => {
     for (const chip of wrapper.findAll('[aria-label="Gateways"] .status-chip')) expect(chip.attributes("data-color")).toBe("default");
     expect(wrapper.get('[aria-label="Interfaces"]').text()).toContain("Unknown");
     expect(wrapper.get('[aria-label="Interface counters"]').text()).toContain("Stale");
+  });
+  it("shows each enabled WireGuard peer's endpoint, handshake and exact transfer totals", async () => {
+    const store = useControllerStore();
+    const sampledAt = Date.parse("2026-10-28T04:00:00.987Z");
+    const peer = { public_key: "enabled-peer-public-key", allowed_ips: ["10.0.0.0/24"], persistent_keepalive_seconds: 25 };
+    store.state.data!.desired.interfaces.push({
+      name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [], dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [
+        peer, { ...peer, public_key: "disabled-peer", enabled: false }, { ...peer, public_key: "second-peer" },
+      ] },
+    });
+    store.runtime.data = { ...runtime(), wireguard: [{ interface: "wg0", public_key: null, listen_port: 51820, peers: [
+      { public_key: peer.public_key, endpoint: "192.0.2.1:51820", last_handshake_unix_seconds: Math.floor(sampledAt / 1000) - 25, rx_bytes: "18446744073709551615", tx_bytes: "2048" },
+      { public_key: "disabled-peer", endpoint: "disabled-runtime:123", last_handshake_unix_seconds: 1, rx_bytes: "999", tx_bytes: "888" },
+      { public_key: "second-peer", endpoint: null, last_handshake_unix_seconds: Math.floor(sampledAt / 1000) - 300, rx_bytes: "10", tx_bytes: "1000" },
+    ] }] };
+    store.runtime.lastSuccess = sampledAt; store.runtime.stale = false;
+    const wrapper = dashboard();
+    const widget = wrapper.get('[aria-label="WireGuard"]');
+    const rows = widget.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.get("td").text()).toBe("192.0.2.1:51820");
+    expect(rows[0]!.text()).toContain("25 seconds ago");
+    expect(rows[0]!.text()).toContain("18.45 EB");
+    expect(rows[0]!.text()).toContain("2.05 KB");
+    expect(rows[0]!.find('[title="18446744073709551615"]').exists()).toBe(true);
+    expect(rows[1]!.findAll("td").map(cell => cell.text())).toEqual(["—", "5 minutes ago", "10 B", "1 KB"]);
+    expect(rows[1]!.get(".status-chip").attributes("data-color")).toBe("orange");
+    expect(widget.text()).not.toContain("disabled-runtime");
+    const chip = rows[0]!.get(".status-chip");
+    expect(chip.attributes("data-color")).toBe("green");
+    expect(chip.attributes("title")).toContain("Last handshake 2026-10-28 03:59:35 UTC");
+    expect(chip.attributes("title")).not.toMatch(/\.987|T03:/);
+    store.runtime.stale = true;
+    await wrapper.vm.$nextTick();
+    expect(widget.text()).toContain("Runtime stale");
+    expect(chip.attributes("data-color")).toBe("default");
+    store.runtime.error = "Unable to fetch runtime";
+    await wrapper.vm.$nextTick();
+    expect(widget.text()).toContain("Runtime unavailable");
+    expect(widget.get(".widget-note").attributes("title")).toBe("Unable to fetch runtime");
+    wrapper.unmount();
+  });
+  it("matches WireGuard peers by tunnel as well as key and distinguishes NEVER from missing data", () => {
+    const store = useControllerStore();
+    for (const name of ["wg0", "wg1"]) store.state.data!.desired.interfaces.push({
+      name, kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [], dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [{ public_key: "shared-peer-key", endpoint: "configured:51820", allowed_ips: [], persistent_keepalive_seconds: 0 }] },
+    });
+    store.runtime.data = { ...runtime(), wireguard: [{ interface: "wg0", public_key: null, listen_port: 51820, peers: [
+      { public_key: "shared-peer-key", endpoint: "runtime:123", last_handshake_unix_seconds: 0, rx_bytes: "0", tx_bytes: "0" },
+    ] }] };
+    store.runtime.stale = false;
+    const wrapper = dashboard();
+    const rows = wrapper.get('[aria-label="WireGuard"]').findAll("tbody tr");
+    const first = rows[0]!;
+    expect(first.get("td").text()).toBe("configured:51820");
+    expect(first.text()).toContain("0 B");
+    expect(first.get(".status-chip").text()).toBe("NEVER");
+    expect(first.get(".status-chip").attributes("data-color")).toBe("red");
+    const second = rows[1]!;
+    expect(second.text()).toContain("Unavailable");
+    expect(second.text()).not.toContain("NEVER");
+    wrapper.unmount();
+  });
+  it("keeps available peer metrics independent of missing peers and omits empty or disabled tunnels", () => {
+    const store = useControllerStore();
+    const peer = { public_key: "peer-key", allowed_ips: [], persistent_keepalive_seconds: 0 };
+    for (const [name, peers] of [
+      ["wg0", [peer, { ...peer, public_key: "missing-key" }]],
+      ["wg1", [{ ...peer, enabled: false }]],
+      ["wg2", []],
+    ] as const) store.state.data!.desired.interfaces.push({
+      name, kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [], dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [...peers] },
+    });
+    store.runtime.data = { ...runtime(), wireguard: [{ interface: "wg0", public_key: null, listen_port: 51820, peers: [
+      { public_key: peer.public_key, endpoint: null, last_handshake_unix_seconds: 1, rx_bytes: "1000", tx_bytes: "2000" },
+    ] }] };
+    const wrapper = dashboard();
+    const rows = wrapper.get('[aria-label="WireGuard"]').findAll("tbody tr");
+    expect(rows.map(row => row.findAll("td").map(cell => cell.text()))).toEqual([
+      ["—", expect.any(String), "1 KB", "2 KB"],
+      ["—", "Unavailable", "Unavailable", "Unavailable"],
+    ]);
+    wrapper.unmount();
+  });
+  it("shows an empty state when there are no enabled WireGuard peers", () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces.push({
+      name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [], dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [
+        { public_key: "disabled-peer", allowed_ips: [], persistent_keepalive_seconds: 0, enabled: false },
+      ] },
+    });
+    const wrapper = dashboard();
+    expect(wrapper.get('[aria-label="WireGuard"] tbody').text()).toBe("No enabled WireGuard peers.");
+    wrapper.unmount();
   });
   it.each([
     { color: "green", loss: 0, latency: 99, spread: 9 },

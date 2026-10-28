@@ -41,6 +41,10 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/services/vnstat", name: "vnstat", component: () => import("@/views/VnStatView.vue") },
     { path: "/services/maintenance", name: "service-maintenance", component: () => import("@/views/ServiceMaintenanceView.vue") },
   ],
+  "diagnostics-section": [
+    { path: "/diagnostics/traffic", name: "real-time-traffic", component: () => import("@/views/RealTimeTrafficView.vue") },
+    { path: "/diagnostics/process-health", name: "process-health", component: () => import("@/views/ProcessHealthView.vue") },
+  ],
   "settings-section": [
     { path: "/settings/general", name: "settings-general", component: () => import("@/views/SettingsView.vue") },
     { path: "/settings/mqtt-streaming", name: "settings-mqtt-streaming", component: () => import("@/views/HomeAssistantView.vue") },

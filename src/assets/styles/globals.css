@@ -231,6 +231,11 @@ body {
   max-width: 360px;
 }
 
+.v-application .v-table {
+  --v-table-header-height: 34px;
+  --v-table-row-height: 34px;
+}
+
 .v-table > .v-table__wrapper > table > :is(thead, tbody, tfoot) > tr > :is(td, th) {
   padding-block: 2px;
 }

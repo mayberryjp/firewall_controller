@@ -192,7 +192,7 @@ or appliance acceptance.
 | Browser route | Purpose |
 | --- | --- |
 | `/connect` | Registry sign-in, persistent firewall list, encrypted key storage and controller-proxied device connection |
-| `/overview` | Customizable system, interface, gateway and WireGuard status widgets; exact interface counters with one interface per row |
+| `/overview` | Customizable system, interface, gateway and WireGuard status widgets; exact interface counters with one interface per row. WireGuard shows Peer, Last handshake, Received and Sent with one row per enabled peer, using the WireGuard page's handshake colors. The Peer column shows the configured endpoint or falls back to the runtime endpoint, with a dash if neither is known. Missing peer samples show Unavailable without hiding other peers' metrics; tunnels without enabled peers produce no rows. Stale runtime samples are labeled and use neutral handshake colors. |
 | `/interfaces`, `/interfaces/:name` | Physical interfaces inventory and active IPv4/IPv6 addresses, excluding dummy/loopback links; inline NIC editing and explicit management/release |
 | `/loopbacks` | Loopback creation, editing and explicit adoption; built-in `lo` and other system loopback links remain read-only |
 | `/blackhole` | The single deviceless drop target (`config.blackhole`: name and drop/unreachable/prohibit action) that static routes can use as their interface; routes only, needs `routes.write`, no drop counters |
@@ -212,11 +212,14 @@ or appliance acceptance.
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
 | `/services/maintenance` | Explicit all-managed-services repair and signed self-upgrade with version/repository confirmation |
+| `/diagnostics`, `/diagnostics/traffic` | REAL TIME TRAFFIC: live bytes/second and packets/second ApexCharts, with one combined inbound + outbound line per interface |
+| `/diagnostics/process-health` | Read-only daemon/component health, recovery states, collection freshness and active alerts |
 | `/config/changes` | Staged changes, unified diff, Commit & push |
 | `/config/commits`, `/config/commits/:id` | Commits: independent recovery discovery and explicit lifecycle actions |
 | `/config/revisions`, `/config/revisions/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
 
 Services labels the flow exporter **NetFlow/IPFIX**, under `/services/netflow`.
+Its Status enable/disable toggle is immediately to the left of Actions.
 The backend API paths, `softflowd` configuration key and API permissions are unchanged. It controls
 Netcontrol's in-process Rust exporter, not an external softflowd daemon. Native capture drops
 do not stop export: when supplied by the backend, cumulative `dropped_packets`
@@ -229,7 +232,35 @@ Deep links fall back to the SPA; reload restores an unexpired registry session
 and reconnects the remembered firewall.
 Unknown routes show an application 404.
 
-The top navbar selects Interfaces, Routing, Firewall, VPN, Services, or the Settings
+Diagnostics has left-side page navigation like Services. Real Time Traffic shows
+both graphs by default; use Watch interface to drill down, or Show graphs to show
+only bytes or packets. It reuses `/statistics` every three seconds while the page
+is visible, retains the latest 120 samples in memory, and calculates rates using
+the API's collection timestamps. All interfaces shows a separate named line for
+each interface, summing its inbound and outbound rates. Selecting an interface
+shows only that interface's combined line, using the same color in both graphs.
+Missing or failed counters and counter resets leave gaps, not fabricated zeroes;
+the API's per-request `started_at` is a collection timestamp, not a counter-reset
+identifier. Simulated samples are not shown as measured traffic. Leaving the page stops its
+traffic polling and discards its chart history. Chart times are UTC.
+
+On Overview, click a system metric name to open its inline live ApexChart
+(CPU, memory, swap, load, temperature or fan); uptime and filesystem remain
+plain text. Charts retain the latest 120 host-health samples while the widget
+is mounted and use UTC timestamps. Click the metric again or Close live view
+to collapse the chart. The Interface counters heading opens Real Time Traffic;
+an interface name opens it with that interface selected. These links retain
+the surrounding text styling.
+
+Diagnostics also includes Process health, using the existing authenticated
+`/platform/status` cache and shared three-second polling. It shows aggregate,
+daemon and component states, recovery, collection times and active alerts.
+Stale observations are marked unknown rather than healthy; native collection
+failures and retained alerts remain visible. Health timestamps use UTC seconds.
+This is local process health, not verification of remote delivery or forwarding.
+Viewing the page does not modify configuration, disturb drafts or restart workers.
+
+The top navbar selects Interfaces, Routing, Firewall, VPN, Services, Diagnostics, or the Settings
 gear. Routing uses a classic network-diagram router symbol; Firewall uses a brick wall.
 Connection health appears in an icon-only floating bottom-right bubble; hover or
 focus it for connection status, or open it for deployment
@@ -247,14 +278,23 @@ including commit and revision detail links. Detail links retain their section an
 selected parent tab, and browser back/forward navigates between pages. Commits is
 the UI name for backend transactions; API endpoints and permissions are unchanged.
 
+The overview Interfaces widget separates Admin state (`admin_up`) from the
+kernel's Operational state (`oper_state`). Enabled WireGuard, loopback and dummy
+interfaces can correctly show Admin Up with Operational `-` for kernel `UNKNOWN`;
+the tooltip retains the original state. Unknown interface modes also display `-`.
+This does not by itself indicate a broken
+link. Stale, failed or missing observations remain
+Unknown in both columns, and simulated samples remain explicitly Simulated.
+
 Operational pages show settings, records, and current status without repeated
 read timestamps or deployment instructions. Errors and stale-data notices remain
 visible. Detailed values use expandable labeled fields rather than JSON dumps;
 small resource lists omit filter bars. Service-impact warnings appear in change
 review and explicit repair/apply confirmations.
 
-Tables use compact row density throughout the app, with reduced vertical cell and
-action spacing. Wrapped content and inline editors can still grow to fit; narrow
+Tables use the Interface counters' 34px baseline row and header height throughout
+the app, with reduced vertical cell and action spacing and no alternating row
+bands. Wrapped content and inline editors can still grow to fit; narrow
 screens retain their labeled, stacked layouts with tighter spacing.
 
 NAT masquerading uses inline table rows for Add rule and editing, with Save/Cancel
@@ -278,10 +318,9 @@ General settings includes an optional **Domain name** beside **Host name**, stor
 as `system.domain` with the existing `system.write` permission. This is a cosmetic
 label only, not a host-domain or DNS search-domain setting. Use lowercase labels
 with no trailing dot (up to 253 characters, including the host name and separating
-dot when both are set). Clear the field to remove it. The navigation bar shows the
-committed `hostname.domain` in small text below the app title, or just the hostname
-when the domain is empty; drafts do not rename the connected device before commit.
-Long names are truncated visually with the full name available on hover.
+dot when both are set). Clear the field to remove it. Host name and domain remain
+configuration controls in General settings; the navigation bar shows CONFIG
+status without a hostname/domain line.
 General settings owns the single **Ignore DHCP-provided DNS servers** control.
 Changing it and saving writes `dns[interface].override_dhcp_dns` for every currently
 configured interface, including down and unassigned links, without changing servers
@@ -694,7 +733,8 @@ fields are rejected as incompatible rather than silently stripped.
   `dhcp_relay` rows and top-level errors. Missing rows are Unknown, not disabled;
   simulated is explicitly not real relay activity. Running is local process/socket
   readiness only, not proof of leases or server reachability. Observed failure
-  never rewrites desired enabled settings.
+  never rewrites desired enabled settings. The DHCPv4 relay table separates the
+  configured Enabled toggle from runtime Status chips.
 - Enabled links share one dnsmasq PID. Server/selected-address/enabled-set changes
   can restart this process and briefly disrupt other interfaces. Explicit repair
   is a bodyless `/services/dhcp-relay/reconcile` POST. Both service repair entry
@@ -789,6 +829,11 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   sample state, sent/received/lost/pending counts, complete measurements and
   resolved-path details. Narrow screens wrap the inline statistics within the
   same monitor record.
+- A compact, 200px-high ApexCharts Mean RTT graph plots one line per
+  gateway monitor in milliseconds, with UTC timestamps. It retains the latest
+  120 samples per monitor while the page is open, ignores duplicate cached
+  readings, and shows unavailable measurements as gaps rather than zero latency.
+  Simulated measurements are not plotted.
 - Probe metrics use green/yellow/orange/red chips with these display-only bands:
 
   | Metric | Green | Yellow | Orange | Red |
@@ -988,7 +1033,7 @@ text redacts the registry session token.
 
 ### Overview layout
 
-On Overview, select **Customize layout** to drag boxes within or between the two
+On Overview, select the pencil button (**Customize layout**) at the top right to drag boxes within or between the two
 columns. Move buttons provide keyboard and touch alternatives. Hide unwanted
 boxes, use **Show** to restore them, or **Reset layout** to restore the default
 arrangement. On narrow screens the left column appears above the right column.

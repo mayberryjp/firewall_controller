@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ title: string; to?: string; note?: string; detail?: string }>();
+defineProps<{ title: string; to?: string; titleTo?: string; note?: string; detail?: string }>();
 </script>
 
 <template>
@@ -11,7 +11,18 @@ defineProps<{ title: string; to?: string; note?: string; detail?: string }>();
     class="overview-widget"
   >
     <header class="widget-header">
-      <h2>{{ title }}</h2>
+      <h2>
+        <RouterLink
+          v-if="titleTo"
+          :to="titleTo"
+          class="widget-title-link"
+        >
+          {{ title }}
+        </RouterLink>
+        <template v-else>
+          {{ title }}
+        </template>
+      </h2>
       <span
         v-if="note"
         class="widget-note text-medium-emphasis"
@@ -52,16 +63,13 @@ defineProps<{ title: string; to?: string; note?: string; detail?: string }>();
 .widget-note {
   font-size: 12px;
 }
+.widget-title-link { color: inherit; text-decoration: none; }
 .overview-widget :deep(.v-table) {
   font-size: 13px;
 }
 .overview-widget :deep(th),
 .overview-widget :deep(td) {
-  height: 34px !important;
-  padding: 6px 12px !important;
+  padding: 2px 12px !important;
   white-space: nowrap;
-}
-.overview-widget :deep(tbody tr:nth-child(even)) {
-  background: rgb(255 255 255 / 3%);
 }
 </style>

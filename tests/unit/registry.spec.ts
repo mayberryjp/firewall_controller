@@ -63,7 +63,9 @@ describe("durable registry session", () => {
     expect(await restoreRegistrySession()).toBe(false);
     rememberRegistryDevice(device);
     request.mockRejectedValueOnce(new AxiosError("Offline"));
-    await expect(restoreRegistrySession()).rejects.toThrow(/request failed/);
+    await expect(restoreRegistrySession()).rejects.toThrow(
+      "Device registry request failed. Check the registry address and availability.",
+    );
     expect(getRememberedRegistryDevice()).toBe(device);
   });
   it("remembers only a valid selected device ID", () => {

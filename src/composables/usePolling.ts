@@ -36,7 +36,8 @@ export function usePolling(): void {
       route.path === "/overview" || route.path.startsWith("/wireguard") || route.path === "/routes" ||
       route.path.startsWith("/services/"), true, 5000);
     schedule(store.refreshTransactions, () => store.activeTransactions.length || store.uncertain ? 1000 : 10000, () => Boolean(store.transactions.error));
-    schedule(store.refreshStatistics, () => 3000, () => Boolean(store.statistics.error), () => store.monitoring);
+    schedule(store.refreshStatistics, () => 3000, () => Boolean(store.statistics.error),
+      () => (route.path === "/overview" && store.monitoring) || route.path === "/diagnostics/traffic", true);
     schedule(store.refreshGatewayStatistics, () => 3000, () => Boolean(store.gatewayStatistics.error), () => store.gatewayMonitoring && ["/overview", "/gateway-monitors"].includes(route.path), true, 5000);
     schedule(store.refreshHostHealth, () => 3000, () => Boolean(store.hostHealth.error));
     schedule(store.refreshMqttStatus, () => 7500, () => Boolean(store.mqttStatus.error), () => route.path === "/settings/mqtt-streaming", true);

@@ -5,7 +5,7 @@ import { useDisplay } from "vuetify";
 import type { NavigationSection } from "@/constants/navigation";
 
 const props = defineProps<{ section: NavigationSection }>();
-const showNavigation = computed(() => props.section.pages.length > 1 || props.section.name === "settings-section");
+const showNavigation = computed(() => props.section.pages.length > 1 || ["settings-section", "diagnostics-section"].includes(props.section.name));
 const route = useRoute();
 const { lgAndUp } = useDisplay();
 const collapsed = ref(route.name === "connections");

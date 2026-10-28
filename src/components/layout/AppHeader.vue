@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import { useDisplay } from "vuetify";
 import { useRoute } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
@@ -9,11 +8,6 @@ import ConnectionStatus from "@/components/layout/ConnectionStatus.vue";
 const store = useControllerStore(), route = useRoute();
 const { lgAndUp } = useDisplay();
 const appName = import.meta.env.VITE_APP_NAME || "Modan モダン";
-const deviceName = computed(() => {
-  const system = store.state.data?.desired.system;
-  if (!store.connected || !system?.hostname) return "";
-  return system.domain ? `${system.hostname}.${system.domain}` : system.hostname;
-});
 </script>
 
 <template>
@@ -70,17 +64,9 @@ const deviceName = computed(() => {
         <span v-else>{{ section.title }}</span>
       </v-btn>
     </nav>
-    <div class="header-status d-flex flex-column align-end mr-2">
-      <div class="d-flex align-center">
-        <ConnectionStatus />
-        <MobileCategoryMenu v-if="store.connected && !lgAndUp" />
-      </div>
-      <span
-        v-if="deviceName"
-        class="device-name"
-        aria-label="Device name"
-        :title="deviceName"
-      >{{ deviceName }}</span>
+    <div class="header-status d-flex align-center mr-2">
+      <ConnectionStatus />
+      <MobileCategoryMenu v-if="store.connected && !lgAndUp" />
     </div>
   </v-app-bar>
 </template>
@@ -92,14 +78,4 @@ const deviceName = computed(() => {
   min-width: 0;
 }
 
-.device-name {
-  max-width: min(280px, 40vw);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: end;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 16px;
-}
 </style>

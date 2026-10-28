@@ -12,6 +12,14 @@ const links = computed(() => (stored.value?.interfaces ?? []).filter(link => lin
 const blocked = computed(() => Boolean(store.readOnlyReason) || !stored.value);
 const editing = ref<string | null>(null), servers = ref(""), error = ref("");
 const runtimeStatus = (name: string) => store.runtime.data?.dhcp_relay.find(item => item.interface === name);
+const statusColors: Record<string, string> = {
+  running: "success", simulated: "info", waiting: "warning",
+  unhealthy: "error", exited: "error", error: "error", unavailable: "error",
+};
+function runtimeColor(name: string): string {
+  const status = runtimeStatus(name);
+  return status?.retrying ? "warning" : statusColors[status?.state ?? ""] ?? "default";
+}
 
 function commit(name: string, mutate: (relay: { enabled: boolean; servers: string[] }) => void): void {
   if (!stored.value) throw new Error("Committed configuration is unavailable.");
@@ -70,6 +78,7 @@ function toggle(name: string, enabled: boolean): void {
           <th>Interface</th>
           <th>Servers</th>
           <th>Status</th>
+          <th>Enabled</th>
           <th class="column-actions">
             Actions
           </th>
@@ -97,11 +106,15 @@ function toggle(name: string, enabled: boolean): void {
             class="mono"
           >
             {{ link.dhcp_relay.servers.join(", ") || "None" }}
-            <RelayStatus
-              v-if="runtimeStatus(link.name)"
-              :status="runtimeStatus(link.name)"
-              class="text-caption ml-2"
-            />
+          </td>
+          <td>
+            <v-chip
+              :color="runtimeColor(link.name)"
+              size="small"
+              variant="tonal"
+            >
+              <RelayStatus :status="runtimeStatus(link.name)" />
+            </v-chip>
           </td>
           <td>
             <v-switch
@@ -146,7 +159,7 @@ function toggle(name: string, enabled: boolean): void {
           </td>
         </tr>
         <tr v-if="!links.length">
-          <td colspan="4">
+          <td colspan="5">
             No interface records available.
           </td>
         </tr>

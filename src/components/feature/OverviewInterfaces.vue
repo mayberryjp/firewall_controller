@@ -6,6 +6,7 @@ import type { DiscoveredInterface } from "@/types/domain";
 import OverviewWidget from "./OverviewWidget.vue";
 import OverviewInterfaceStatus from "./OverviewInterfaceStatus.vue";
 const store = useControllerStore();
+const interfaceStates = ["admin", "operational"] as const;
 const discovered = ref<DiscoveredInterface[]>([]), addressError = ref("");
 let controller: AbortController | undefined;
 async function refreshAddresses() {
@@ -25,7 +26,7 @@ const rows = computed(() => [...new Set([
 ])].map(name => ({
   name, sample: store.statistics.data?.interfaces.find(item => item.name === name),
   addresses: discovered.value.find(item => item.name === name)?.addresses.filter(address => store.ipv6Enabled || !address.includes(":")),
-  mode: store.state.data?.desired.dhcp_clients?.[name] ? "DHCP" : store.state.data?.desired.interfaces.some(item => item.name === name) ? "Static" : "Unknown",
+  mode: store.state.data?.desired.dhcp_clients?.[name] ? "DHCP" : store.state.data?.desired.interfaces.some(item => item.name === name) ? "Static" : "-",
 })));
 const note = computed(() => store.statistics.error ? "Unavailable" : store.statistics.loading && !store.statistics.data ? "Loading" : store.statistics.stale ? "Stale" : store.statistics.data?.sample.status === "simulated" ? "Simulated" : "");
 </script>
@@ -41,15 +42,19 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
       density="compact"
       class="overview-interfaces"
     >
-      <thead><tr><th>Name</th><th>Status</th><th>Active IP</th><th>Mode</th></tr></thead>
+      <thead><tr><th>Name</th><th>Admin state</th><th>Operational state</th><th>Active IP</th><th>Mode</th></tr></thead>
       <tbody>
         <tr
           v-for="row in rows"
           :key="row.name"
         >
           <td>{{ row.name }}</td>
-          <td>
+          <td
+            v-for="state in interfaceStates"
+            :key="state"
+          >
             <OverviewInterfaceStatus
+              :state="state"
               :sample="row.sample"
               :stale="store.statistics.stale || Boolean(store.statistics.error)"
               :simulated="store.statistics.data?.sample.status === 'simulated'"
@@ -71,7 +76,7 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
           <td>{{ row.mode }}</td>
         </tr>
         <tr v-if="!rows.length">
-          <td colspan="4">
+          <td colspan="5">
             {{ store.statistics.data ? "No interfaces." : "Interface status unavailable." }}
           </td>
         </tr>
@@ -81,6 +86,6 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
 </template>
 
 <style scoped>
-.overview-interfaces :deep(th), .overview-interfaces :deep(td) { padding: 0 8px; }
-.overview-interfaces :deep(td) { overflow-wrap: anywhere; white-space: normal; }
+.overview-interfaces :deep(table th), .overview-interfaces :deep(table td) { padding: 2px 6px !important; white-space: normal; }
+.overview-interfaces :deep(td) { overflow-wrap: anywhere; }
 </style>

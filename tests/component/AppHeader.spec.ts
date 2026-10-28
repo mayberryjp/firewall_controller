@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AppHeader from "@/components/layout/AppHeader.vue";
+import ConnectionStatus from "@/components/layout/ConnectionStatus.vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
 import { state } from "../fixtures";
@@ -24,37 +25,39 @@ async function render() {
   } } });
 }
 
-describe("navbar device name", () => {
+describe("navbar configuration status", () => {
   it.each([
-    ["fw-1", "home.example.test", "fw-1.home.example.test"],
-    ["fw-1", "", "fw-1"],
-    ["", "home.example.test", ""],
-    ["", "", ""],
-  ])("displays hostname %j and domain %j without inventing missing names", async (hostname, domain, expected) => {
+    ["fw-1", "home.example.test"],
+    ["fw-1", ""],
+    ["", "home.example.test"],
+    ["", ""],
+  ])("does not display hostname %j or domain %j below CONFIG", async (hostname, domain) => {
     useControllerStore().state.data!.desired.system = { hostname, domain, timezone: "" };
     const wrapper = await render();
     try {
-      const label = wrapper.find('[aria-label="Device name"]');
-      expect(label.exists()).toBe(Boolean(expected));
-      if (expected) {
-        expect(label.text()).toBe(expected);
-        expect(label.attributes("title")).toBe(expected);
-      }
+      expect(wrapper.find('[aria-label="Device name"]').exists()).toBe(false);
+      expect(wrapper.find(".device-name").exists()).toBe(false);
+      if (hostname) expect(wrapper.text()).not.toContain(hostname);
+      if (domain) expect(wrapper.text()).not.toContain(domain);
+      expect(wrapper.findComponent(ConnectionStatus).exists()).toBe(true);
     } finally { wrapper.unmount(); }
   });
-  it("uses committed identity rather than a draft and reacts to commits and disconnects", async () => {
+  it("keeps the identity hidden across drafts, commits and disconnects", async () => {
     const store = useControllerStore();
     store.state.data!.desired.system = { hostname: "fw-1", domain: "example.test", timezone: "" };
     store.draft = cloneConfig(store.state.data!.desired);
     store.draft.system!.domain = "pending.test";
     const wrapper = await render();
     try {
-      expect(wrapper.get(".device-name").text()).toBe("fw-1.example.test");
+      expect(wrapper.find(".device-name").exists()).toBe(false);
       const committed = cloneConfig(store.state.data!.desired);
       committed.system!.domain = "committed.test";
       store.state.data = { ...store.state.data!, desired: committed };
       await flushPromises();
-      expect(wrapper.get(".device-name").text()).toBe("fw-1.committed.test");
+      expect(wrapper.find(".device-name").exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("fw-1");
+      expect(wrapper.text()).not.toContain("committed.test");
+      expect(wrapper.text()).not.toContain("pending.test");
       store.connected = false;
       await flushPromises();
       expect(wrapper.find(".device-name").exists()).toBe(false);

@@ -46,6 +46,10 @@ export const navigationSections: NavigationSection[] = [
     { title: "Syslog", name: "syslog", path: "/services/syslog", icon: "mdi-text-box-outline" },
     { title: "vnStat", name: "vnstat", path: "/services/vnstat", icon: "mdi-chart-bar" },
   ] },
+  { title: "Diagnostics", name: "diagnostics-section", path: "/diagnostics", icon: "mdi-chart-line", pages: [
+    { title: "REAL TIME TRAFFIC", name: "real-time-traffic", path: "/diagnostics/traffic", icon: "mdi-chart-line" },
+    { title: "Process health", name: "process-health", path: "/diagnostics/process-health", icon: "mdi-heart-pulse" },
+  ] },
   { title: "Settings", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
     { title: "General", name: "settings-general", path: "/settings/general", icon: "mdi-cog-outline" },
     { title: "MQTT STREAMING", name: "settings-mqtt-streaming", path: "/settings/mqtt-streaming", icon: "mdi-home-assistant" },

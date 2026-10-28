@@ -86,23 +86,18 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
 </script>
 
 <template>
-  <section aria-labelledby="overview-title">
+  <section aria-label="Overview">
     <div class="overview-heading">
-      <h1
-        id="overview-title"
-        class="text-h4"
-      >
-        Overview
-      </h1>
       <v-btn
         v-if="!editing"
-        variant="outlined"
+        icon="mdi-pencil-outline"
+        variant="text"
         size="small"
+        aria-label="Customize layout"
+        title="Customize layout"
         :disabled="loadingLayout || !layoutLoaded"
         @click="customize"
-      >
-        Customize layout
-      </v-btn>
+      />
       <template v-else>
         <v-btn
           color="primary"
@@ -174,7 +169,7 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
       </div>
     </div>
     <p v-if="!displayedLayout.columns.flat().length">
-      All overview boxes are hidden. Use Customize layout to show them again.
+      All overview boxes are hidden. Use the Customize layout pencil to show them again.
     </p>
     <div
       class="overview-dashboard"
@@ -276,8 +271,7 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
 </template>
 
 <style scoped>
-.overview-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
-.overview-heading h1 { margin-right: auto; }
+.overview-heading { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 8px; }
 .layout-settings { margin-bottom: 16px; font-size: 13px; color: var(--text-secondary); }
 .layout-restore { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .overview-box { min-width: 0; }

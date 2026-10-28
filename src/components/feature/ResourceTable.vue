@@ -161,16 +161,11 @@ function staged(value: unknown): string {
         >
           {{ heading(key) }}
         </th>
-        <th
-          v-if="hasStatus"
-          class="column-status"
-        >
-          Status
-        </th>
         <template v-if="section === 'gateway_monitors'">
           <th
             v-for="metric in monitorMetrics"
             :key="metric"
+            :class="{ 'column-health': metric === 'Health', 'column-loss': metric === 'Loss' }"
           >
             {{ metric }}
           </th>
@@ -180,6 +175,12 @@ function staged(value: unknown): string {
           <th>State</th>
           <th>Dropped packets</th>
         </template>
+        <th
+          v-if="hasStatus"
+          class="column-status"
+        >
+          Status
+        </th>
         <th
           v-if="hasChanges"
           class="column-changes"
@@ -300,23 +301,6 @@ function staged(value: unknown): string {
               {{ record(row.value.metadata).description }}
             </div>
           </td>
-          <td v-if="hasStatus">
-            <span
-              class="compact-cell-label"
-              aria-hidden="true"
-            >Status</span>
-            <v-switch
-              :key="statusVersions[row.rowID] ?? 0"
-              :model-value="row.value.enabled !== false"
-              :aria-label="statusLabel(row.value)"
-              :title="row.value.enabled === false ? 'Disabled' : 'Enabled'"
-              :disabled="disabled || !editable(row)"
-              color="primary"
-              density="compact"
-              hide-details
-              @update:model-value="toggleStatus(row, Boolean($event))"
-            />
-          </td>
           <GatewayStatisticsPanel
             v-if="section === 'gateway_monitors'"
             :name="String(row.value.name)"
@@ -385,6 +369,23 @@ function staged(value: unknown): string {
               </v-chip>
             </td>
           </template>
+          <td v-if="hasStatus">
+            <span
+              class="compact-cell-label"
+              aria-hidden="true"
+            >Status</span>
+            <v-switch
+              :key="statusVersions[row.rowID] ?? 0"
+              :model-value="row.value.enabled !== false"
+              :aria-label="statusLabel(row.value)"
+              :title="row.value.enabled === false ? 'Disabled' : 'Enabled'"
+              :disabled="disabled || !editable(row)"
+              color="primary"
+              density="compact"
+              hide-details
+              @update:model-value="toggleStatus(row, Boolean($event))"
+            />
+          </td>
           <td v-if="hasChanges">
             <span class="text-warning">{{ staged(row.value) === "Staged change" ? "Unsaved" : "" }}</span>
           </td>
@@ -554,8 +555,10 @@ function staged(value: unknown): string {
 .routes-table :deep(.column-interface) { width: 128px; }
 .routes-table :deep(.column-table) { width: 88px; }
 .routes-table :deep(.column-metric) { width: 80px; }
-.monitors-table :deep(.column-name) { width: 12%; }
+.monitors-table :deep(.column-name) { width: 20%; }
 .monitors-table :deep(.column-interface) { width: 96px; }
+.monitors-table :deep(.column-health) { width: 96px; }
+.monitors-table :deep(.column-loss) { width: 80px; }
 .compact-interface-table :deep(.column-status) { width: 80px; }
 .monitors-table :deep(.column-actions) { width: 96px; }
 .nat-table :deep(.column-position) { width: 64px; }
