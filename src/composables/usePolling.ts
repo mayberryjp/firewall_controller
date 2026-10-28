@@ -31,6 +31,12 @@ export function usePolling(): void {
   }
   onMounted(() => {
     schedule(store.refreshPlatformStatus, () => 3000, () => Boolean(store.platform.error), () => true, true, 5000);
+    schedule(store.refreshLinkDiagnostics, () => 3000, () => Boolean(store.linkDiagnostics.error),
+      () => ["/diagnostics/interface-drops", "/diagnostics/qdiscs", "/diagnostics/tcp-windowing", "/diagnostics/capture-details"].includes(route.path), true, 5000);
+    schedule(store.refreshBGPStatus, () => 3000, () => Boolean(store.bgpStatus.error),
+      () => route.path === "/overview" && store.bgpMonitoring || route.path === "/routing/bgp", true, 5000);
+    schedule(store.refreshBGPRoutes, () => 3000, () => Boolean(store.bgpRoutes.error),
+      () => route.path === "/routing/bgp", true, 5000);
     schedule(store.refreshState, () => store.activeTransactions.length || store.uncertain ? 1000 : 5000, () => Boolean(store.state.error));
     schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error), () =>
       route.path === "/overview" || route.path.startsWith("/wireguard") || route.path === "/routes" ||

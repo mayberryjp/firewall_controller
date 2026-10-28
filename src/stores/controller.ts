@@ -6,10 +6,12 @@ import {
   configSchema, knownStatuses, terminal,
   type Config, type StateView, type RuntimeState, type Transaction, type PlatformStatus,
   type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
+  type BGPStatus, type BGPRoutes,
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, stableJson, syncWireGuardRoutes, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
 import type { HostHealth } from "@/services/hostHealth";
+import type { LinkDiagnostics } from "@/services/linkDiagnostics";
 import { mqttStatusSchema, dynamicDnsStatusSchema, mdnsStatusPageSchema } from "@/types/domain";
 import type { z } from "zod";
 import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
@@ -32,6 +34,29 @@ export const useControllerStore = defineStore("controller", () => {
   const connected = ref(false), connecting = ref(false), authError = ref<string | null>(null);
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
   const platform = dataset<PlatformStatus>();
+  const linkDiagnostics = dataset<LinkDiagnostics>();
+  const bgpStatus = dataset<BGPStatus>(), bgpRoutes = dataset<BGPRoutes>();
+  const bgpUnsupported = ref(false);
+  const bgpExpired = ref(true), bgpRoutesExpired = ref(true), bgpMonitoring = ref(false);
+  for (const [query, expired] of [[bgpStatus, bgpExpired], [bgpRoutes, bgpRoutesExpired]] as const) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    watch(() => query.lastSuccess, time => {
+      clearTimeout(timer);
+      const remaining = time === null ? 0 : time + 15000 - Date.now();
+      expired.value = remaining <= 0;
+      if (remaining > 0) timer = setTimeout(() => { expired.value = true; }, remaining);
+    }, { immediate: true, flush: "sync" });
+    onScopeDispose(() => clearTimeout(timer));
+  }
+  const bgpStatusCurrent = computed(() => connected.value && !bgpExpired.value && !bgpStatus.stale && !bgpStatus.error);
+  const bgpRoutesCurrent = computed(() => connected.value && !bgpRoutesExpired.value && !bgpRoutes.stale && !bgpRoutes.error);
+  watch(() => stableJson((state.data?.active_transaction?.candidate ?? state.data?.desired)?.bgp), () => {
+    bgpStatus.stale = true; bgpRoutes.stale = true;
+  }, { flush: "sync" });
+  const sessionVersion = ref(0);
+  const restartPending = ref(""), restartReconnecting = ref(false), restartNotice = ref(""), restartError = ref("");
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  onScopeDispose(() => clearTimeout(reconnectTimer));
   const platformUnsupported = ref(false);
   const healthSource = computed(() => {
     const sources = [state, runtime, platform].filter(query => query.data?.process_health);
@@ -87,7 +112,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, platform, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, platform, linkDiagnostics, bgpStatus, bgpRoutes, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -115,6 +140,7 @@ export const useControllerStore = defineStore("controller", () => {
     (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || a.id.localeCompare(b.id)));
   const readOnlyNotice = computed(() => {
     if (!connected.value) return "Sign in and select a registered firewall.";
+    if (restartPending.value || restartReconnecting.value) return "A process restart is in progress. Your local draft is preserved.";
     if (busy.value || submitted.value || uncertain.value) return "A submitted snapshot or uncertain write is frozen. Reconcile its server outcome first.";
     return "";
   });
@@ -130,9 +156,20 @@ export const useControllerStore = defineStore("controller", () => {
     return "";
   });
   const canApply = computed(() => !applyBlockedReason.value);
+  const operationBlockedReason = computed(() => {
+    if (!connected.value) return "Select a connected firewall.";
+    if (restartPending.value || restartReconnecting.value) return "A restart is already in progress.";
+    if (busy.value || submitted.value || uncertain.value) return "Resolve the pending configuration operation first.";
+    if (activeTransactions.value.length) return "Finish the active transaction or recovery first.";
+    if (upgradePending.value || upgradeBlockedReason.value) return upgradeBlockedReason.value || "An upgrade is pending.";
+    return "";
+  });
 
   function invalidateReads(): void {
     epoch++;
+    sessionVersion.value++;
+    clearTimeout(reconnectTimer);
+    restartPending.value = ""; restartReconnecting.value = false; restartNotice.value = ""; restartError.value = "";
     aborts.forEach((controller) => controller.abort());
     aborts.clear();
     allDatasets.forEach((query) => { query.stale = true; query.loading = false; query.delayed = false; });
@@ -171,11 +208,70 @@ export const useControllerStore = defineStore("controller", () => {
   }
   const refreshState = () => load(state, api.getState);
   const refreshRuntime = () => load(runtime, api.getRuntime);
+  const refreshLinkDiagnostics = () => load(linkDiagnostics, api.getLinkDiagnostics);
+  async function refreshBGPStatus(): Promise<void> {
+    if (bgpUnsupported.value) return;
+    const session = epoch;
+    await load(bgpStatus, async signal => {
+      try { return await api.getBGPStatus(signal); }
+      catch (error) {
+        if (session === epoch && error instanceof ApiFailure && [403, 404, 405].includes(error.status ?? 0)) bgpUnsupported.value = true;
+        throw error;
+      }
+    });
+  }
+  const refreshBGPRoutes = () => bgpUnsupported.value ? Promise.resolve() : load(bgpRoutes, api.getBGPRoutes);
+  function reconnectAfterRestart(session: number): void {
+    restartReconnecting.value = true;
+    let attempts = 0;
+    async function probe(): Promise<void> {
+      if (session !== epoch || !connected.value) return;
+      attempts++;
+      await load(platform, signal => api.getPlatformStatus(AbortSignal.any([signal, AbortSignal.timeout(5000)])));
+      if (session !== epoch || !connected.value) return;
+      if (!platform.stale) {
+        restartReconnecting.value = false;
+        restartNotice.value = "Management is reachable. Review current process health; connectivity alone does not confirm a completed daemon restart.";
+        return;
+      }
+      if (attempts >= 8) {
+        restartReconnecting.value = false;
+        restartError.value = `Unable to verify management connectivity after eight checks. Restart outcome remains unknown; do not automatically resubmit. ${platform.error ?? ""}`;
+        return;
+      }
+      reconnectTimer = setTimeout(() => { void probe(); }, Math.min(5000, 1000 * 2 ** attempts));
+    }
+    reconnectTimer = setTimeout(() => { void probe(); }, 5000);
+  }
+  async function restartProcess(target: string): Promise<void> {
+    if (operationBlockedReason.value) throw new Error(operationBlockedReason.value);
+    const session = epoch;
+    restartPending.value = target; restartError.value = ""; restartNotice.value = "";
+    try {
+      const result = await api.restartProcess(target);
+      if (session !== epoch) return;
+      restartNotice.value = result.status === "simulated" ? `${target}: simulated; no process was restarted.` :
+        result.status === "restart_requested" ? `${target}: restart requested, not completed. No automatic resubmission.` :
+          `${target}: supervisor restarted. Protocol health and delivery are not established.`;
+      if (target === "netcontrold" && result.status === "restart_requested") reconnectAfterRestart(session);
+      else void refreshPlatformStatus();
+    } catch (error) {
+      if (session !== epoch) return;
+      const unknown = error instanceof ApiFailure && error.uncertain;
+      restartError.value = unknown ? `Restart outcome unknown. Do not automatically resubmit. ${message(error)}` : message(error);
+      if (unknown && target === "netcontrold") reconnectAfterRestart(session);
+    } finally {
+      if (session === epoch) {
+        restartPending.value = "";
+        if (target === "bgp" || target === "netcontrold") { bgpStatus.stale = true; bgpRoutes.stale = true; }
+      }
+    }
+  }
   async function refreshPlatformStatus(): Promise<void> {
     if (platformUnsupported.value) return;
     const session = epoch;
     await load(platform, async signal => {
-      try { return await api.getPlatformStatus(signal); }
+      try { return await api.getPlatformStatus(AbortSignal.any([signal, AbortSignal.timeout(5000)])); }
       catch (error) {
         if (session === epoch && error instanceof ApiFailure && [403, 404, 405].includes(error.status ?? 0)) platformUnsupported.value = true;
         throw error;
@@ -256,7 +352,8 @@ export const useControllerStore = defineStore("controller", () => {
     catch (error) { authError.value = error instanceof Error ? error.message : "Invalid saved firewall"; return false; }
     connecting.value = true; authError.value = null;
     invalidateReads();
-    platform.data = null; platformUnsupported.value = false;
+    platform.data = null; platformUnsupported.value = false; linkDiagnostics.data = null;
+    bgpStatus.data = null; bgpRoutes.data = null; bgpUnsupported.value = false;
     hostHealth.data = null; mqttStatus.data = null; mdnsStatus.data = null;
     await load(transactions, api.getTransactions);
     if (transactions.stale) {
@@ -276,6 +373,7 @@ export const useControllerStore = defineStore("controller", () => {
     rememberRegistryDevice("");
     setApiDevice(""); connected.value = false; invalidateReads();
     platformUnsupported.value = false;
+    bgpUnsupported.value = false;
     allDatasets.forEach((query) => { query.data = null; query.error = null; query.lastSuccess = null; query.incompatible = false; });
     draft.value = null; baseline.value = null; baseRevision.value = null; submitted.value = null;
     uncertain.value = null; actionError.value = null; notice.value = null; authError.value = null; ignoredFields.value = [];
@@ -489,6 +587,9 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale) revisionCache.set(id, comparisonRevision.data);
   }
   return {
+    linkDiagnostics, refreshLinkDiagnostics, sessionVersion, operationBlockedReason,
+    bgpStatus, bgpRoutes, bgpUnsupported, bgpStatusCurrent, bgpRoutesCurrent, bgpMonitoring, refreshBGPStatus, refreshBGPRoutes,
+    restartProcess, restartPending, restartReconnecting, restartNotice, restartError,
     platform, platformUnsupported, healthStatus, refreshPlatformStatus,
     connected, connecting, authError, state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, revisions, revisionDetail,
     nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, ignoredFields, uncertain, editorDirty,

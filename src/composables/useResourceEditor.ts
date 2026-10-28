@@ -45,6 +45,8 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       ...config.interfaces.filter(link => link.kind === "vlan" && link.vlan.parent === name).map(link => `Child VLAN ${link.name}`),
       ...config.routes.filter(item => item.interface === name).map(item => `Route ${item.destination}`),
       ...config.firewall.nat.masquerade.filter(item => item.out_interface === name).map((_, index) => `Masquerade reference ${index + 1}`),
+      ...(config.firewall.nat.destination_rewrite ?? []).filter(item => item.out_interface === name || item.target_interface === name).map((_, index) => `Destination rewrite reference ${index + 1}`),
+      ...(config.bgp?.neighbors ?? []).filter(peer => peer.interface === name).map(peer => `BGP peer ${peer.name}`),
       ...(config.firewall.input?.interfaces.filter(item => item.interface === name).map(item => `Host input policy ${item.interface}`) ?? []),
       ...config.softflowd.filter(item => item.interface === name).map(item => `Capture instance ${item.name}`),
       ...config.gateway_monitors.filter(item => item.interface === name).map(item => `Gateway monitor ${item.name}`),

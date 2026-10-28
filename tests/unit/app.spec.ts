@@ -38,14 +38,14 @@ describe("routed navigation sections", () => {
     expect(vpn?.pages.find(page => page.name === "wireguard")?.icon).toBe("mdi-wan");
   });
   it("keeps Config routable without a duplicate primary navigation entry", () => {
-    expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall", "VPN", "Services", "Diagnostics", "Settings"]);
+    expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]);
     expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels"]);
-    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors"]);
+    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors", "bgp"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
-    expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall", "firewall-input", "connections", "nat"]);
+    expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall", "firewall-input", "connections", "nat", "dnat"]);
     expect(navigationSections.find(section => section.name === "vpn-section")?.pages.map(page => page.name)).toEqual(["wireguard"]);
-    expect(navigationSections.find(section => section.name === "diagnostics-section")?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health"]);
+    expect(navigationSections.find(section => section.name === "diagnostics-section")?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details"]);
   });
   it("preserves every page URL and its authenticated section", () => {
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
@@ -80,6 +80,8 @@ describe("routed navigation sections", () => {
     await router.push("/diagnostics");
     expect(router.currentRoute.value.path).toBe("/diagnostics/traffic");
     expect(router.currentRoute.value.meta.authenticated).toBe(true);
+    await router.push("/diagnostics/link-diagnostics");
+    expect(router.currentRoute.value.path).toBe("/diagnostics/interface-drops");
   });
   it("loads all page and detail views with distinct top-level pages", async () => {
     const children = privateRoutes.flatMap(section => section.children ?? []).filter(child => child.component);
@@ -125,6 +127,31 @@ describe("page-scoped polling", () => {
     vi.spyOn(api, "getPlatformStatus").mockResolvedValue({ process_health: {
       status: "unknown", healthy: null, collected_at: null, stale: true, components: [],
     }, active_alerts: [] });
+  });
+  it.each(["/diagnostics/interface-drops", "/diagnostics/qdiscs", "/diagnostics/tcp-windowing", "/diagnostics/capture-details"])("polls %s only while visible, single-flighting requests and retaining drafts", async path => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true; store.state.data = state();
+    store.stage(state().desired); const draft = JSON.stringify(store.draft);
+    vi.spyOn(store, "refreshUpgrade").mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    let finish!: () => void;
+    const read = vi.spyOn(store, "refreshLinkDiagnostics").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue();
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push(path);
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(15000); expect(read).toHaveBeenCalledTimes(1);
+      finish(); await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(3000); expect(read).toHaveBeenCalledTimes(2);
+      visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(6000); expect(read).toHaveBeenCalledTimes(2);
+      visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0); expect(read).toHaveBeenCalledTimes(3);
+      await router.push("/config/changes"); await vi.advanceTimersByTimeAsync(6000);
+      expect(read).toHaveBeenCalledTimes(3); expect(JSON.stringify(store.draft)).toBe(draft);
+      wrapper.unmount(); await vi.advanceTimersByTimeAsync(6000); expect(read).toHaveBeenCalledTimes(3);
+    } finally { wrapper.unmount(); store.$dispose(); visibility.mockRestore(); vi.useRealTimers(); }
   });
   it("polls live traffic only on its visible page and stops on navigation or unmount", async () => {
     vi.useFakeTimers();

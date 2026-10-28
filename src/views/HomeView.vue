@@ -8,11 +8,13 @@ import OverviewCounters from "@/components/feature/OverviewCounters.vue";
 import OverviewSystem from "@/components/feature/OverviewSystem.vue";
 import OverviewGateways from "@/components/feature/OverviewGateways.vue";
 import OverviewWireGuard from "@/components/feature/OverviewWireGuard.vue";
+import OverviewBGP from "@/components/feature/OverviewBGP.vue";
 const store = useControllerStore();
 const widgets = {
   interfaces: { title: "Interfaces", component: OverviewInterfaces },
   gateways: { title: "Gateways", component: OverviewGateways },
   wireguard: { title: "WireGuard", component: OverviewWireGuard },
+  bgp: { title: "BGP peers", component: OverviewBGP },
   system: { title: "System stats", component: OverviewSystem },
   counters: { title: "Interface counters", component: OverviewCounters },
 };

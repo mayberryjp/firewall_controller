@@ -521,7 +521,7 @@ test("top navigation opens routed sections in the black reference theme", async 
   await navigate(page, "Physical interfaces");
   await openNavigation(page);
   await expect(navigation.getByRole("link")).toHaveCount(7);
-  for (const title of ["Interfaces", "Routing", "Firewall", "VPN", "Services", "Diagnostics", "Settings"]) {
+  for (const title of ["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]) {
     await expect(navigation.getByRole("link", { name: title, exact: true })).toBeVisible();
   }
   await expect(navigation.getByRole("link", { name: "Interfaces", exact: true })).toHaveAttribute("aria-current", "page");
@@ -668,7 +668,7 @@ test("connection bubble stays bottom-right and settings uses the gear without a 
   await openNavigation(page);
   const nav = page.getByRole("navigation", { name: "Main navigation" });
   await expect(nav.getByRole("link", { name: "Routing", exact: true }).locator(".mdi-transit-connection-variant")).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Firewall", exact: true }).locator(".mdi-wall")).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Firewall/NAT", exact: true }).locator(".mdi-wall")).toBeVisible();
   await expect(nav.getByRole("link", { name: "Settings", exact: true }).locator(".mdi-cog-outline")).toBeVisible();
   await nav.getByRole("link", { name: "Settings", exact: true }).click();
   await expect(page.getByRole("heading", { name: "General settings", exact: true })).toBeVisible();

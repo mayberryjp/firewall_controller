@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import { useControllerStore } from "@/stores/controller";
 import { formatTimestamp } from "@/services/timestamps";
 import type { PlatformStatus } from "@/types/domain";
+import { processRestartTarget, restartTargetSchema } from "@/services/operations";
 
 type ComponentHealth = PlatformStatus["process_health"]["components"][number];
 const store = useControllerStore();
@@ -40,8 +41,32 @@ function stateLabel(value: string): string {
 const componentLabels: Record<string, string> = {
   daemon: "Daemon", appliance_services: "Appliance service", dhcp_relay: "DHCP relay",
   softflowd: "NetFlow/IPFIX", gateway_monitors: "Gateway monitor", dhcp_client: "DHCP client",
-  mqtt: "MQTT", dynamic_dns: "Dynamic DNS",
+  mqtt: "MQTT", dynamic_dns: "Dynamic DNS", managed_processes: "Managed process", system: "System settings",
 };
+const restartSelection = ref<{ id: string; target: string } | null>(null);
+function restartUnavailable(row: ComponentHealth): string {
+  const target = processRestartTarget(row, store.state.data?.desired);
+  if (!target || !restartTargetSchema.safeParse(target).success) return "This observation has no supported restart target.";
+  if (target === "netcontrold" && !health.value?.process_health.daemon?.watchdog_enabled) return "Daemon restart requires native host-mode systemd/watchdog supervision.";
+  if (["disabled", "simulated"].includes(row.state) && !["mqtt", "dynamic-dns", "system", "netcontrold"].includes(target)) return "This native worker is disabled or simulated.";
+  return store.operationBlockedReason;
+}
+function reviewRestart(row: ComponentHealth): void {
+  const target = processRestartTarget(row, store.state.data?.desired);
+  if (restartUnavailable(row) || !target) return;
+  restartSelection.value = { id: row.id, target };
+}
+const selectedRow = computed(() => components.value.find(row => row.id === restartSelection.value?.id));
+const selectedBlocked = computed(() => !selectedRow.value ||
+  processRestartTarget(selectedRow.value, store.state.data?.desired) !== restartSelection.value?.target
+  ? "Process observation changed. Cancel and review the restart again." : restartUnavailable(selectedRow.value));
+async function restart(): Promise<void> {
+  const selection = restartSelection.value;
+  if (!selection || selectedBlocked.value) return;
+  await store.restartProcess(selection.target);
+  restartSelection.value = null;
+}
+watch(() => store.sessionVersion, () => { restartSelection.value = null; });
 onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
 </script>
 
@@ -92,6 +117,7 @@ onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
           <th>Resource</th>
           <th>State</th>
           <th>Health</th>
+          <th>Actions</th>
           <th>Collected (UTC)</th>
         </tr>
       </thead>
@@ -120,17 +146,100 @@ onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
               {{ healthLabel(component.healthy) }}
             </v-chip>
           </td>
+          <td>
+            <v-btn
+              icon="mdi-restart"
+              size="small"
+              variant="text"
+              :aria-label="`Restart ${component.resource ?? component.component}`"
+              :disabled="Boolean(restartUnavailable(component))"
+              :title="restartUnavailable(component) || `Restart ${processRestartTarget(component, store.state.data?.desired)}`"
+              :loading="store.restartPending === processRestartTarget(component, store.state.data?.desired)"
+              @click="reviewRestart(component)"
+            />
+          </td>
           <td class="health-time">
             {{ formatTimestamp(component.collected_at) }}
           </td>
         </tr>
         <tr v-if="!components.length">
-          <td colspan="5">
+          <td colspan="6">
             No component observations available.
           </td>
         </tr>
       </tbody>
     </v-table>
+    <p
+      v-if="store.restartNotice"
+      role="status"
+      class="mt-3"
+    >
+      {{ store.restartNotice }}
+    </p>
+    <p
+      v-if="store.restartReconnecting"
+      role="status"
+      class="mt-3"
+    >
+      Waiting for management connectivity; your draft is preserved.
+    </p>
+    <p
+      v-if="store.restartError"
+      role="alert"
+      class="text-error mt-3"
+    >
+      {{ store.restartError }}
+    </p>
+    <v-dialog
+      :model-value="Boolean(restartSelection)"
+      max-width="620"
+      :persistent="Boolean(store.restartPending)"
+      @update:model-value="value => { if (!value) restartSelection = null; }"
+    >
+      <v-card :title="`Restart ${restartSelection?.target}?`">
+        <v-card-text>
+          <p>Restarts this managed worker, not arbitrary OS processes. Requires system.restart. Desired configuration, revisions and accounting databases remain intact; your draft is preserved.</p>
+          <p class="mt-3">
+            Selected caches, counters and monitor baselines may reset. DHCP lease reacquisition can affect connectivity, and syslog deliveries may be missed. Restart does not verify upstream health.
+          </p>
+          <p
+            v-if="restartSelection?.target === 'bgp'"
+            class="mt-3"
+          >
+            BGP restart withdraws and relearns routes and dynamic WireGuard AllowedIPs. Static configuration is preserved.
+          </p>
+          <p
+            v-if="restartSelection?.target === 'netcontrold'"
+            class="mt-3"
+          >
+            The entire daemon, HTTP and SSH will stop temporarily. Recovery depends on the native host-mode systemd/watchdog service policy. Keep console access available. An acknowledgement is not a completed restart; an unknown outcome will not be automatically resubmitted.
+          </p>
+          <p
+            v-if="selectedBlocked"
+            role="alert"
+            class="text-error mt-3"
+          >
+            {{ selectedBlocked }}
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-btn
+            :disabled="Boolean(store.restartPending)"
+            @click="restartSelection = null"
+          >
+            Cancel
+          </v-btn>
+          <v-btn
+            color="warning"
+            :disabled="Boolean(selectedBlocked)"
+            :loading="Boolean(store.restartPending)"
+            @click="restart"
+          >
+            Confirm restart
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
     <section
       v-if="health"
       aria-labelledby="process-alerts-title"

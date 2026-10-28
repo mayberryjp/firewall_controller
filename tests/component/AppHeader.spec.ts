@@ -27,6 +27,20 @@ async function render() {
 
 describe("navbar configuration status", () => {
   it.each([
+    ["fw-1", "example.test", "fw-1.example.test"],
+    ["fw-1", "", "fw-1"],
+    ["", "example.test", "example.test"],
+    ["", "", undefined],
+  ])("shows committed identity in the Settings gear tooltip (%j, %j)", async (hostname, domain, expected) => {
+    useControllerStore().state.data!.desired.system = { hostname, domain, timezone: "" };
+    const wrapper = await render();
+    try {
+      const settings = wrapper.find('[aria-label="Settings"]');
+      expect(settings.attributes("title")).toBe(expected);
+      expect(wrapper.findAll("[title]")).toHaveLength(expected ? 2 : 1);
+    } finally { wrapper.unmount(); }
+  });
+  it.each([
     ["fw-1", "home.example.test"],
     ["fw-1", ""],
     ["", "home.example.test"],
@@ -50,6 +64,7 @@ describe("navbar configuration status", () => {
     const wrapper = await render();
     try {
       expect(wrapper.find(".device-name").exists()).toBe(false);
+      expect(wrapper.find('[aria-label="Settings"]').attributes("title")).toBe("fw-1.example.test");
       const committed = cloneConfig(store.state.data!.desired);
       committed.system!.domain = "committed.test";
       store.state.data = { ...store.state.data!, desired: committed };
@@ -58,15 +73,18 @@ describe("navbar configuration status", () => {
       expect(wrapper.text()).not.toContain("fw-1");
       expect(wrapper.text()).not.toContain("committed.test");
       expect(wrapper.text()).not.toContain("pending.test");
+      expect(wrapper.find('[aria-label="Settings"]').attributes("title")).toBe("fw-1.committed.test");
       store.connected = false;
       await flushPromises();
       expect(wrapper.find(".device-name").exists()).toBe(false);
+      expect(wrapper.find('[aria-label="Settings"]').exists()).toBe(false);
     } finally { wrapper.unmount(); }
   });
   it("does not show a device label without committed configuration", async () => {
     useControllerStore().state.data = null;
     const wrapper = await render();
     expect(wrapper.find(".device-name").exists()).toBe(false);
+    expect(wrapper.find('[aria-label="Settings"]').attributes("title")).toBeUndefined();
     wrapper.unmount();
   });
 });

@@ -9,6 +9,8 @@ import { decodeJson, encodeJson } from "@/services/json";
 import { differences, requiredPermissions } from "@/services/configuration";
 import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema } from "@/types/domain";
 import { config, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus } from "../fixtures";
+import { dnsResponse, linkDiagnostics } from "../diagnosticsFixtures";
+import { bgpConfig, bgpStatus, bgpRoutes, dnatRule } from "../bgpFixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -21,6 +23,78 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("preserves DNAT and BGP in actual API reads and reads BGP status/routes separately", async () => {
+    const candidate = bgpConfig(); candidate.firewall.nat.destination_rewrite = [dnatRule()];
+    body = encodeJson({ ...state(), desired: candidate, observed: candidate });
+    expect((await net.getState()).desired).toEqual(candidate);
+    body = encodeJson(candidate.bgp);
+    expect(await net.getBGPConfig()).toEqual(candidate.bgp);
+    expect(captured?.url).toBe("/services/bgp");
+    body = encodeJson(bgpStatus());
+    expect(await net.getBGPStatus()).toEqual(bgpStatus());
+    expect(captured?.url).toBe("/services/bgp/status");
+    body = encodeJson(bgpRoutes());
+    expect(await net.getBGPRoutes()).toEqual(bgpRoutes());
+    expect(captured?.url).toBe("/routes/bgp");
+    expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
+    status = 503; body = encodeJson({ error: "Worker unavailable" });
+    await expect(net.getBGPStatus()).rejects.toThrow("HTTP 503");
+  });
+  it("uses the operational POST contracts without revisions or extra request fields", async () => {
+    body = encodeJson(dnsResponse("lab0"));
+    const lookup = await net.lookupDNS({ interface: "lab0", hostname: "Example.TEST." });
+    expect(captured?.method).toBe("post"); expect(captured?.url).toBe("/diagnostics/dns-lookup");
+    expect(decodeJson(String(captured?.data))).toEqual({ interface: "lab0", hostname: "example.test", record_type: "A", timeout_ms: 2000 });
+    expect(lookup.revision).toBe("9007199254740993"); expect(lookup.rtt_ms).toBe(12.5);
+    status = 202; body = encodeJson({ target: "mqtt", status: "restart_requested", generation: 1 });
+    expect((await net.restartProcess("mqtt")).status).toBe("restart_requested");
+    expect(captured?.url).toBe("/processes/restart"); expect(decodeJson(String(captured?.data))).toEqual({ target: "mqtt" });
+    body = encodeJson({ target: "ntp", status: "restarted", worker: {} });
+    await expect(net.restartProcess("mqtt")).rejects.toThrow("target differs");
+  });
+  it("reads exact link diagnostics and reports unsupported endpoints without empty success fallbacks", async () => {
+    body = encodeJson(linkDiagnostics());
+    const result = await net.getLinkDiagnostics();
+    expect(captured?.method).toBe("get"); expect(captured?.url).toBe("/statistics/link-diagnostics");
+    expect(captured?.data).toBeUndefined(); expect(result.interfaces![0]!.drops).toBe("18446744073709551615");
+    status = 404; body = encodeJson({ error: "Unknown endpoint" });
+    await expect(net.getLinkDiagnostics()).rejects.toThrow("HTTP 404");
+  });
+  it("targets a specific DNS server and rejects fallback resolver results", async () => {
+    body = encodeJson(dnsResponse("lab0"));
+    await net.lookupDNS({ interface: "lab0", hostname: "example.test", server: "192.0.2.53" });
+    expect(decodeJson(String(captured?.data))).toEqual({ interface: "lab0", hostname: "example.test", server: "192.0.2.53", record_type: "A", timeout_ms: 2000 });
+    await expect(net.lookupDNS({ interface: "lab0", hostname: "example.test", server: "1.1.1.1" })).rejects.toThrow("resolver differs");
+    body = encodeJson({ ...dnsResponse(), attempts: [{ ...dnsResponse().attempts[0], server: "1.1.1.1" }] });
+    await expect(net.lookupDNS({ interface: "lab0", hostname: "example.test", server: "192.0.2.53" })).rejects.toThrow("resolver differs");
+    status = 400; body = encodeJson({ error: "Unknown field: server" });
+    await expect(net.lookupDNS({ interface: "lab0", hostname: "example.test", server: "192.0.2.53" })).rejects.toThrow("HTTP 400");
+  });
+  it("omits interface for kernel-routed per-server lookups and preserves the null response interface", async () => {
+    body = encodeJson(dnsResponse());
+    const result = await net.lookupDNS({ server: "192.0.2.53", hostname: "example.test" });
+    expect(decodeJson(String(captured?.data))).toEqual({ server: "192.0.2.53", hostname: "example.test", record_type: "A", timeout_ms: 2000 });
+    expect(result.interface).toBeNull();
+    status = 503; body = encodeJson({ error: "IPv6 DNS server requires global IPv6 to be enabled" });
+    await expect(net.lookupDNS({ server: "2001:db8::53", hostname: "example.test" })).rejects.toThrow("requires global IPv6");
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("preserves explicit null request fields for automatic routing and configured-resolver selection", async () => {
+    body = encodeJson(dnsResponse());
+    expect((await net.lookupDNS({ interface: null, server: "192.0.2.53", hostname: "example.test" })).interface).toBeNull();
+    expect(decodeJson(String(captured?.data))).toEqual({ interface: null, server: "192.0.2.53", hostname: "example.test", record_type: "A", timeout_ms: 2000 });
+    body = encodeJson(dnsResponse("lab0"));
+    expect((await net.lookupDNS({ interface: "lab0", server: null, hostname: "example.test" })).interface).toBe("lab0");
+    expect(decodeJson(String(captured?.data))).toEqual({ interface: "lab0", server: null, hostname: "example.test", record_type: "A", timeout_ms: 2000 });
+  });
+  it("retains a failed kernel-routed exchange and its single attempt without fallback", async () => {
+    body = encodeJson({ ...dnsResponse(), status: "failed", server: null, transport: null, rcode: null, addresses: [], rtt_ms: null,
+      attempts: [{ server: "192.0.2.53", status: "failed", rtt_ms: null, error: "No route to DNS server" }],
+    });
+    const result = await net.lookupDNS({ server: "192.0.2.53", hostname: "example.test" });
+    expect(result).toMatchObject({ interface: null, status: "failed", rtt_ms: null, attempts: [{ error: "No route to DNS server" }] });
+    expect(adapter).toHaveBeenCalledOnce();
+  });
   it("downloads only committed config and surfaces archive failures without exporting an empty fallback", async () => {
     const createObjectURL = vi.fn<(blob: Blob) => string>(() => "blob:committed"), revokeObjectURL = vi.fn();
     vi.stubGlobal("URL", class extends URL {

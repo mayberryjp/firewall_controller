@@ -27,12 +27,14 @@ export const navigationSections: NavigationSection[] = [
   { title: "Routing", name: "routing-section", path: "/routing", icon: "mdi-transit-connection-variant", pages: [
     { title: "Static Routes", name: "routes", path: "/routes", icon: "mdi-transit-connection-variant" },
     { title: "Gateway monitors", name: "gateway-monitors", path: "/gateway-monitors", icon: "mdi-access-point-network" },
+    { title: "BGP", name: "bgp", path: "/routing/bgp", icon: "mdi-router-network" },
   ] },
-  { title: "Firewall", name: "firewall-section", path: "/firewall", icon: "mdi-wall", pages: [
+  { title: "Firewall/NAT", name: "firewall-section", path: "/firewall", icon: "mdi-wall", pages: [
     { title: "Firewall forwarding", name: "firewall", path: "/firewall", icon: "mdi-wall" },
     { title: "Host input", name: "firewall-input", path: "/firewall/input", icon: "mdi-wall" },
     { title: "Connections", name: "connections", path: "/connections", icon: "mdi-transit-connection-variant" },
     { title: "NAT masquerading", name: "nat", path: "/nat", icon: "mdi-swap-horizontal" },
+    { title: "DNAT", name: "dnat", path: "/firewall/nat/dnat", icon: "mdi-swap-horizontal" },
   ] },
   { title: "VPN", name: "vpn-section", path: "/vpn", icon: "mdi-wan", pages: [
     { title: "WireGuard peers", name: "wireguard", path: "/wireguard", icon: "mdi-wan" },
@@ -49,6 +51,10 @@ export const navigationSections: NavigationSection[] = [
   { title: "Diagnostics", name: "diagnostics-section", path: "/diagnostics", icon: "mdi-chart-line", pages: [
     { title: "REAL TIME TRAFFIC", name: "real-time-traffic", path: "/diagnostics/traffic", icon: "mdi-chart-line" },
     { title: "Process health", name: "process-health", path: "/diagnostics/process-health", icon: "mdi-heart-pulse" },
+    { title: "Interface drops", name: "interface-drops", path: "/diagnostics/interface-drops", icon: "mdi-lan-check" },
+    { title: "QDISCS", name: "qdiscs", path: "/diagnostics/qdiscs", icon: "mdi-format-list-numbered" },
+    { title: "TCP WINDOWING", name: "tcp-windowing", path: "/diagnostics/tcp-windowing", icon: "mdi-swap-horizontal" },
+    { title: "Capture details", name: "capture-details", path: "/diagnostics/capture-details", icon: "mdi-clipboard-check-outline" },
   ] },
   { title: "Settings", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
     { title: "General", name: "settings-general", path: "/settings/general", icon: "mdi-cog-outline" },

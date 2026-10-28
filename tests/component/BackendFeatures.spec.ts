@@ -309,6 +309,11 @@ describe("October 17 frontend workflows", () => {
     vi.mocked(api.getMqttStatus).mockResolvedValue({ device_id: "a".repeat(32), enabled: true, state: "running", error: null, last_published_at_unix: Date.UTC(2026, 9, 24, 12, 34, 56) / 1000 });
     const wrapper = await render(HomeAssistantView, "/settings/home-assistant");
     expect(wrapper.text()).toContain("Last broker acknowledgment (UTC): 2026-10-24 12:34:56");
+    const rows = wrapper.findAll(".setting-row");
+    expect(rows[0]!.get(".setting-name").text()).toBe("Publisher");
+    expect(rows[0]!.text()).toContain("running");
+    expect(rows[1]!.get(".setting-name").text()).toBe("Enable MQTT");
+    expect(wrapper.findAll(".status-chip")).toHaveLength(1);
     expect(wrapper.find(".status-chip").attributes("data-color")).toBe("success"); wrapper.unmount();
   });
   it("keeps probe details stable while a background refresh is pending and updates on completion", async () => {

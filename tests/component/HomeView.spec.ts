@@ -131,7 +131,7 @@ describe("compact overview dashboard", () => {
       expect(wrapper.find('[data-widget="interfaces"]').exists()).toBe(true);
       expect(registry.saveOverviewLayout).not.toHaveBeenCalled();
       await button(wrapper, "Customize layout").trigger("click");
-      for (const id of ["Interfaces", "Gateways", "WireGuard", "System stats", "Interface counters"]) {
+      for (const id of ["Interfaces", "Gateways", "WireGuard", "BGP peers", "System stats", "Interface counters"]) {
         await wrapper.get(`[aria-label="Hide ${id}"]`).trigger("click");
       }
       expect(wrapper.findAll("[data-widget]")).toHaveLength(0);
@@ -139,7 +139,7 @@ describe("compact overview dashboard", () => {
       await button(wrapper, "Show System stats").trigger("click");
       expect(wrapper.findAll("[data-widget]")).toHaveLength(1);
       await button(wrapper, "Reset layout").trigger("click");
-      expect(wrapper.findAll("[data-widget]")).toHaveLength(5);
+      expect(wrapper.findAll("[data-widget]")).toHaveLength(6);
     } finally { wrapper.unmount(); }
   });
   it("surfaces load and save failures and keeps failed saves editable for retry", async () => {
@@ -205,9 +205,9 @@ describe("compact overview dashboard", () => {
       expect(system.get(".widget-note").text()).toBe("Stale");
     } finally { wrapper.unmount(); }
   });
-  it("shows the five compact widgets, preserves exact counters, and subscribes to live reads", () => {
+  it("shows the six compact widgets, preserves exact counters, and subscribes to live reads", () => {
     const store = useControllerStore(), wrapper = dashboard();
-    expect(wrapper.findAll("h2").map(heading => heading.text())).toEqual(["Interfaces", "Gateways", "WireGuard", "System stats", "Interface counters"]);
+    expect(wrapper.findAll("h2").map(heading => heading.text())).toEqual(["Interfaces", "Gateways", "WireGuard", "BGP peers", "System stats", "Interface counters"]);
     expect(wrapper.text()).toContain("18.45 EB");
     expect(wrapper.find('[title="18446744073709551615"]').exists()).toBe(true);
     expect(wrapper.text()).not.toMatch(/Recent transactions|Recent committed revisions|Expected live versus observed|Isolated lab control plane/);

@@ -21,7 +21,7 @@ test("Diagnostics process health refreshes and clears recovered alerts without w
   await page.getByLabel("Registry admin password").fill("registry-test-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   if (isMobile) await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Diagnostics", exact: true }).click();
   await page.getByRole("navigation", { name: "Diagnostics pages" }).getByRole("tab", { name: "Process health", exact: true }).click();

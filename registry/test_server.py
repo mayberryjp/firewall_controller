@@ -116,9 +116,9 @@ class RegistryHTTPTests(unittest.TestCase):
         response, default = self.request("GET", path, token=token)
         self.assertEqual(response.status, 200)
         self.assertEqual(default, {
-            "version": 1, "columns": [["interfaces", "gateways", "wireguard"], ["system", "counters"]],
+            "version": 1, "columns": [["interfaces", "gateways", "wireguard", "bgp"], ["system", "counters"]],
         })
-        layout = {"version": 1, "columns": [["counters", "interfaces"], ["system"]]}
+        layout = {"version": 1, "columns": [["bgp", "counters", "interfaces"], ["system"]]}
         response, saved = self.request("POST", path, layout, token)
         self.assertEqual(response.status, 200)
         self.assertEqual(saved, layout)

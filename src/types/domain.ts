@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
 
 const list = <T extends z.ZodTypeAny>(schema: T) =>
   z.array(schema).nullable().transform((value) => value ?? []);
@@ -13,6 +14,51 @@ export const objectMetadataSchema = z.object({
   description: z.string().default("").refine(value => [...value].length <= 2048 && !/[\p{Cc}\uD800-\uDFFF]/u.test(value.replace(/[\n\t]/g, "")), "Description must contain at most 2048 Unicode characters; only newline and tab controls are allowed"),
 }).strict().transform(value => value.display_name || value.description ? value : undefined);
 const annotation = { metadata: objectMetadataSchema.optional() };
+export const destinationRewriteSchema = z.object({
+  ...annotation,
+  out_interface: z.string(), protocol: z.enum(["tcp", "udp"]), destination_port: integer.min(1).max(65535),
+  target_interface: z.string(), target_address: z.string(),
+}).strict();
+export type DestinationRewrite = z.infer<typeof destinationRewriteSchema>;
+export const bgpNeighborSchema = z.object({
+  ...annotation,
+  name: z.string(), address: z.string(), interface: z.string(), local_address: z.string(),
+  remote_asn: integer.min(1).max(4294967294), wireguard_public_key: z.string().default(""),
+  accept_default: z.boolean().default(false),
+}).strict();
+export const bgpSchema = z.object({
+  ...annotation,
+  enabled: z.boolean().default(false), local_asn: integer.min(0).max(4294967294).default(0),
+  router_id: z.string().default(""), keepalive_seconds: integer.default(30),
+  hold_seconds: integer.default(90), max_prefixes: integer.default(4096),
+  neighbors: z.array(bgpNeighborSchema).default([]),
+}).strict();
+export type BGPConfig = z.infer<typeof bgpSchema>;
+export type BGPNeighbor = z.infer<typeof bgpNeighborSchema>;
+const bgpCount = integer.nonnegative().nullable().optional();
+export const bgpStatusSchema = z.object({
+  name: z.string().optional(), scope: z.string().optional(), state: z.string(), health: z.string().optional(), error: z.string().nullable().optional(),
+  local_asn: integer.optional(), router_id: z.string().optional(),
+  connected_prefixes: z.array(z.string()).optional(), installed_prefixes: bgpCount,
+  neighbors: z.array(z.object({
+    name: z.string(), address: z.string(), interface: z.string(), state: z.string(),
+    received_prefixes: bgpCount, advertised_prefixes: bgpCount, rejected_prefixes: bgpCount,
+    negotiated_hold_seconds: bgpCount, remote_router_id: z.string().nullable().optional(),
+    error: z.string().nullable().optional(),
+  })).optional(),
+});
+export type BGPStatus = z.infer<typeof bgpStatusSchema>;
+export const bgpRoutesSchema = z.object({
+  source: z.literal("bgp"), scope: z.string(), state: z.string(), error: z.string().nullable(),
+  routes: z.array(z.object({
+    prefix: z.string(), neighbor: z.string(), interface: z.string(), next_hop: z.string(),
+    as_path: z.array(integer.min(0).max(4294967295)), origin: integer.min(0).max(2),
+    local_pref: integer.min(0).max(4294967295), med: integer.min(0).max(4294967295),
+    selected: z.boolean(), installed: z.boolean(), reason: z.string().nullable(), source: z.literal("bgp"),
+    error: z.string().nullable().optional(),
+  })),
+});
+export type BGPRoutes = z.infer<typeof bgpRoutesSchema>;
 export const kernelSchema = z.object({ namespace: stringMap, host: stringMap }).strict();
 export const peerSchema = z.object({
   ...annotation,
@@ -195,7 +241,7 @@ export const configSchema = z.object({
   firewall: z.object({
     allow_all_icmp: z.boolean().default(true),
     policy: z.enum(["accept", "drop"]), rules: list(filterSchema),
-    nat: z.object({ masquerade: list(masqueradeSchema) }).strict(),
+    nat: z.object({ masquerade: list(masqueradeSchema), destination_rewrite: z.array(destinationRewriteSchema).optional() }).strict(),
     policies: firewallPoliciesSchema.nullable().optional(),
     input: inputFirewallSchema.nullable().optional(),
   }).strict(),
@@ -203,6 +249,7 @@ export const configSchema = z.object({
   gateway_monitors: list(gatewayMonitorSchema).default([]),
   ntp: ntpSchema, syslog: syslogSchema, vnstat: vnstatSchema,
   mdns: mdnsSchema.optional(),
+  bgp: bgpSchema.optional(),
   mqtt: mqttSchema.optional(),
   dynamic_dns: list(dynamicDnsSchema).optional(),
   blackhole: blackholeSchema.optional(),
@@ -345,9 +392,10 @@ export type ApplianceStatus = z.infer<typeof applianceStatusSchema>;
 export const mdnsStatusPageSchema = z.object({ instances: z.array(mdnsStatusSchema).length(1), error: z.string() });
 const runtimeApplianceStatusSchema = z.union([
   mdnsStatusSchema,
-  applianceStatusSchema.refine(value => value.name !== "mdns", "Invalid mDNS status"),
+  bgpStatusSchema.extend({ name: z.literal("bgp") }),
+  applianceStatusSchema.refine(value => !["mdns", "bgp"].includes(value.name), "Invalid specialized service status"),
 ]);
-export const isApplianceStatus = (value: z.infer<typeof runtimeApplianceStatusSchema>): value is ApplianceStatus => value.name !== "mdns";
+export const isApplianceStatus = (value: z.infer<typeof runtimeApplianceStatusSchema>): value is ApplianceStatus => !["mdns", "bgp"].includes(value.name);
 export const runtimeSchema = z.preprocess(value => {
   if (value && typeof value === "object" && !Array.isArray(value) &&
       !("parent_interfaces" in value) && "parents" in value) {
@@ -355,6 +403,7 @@ export const runtimeSchema = z.preprocess(value => {
   }
   return value;
 }, z.object({
+  bgp: bgpStatusSchema.optional(),
   ...platformFields,
   capabilities: z.object({
     gateway_monitor_modes: z.array(z.string()).optional(),
@@ -398,7 +447,9 @@ export const revisionPageSchema = z.object({
 });
 const decimal = z.string().regex(/^-?\d+$/);
 export const statisticsSchema = z.object({
+  bgp: bgpStatusSchema.optional(),
   sample: sampleSchema,
+  link_diagnostics: linkDiagnosticsSchema.optional(),
   gateways: list(gatewayStatisticsSchema).optional(),
   interfaces: list(z.object({
     name: z.string(), index: integer.optional(), kind: z.string(), ownership: z.string(),

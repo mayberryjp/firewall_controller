@@ -11,6 +11,9 @@ and [frontend handoffs](https://github.com/mayberryjp/firewall_backend/tree/main
 including native mDNS, journald-only syslog, resilient supervision and platform health,
 alongside the earlier source-policy removal, signed upgrades and connection-state deletion.
 These backend features are Unreleased; local mock tests do not establish deployment or native acceptance.
+The [October 28 operational handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-28.md)
+adds targeted process restart and timed DNS testing; the October 27 link-diagnostics
+handoff adds read-only link telemetry. These controls require a matching backend.
 Host-input filtering also follows the current
 [input-firewall contract](https://github.com/mayberryjp/firewall_backend/blob/main/FRONTEND_SPEC.md#661-host-input-filtering):
 optional input policies, managed ingress rules, DHCP-WAN allowances, and complete-package preservation.
@@ -150,6 +153,146 @@ block configuration operations, or trigger service/daemon restarts. Backend watc
 deployment remains a separate operator-approved action; no backend deployment is made
 by the frontend.
 
+### BGP And Destination Rewrite
+
+Routing > **BGP** (`/routing/bgp`) stages the local ASN/router ID, enable switch
+and inline peer add/edit/delete controls into the shared SAVE/apply flow.
+Timer and global prefix-limit controls are under Options. Peer rows show colored
+applied session states; uncommitted changes show Not applied, and unavailable or
+expired observations are neutral. Neighbor failures do not lock unrelated edits.
+The read-only BGP routes table keeps selected and installed paths distinct and
+shows AS paths and actionable rejection/install reasons; learned routes and
+WireGuard AllowedIPs are never copied into desired configuration.
+
+The **BGP peers** overview box uses applied configuration, not the draft. It is
+included in new/default layouts; existing customized layouts are preserved and
+can add it through Customize layout. Status is polled only on the BGP page or
+while its overview box is visible; full route rows are fetched only on BGP.
+Both use non-overlapping three-second reads with bounded failure backoff and
+neutralize measurements after 15 seconds. Process health supports the existing
+confirmed, icon-only `bgp` restart, warning that routes are withdrawn/relearned.
+BGP changes require `bgp.write`; enabled BGP also requires that permission for
+aggregate service repair. Default-route import opt-ins appear in SAVE review.
+
+Firewall/NAT > **DNAT** (`/firewall/nat/dnat`) is an ordered destination rewrite
+table with inline add/edit/delete/reorder controls. WAN, TCP/UDP, exact port, LAN
+and target address are the only required fields; optional Labels retain metadata.
+Rules preserve existing masquerade and all unrelated settings and require
+`nat.write`. Validation checks interface roles/up state, target subnet/family,
+firewall-owned/network/broadcast addresses, duplicates and collection limits.
+SAVE review explains source-preserving return routing, target upstream loops,
+normal forwarding filters and new-connections-only changes; no implicit accepts,
+routes, source NAT or connection flushes are added.
+
+These features follow the
+[October 28 backend handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-28.md)
+and remain **Unreleased** upstream. Deploy the matching backend first. The DNAT
+editor remains disabled when committed NAT reads lack `destination_rewrite`;
+unsupported BGP endpoints report an actionable error without locking other pages.
+Native peering/interoperability, bootstrap routing and Linux DNAT forwarding
+require separate real-appliance acceptance; mocked UI tests do not prove forwarding.
+
+### Process Restart, DNS Testing And Link Diagnostics
+
+Diagnostics > Process health provides an icon-only restart control on each process
+row, with an accessible label and an explicit review/confirmation dialog. Supported
+targets use `POST /processes/restart` and require `system.restart`; unsupported or
+inactive native observations have disabled controls with explanatory tooltips.
+Per-interface DHCP relay rows restart the shared relay worker; DHCP-derived gateway
+rows restart their shared manager. Async acknowledgements are not completion tokens.
+No restart request is automatically repeated. Full-daemon restart is offered only
+when the health snapshot reports watchdog supervision; the backend verifies the
+native host-mode deployment. Temporary HTTP/SSH management loss is expected.
+The controller preserves drafts and checks management connectivity with bounded
+backoff (eight checks, each bounded to five seconds). Connectivity does not prove a
+completed restart. Unknown outcomes and exhausted reconnect attempts remain explicit.
+Restart may reset caches/counters, reacquire DHCP leases or interrupt syslog delivery;
+desired configuration, revisions and persistent accounting databases are unchanged.
+
+Services > Remote DNS has **Domain**, **Test**, **RTT**, and **Result** columns on each server
+row. Enter an ASCII domain and press Test (or Enter) to measure that server's DNS
+RTT, displayed as whole milliseconds with no decimals (rounded, not truncated).
+API timing values retain full precision. The request sends that server's IP, an
+A query, and a 2000 ms timeout, without
+forcing an interface. Native UDP and TCP fallback sockets remain unbound to a
+device, so normal kernel routing in the managed namespace chooses the path to
+that destination. New or edited server rows can be tested before applying them;
+tests use the currently applied routing and IPv6 policy, not draft network changes.
+Tests do not stage configuration or repeat continuously.
+Result shows every returned address, or a DNS response code such as NXDOMAIN,
+SERVFAIL or REFUSED. An empty successful response shows No answers (NOERROR);
+simulation is explicitly identified. Negative DNS answers retain measured RTT;
+failed/simulated timing is unavailable, not zero. Errors appear inline in Result.
+
+`POST /diagnostics/dns-lookup` requires `diagnostics.run`. Its request contract now
+accepts nullable optional `server` and `interface` fields alongside `hostname`,
+`record_type`, and `timeout_ms`. At least one of `interface` or `server` must be
+nonnull; an empty interface string is invalid.
+Row tests always send `server` and omit `interface`, for example:
+`{"server":"192.0.2.53","hostname":"example.test","record_type":"A","timeout_ms":2000}`.
+An explicit server is queried exclusively on port 53 with no configured/DHCP
+fallback. It needs no saved DNS settings or configured interfaces. Without a
+requested interface, both UDP and TCP use normal kernel routing; the frontend
+does not guess an interface from configuration order or table IDs. Exchange
+failures, including routing errors, return a `200` failed result with an explicit
+attempt error and unavailable RTT. Preparation failures such as a missing/down
+requested interface or globally disabled IPv6 transport return `503`. Loopback
+resolvers retain native loopback routing.
+Explicit-interface callers keep the existing pinned-interface semantics and
+validation; omitting `server` still requires `interface` and preserves its
+configured/DHCP resolver selection. Response `interface` is the requested
+interface string, or `null` when omitted/null, including simulator responses.
+It is not a measured egress interface; the UI does not invent or display one.
+`server` and every attempt must identify the requested resolver (a null top-level
+server is allowed for failed/simulated lookups). The UI rejects mismatched resolvers
+and displays unsupported-endpoint/field errors rather than falling back.
+Deploy a backend supporting
+[explicit servers](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-28.md#2026-10-28-04-explicit-dns-diagnostic-server)
+and [optional interfaces](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-28.md#2026-10-28-05-optional-dns-diagnostic-interface)
+before using per-server tests. These backend changes remain Unreleased.
+Frontend tests verify unpinned requests and nullable responses, not real kernel
+route selection or appliance deployment.
+
+Diagnostics provides four focused, compact tables with colored chips:
+
+- **Interface drops** (`/diagnostics/interface-drops`): RX + TX error/drop totals
+  and per-sample deltas. Error/drop counts use green chips for measured zero,
+  amber for positive values, and neutral for unavailable/historical values.
+  Cumulative totals are not current alarms; tooltips distinguish them from deltas.
+- **QDISCS** (`/diagnostics/qdiscs`): separate queue rows, sample availability,
+  backlog/growth, drops, requeues and overlimits. Parent/child qdiscs must not be
+  summed; backlog is occupancy, not delay, and overlimits do not necessarily mean loss.
+- **TCP WINDOWING** (`/diagnostics/tcp-windowing`): plaintext ingress TCP ACKs and
+  raw window observations, including forwarded traffic. Capture completeness is
+  visible as a chip with a link to the separate **Capture details** page.
+  Requeues, overlimits, window decreases, zero-window events and capture-loss
+  counts also use amber chips for observed events. Zero TCP/capture counters
+  stay neutral when capture is incomplete, rather than suggesting complete absence.
+  Traffic counts, queue occupancy and raw window extrema use informational chips,
+  without invented congestion thresholds.
+  Windows are raw 16-bit fields, not scaled bytes or forwarded cwnd. Receiver
+  pressure does not establish link failure. Router-local TCP is not displayed.
+- **Capture details** (`/diagnostics/capture-details`): measurement quality for
+  TCP window monitoring, with tracked directions, tracking capacity, kernel drops,
+  rejected headers, capacity rejections and capture gaps. These counters describe
+  missed or interrupted monitoring observations, not necessarily firewall traffic
+  drops. Header tooltips explain each metric. This table is no longer embedded in
+  TCP WINDOWING.
+
+All four share `GET /statistics/link-diagnostics` with `state.read`, polling every
+three seconds only while a relevant page is visible, without overlapping reads,
+and with failure backoff capped at five seconds. The former
+`/diagnostics/link-diagnostics` URL redirects to Interface drops. Exact counters
+remain lossless; null values never become measured zero. Samples expire after five
+seconds; retained measurements/evidence are explicitly historical with neutral
+measurement colors. VLAN/tunnel observations must not be summed as unique traffic.
+These runtime-only observations never enter drafts or lock configuration editing.
+
+These APIs remain **Unreleased** upstream. Mock/browser checks do not qualify real
+DNS routing, kernel capture prerequisites, daemon systemd recovery or native restart
+effects. Deploy the matching backend and scoped permissions before operational use;
+unsupported endpoints and backend authorization/conflict errors remain visible.
+
 ### Committed Configuration Download
 
 Revision history provides **Download committed configuration**, using one read of
@@ -261,14 +404,16 @@ This is local process health, not verification of remote delivery or forwarding.
 Viewing the page does not modify configuration, disturb drafts or restart workers.
 
 The top navbar selects Interfaces, Routing, Firewall, VPN, Services, Diagnostics, or the Settings
-gear. Routing uses a classic network-diagram router symbol; Firewall uses a brick wall.
+gear. Hover over the Settings gear to see the committed hostname.domain; when only
+one is configured, the tooltip shows that value. Routing uses a classic
+network-diagram router symbol; Firewall uses a brick wall.
 Connection health appears in an icon-only floating bottom-right bubble; hover or
 focus it for connection status, or open it for deployment
 details and Disconnect. There is no profile/person button. Interfaces
 contains Physical interfaces, Loopbacks and VLANs. Routing contains Static Routes
-and Gateway monitors. The Modan モダン
+Gateway monitors and BGP. The Modan モダン
 brand links to Overview; there is no separate Overview navigation button. Firewall
-contains forwarding, Host input, Connections and NAT; VPN contains WireGuard. The existing **Config rN**
+contains forwarding, Host input, Connections, NAT and DNAT; VPN contains WireGuard. The existing **Config rN**
 revision box opens `/config`; there is no separate Config navigation button.
 Each section exposes its own routed page tabs: a left rail on desktop and a
 horizontal scrollable strip below 1280px when a section has multiple pages. `/networking` (Interfaces), `/routing`, `/vpn`, `/services`, and

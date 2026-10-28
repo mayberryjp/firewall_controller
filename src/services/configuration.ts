@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { configSchema, mqttSchema, blackholeSchema, systemSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService, type Route } from "@/types/domain";
+import { configSchema, mqttSchema, blackholeSchema, systemSchema, bgpSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService, type Route } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 import { normalizeMDNS, validateMDNS } from "@/services/mdns";
 
@@ -21,6 +21,9 @@ export function normalize(config: Config): Config {
   if (!result.dynamic_dns?.length) delete result.dynamic_dns;
   if (result.blackhole && stableJson(result.blackhole) === stableJson(blackholeSchema.parse({}))) delete result.blackhole;
   if (result.system && stableJson(result.system) === stableJson(systemSchema.parse({}))) delete result.system;
+  if (result.bgp && stableJson(result.bgp) === stableJson(bgpSchema.parse({}))) delete result.bgp;
+  result.bgp?.neighbors.sort((a, b) => a.name.localeCompare(b.name));
+  if (!result.firewall.nat.destination_rewrite?.length) delete result.firewall.nat.destination_rewrite;
   result.dynamic_dns?.sort((a, b) => a.name.localeCompare(b.name));
   for (const area of ["dhcp_clients", "dns"] as const) {
     if (!Object.keys(result[area] ?? {}).length) delete result[area];
@@ -165,7 +168,7 @@ export function differences(before: Config, after: Config): Difference[] {
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
   named("dynamic_dns", old.dynamic_dns ?? [], next.dynamic_dns ?? [], item => item.name);
-  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system"] as const) {
+  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "bgp"] as const) {
     if (stableJson(old[area]) !== stableJson(next[area])) result.push({
       area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
     });
@@ -188,6 +191,7 @@ export function differences(before: Config, after: Config): Difference[] {
     before: old.firewall.input, after: next.firewall.input,
   });
   ordered("nat", old.firewall.nat.masquerade, next.firewall.nat.masquerade);
+  ordered("dnat", old.firewall.nat.destination_rewrite ?? [], next.firewall.nat.destination_rewrite ?? []);
   if (stableJson(old.kernel) !== stableJson(next.kernel)) result.push({
     area: "kernel", identity: "preserved settings", kind: "modified", before: old.kernel, after: next.kernel,
   });
@@ -208,13 +212,14 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     dynamic_dns: [old.dynamic_dns ?? [], next.dynamic_dns ?? [], list => { doc.dynamic_dns = list as Config["dynamic_dns"]; }],
     firewall: [old.firewall.rules, next.firewall.rules, list => { doc.firewall.rules = list as Config["firewall"]["rules"]; }],
     nat: [old.firewall.nat.masquerade, next.firewall.nat.masquerade, list => { doc.firewall.nat.masquerade = list as Config["firewall"]["nat"]["masquerade"]; }],
+    dnat: [old.firewall.nat.destination_rewrite ?? [], next.firewall.nat.destination_rewrite ?? [], list => { doc.firewall.nat.destination_rewrite = list as NonNullable<Config["firewall"]["nat"]["destination_rewrite"]>; }],
     dhcp_clients: [entries(old.dhcp_clients), entries(next.dhcp_clients), list => { doc.dhcp_clients = record(list) as Config["dhcp_clients"]; }],
     dns: [entries(old.dns), entries(next.dns), list => { doc.dns = record(list) as Config["dns"]; }],
   };
   const collection = lists[change.area];
   if (collection) {
     if (change.kind === "moved") return unchanged;
-    const [previous, current, assign] = collection, ordered = change.area === "firewall" || change.area === "nat";
+    const [previous, current, assign] = collection, ordered = ["firewall", "nat", "dnat"].includes(change.area);
     const [was, now] = change.area === "dhcp_clients" || change.area === "dns" ? [entry(change.before), entry(change.after)] : [change.before, change.after];
     const find = (items: unknown[], value: unknown) => items.findIndex(item => stableJson(item) === stableJson(value));
     const position = Number(/^position (\d+)$/.exec(change.identity)?.[1]) - 1;
@@ -229,7 +234,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     if (!doc.dhcp_clients) delete doc.dhcp_clients;
     if (!doc.dns) delete doc.dns;
     if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
-  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
+  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel", "bgp"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
   else if (change.area === "ipv6") doc.ipv6_enabled = change.after === false ? false : undefined;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
@@ -292,6 +297,7 @@ export function serviceRepairPermissions(config: Config, service: RepairService)
     if (service === name || config[name].enabled) permissions.push(`${name}.write`);
   }
   if (service === "mdns" || config.mdns?.enabled) permissions.push("mdns.write");
+  if (config.bgp?.enabled) permissions.push("bgp.write");
   return permissions;
 }
 export function validateServerHost(host: string): void {
@@ -354,6 +360,47 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   const names = new Set<string>(), vlanIDs = new Set<string>(), routeIDs = new Set<string>(), relayAddresses = new Set<string>();
   const validName = (name: string) => /^[a-zA-Z0-9_.-]{1,15}$/.test(name) && !["lo", ".", ".."].includes(name);
   const interfaces = new Map(config.interfaces.map((link) => [link.name, link]));
+  if (config.bgp) {
+    const settings = config.bgp, page = "/routing/bgp", peerNames = new Set<string>(), peerAddresses = new Set<string>(), peerKeys = new Set<string>();
+    const validASN = (asn: number) => Number.isInteger(asn) && asn > 0 && asn < 4294967295 && ![23456, 65535].includes(asn);
+    const ipv4 = (text: string) => {
+      const address = numericAddress(text);
+      const bytes = address.toByteArray();
+      if (address.kind() !== "ipv4" || bytes.every(byte => byte === 0) || bytes[0] === 127 || bytes[0]! >= 224) throw new Error("Use a nonzero unicast IPv4 address");
+      return address;
+    };
+    bound(settings.hold_seconds, 3, 65535, "bgp.hold_seconds", page);
+    bound(settings.keepalive_seconds, 1, Math.floor(settings.hold_seconds / 3), "bgp.keepalive_seconds", page);
+    bound(settings.max_prefixes, 1, 16384, "bgp.max_prefixes", page);
+    if (settings.enabled || settings.neighbors.length || settings.local_asn || settings.router_id) {
+      if (!validASN(settings.local_asn)) issue("bgp.local_asn", "Use ASN 1..4294967294, excluding 23456 and 65535", page);
+      check("bgp.router_id", page, () => { ipv4(settings.router_id); });
+    }
+    if (settings.enabled && !settings.neighbors.length) issue("bgp.neighbors", "Enabled BGP requires at least one peer", page);
+    if (settings.neighbors.length > 32) issue("bgp.neighbors", "At most 32 BGP peers", page);
+    settings.neighbors.forEach((peer, index) => {
+      const path = `bgp.neighbors.${index}`;
+      if (!validName(peer.name) || peerNames.has(peer.name)) issue(`${path}.name`, "Use a unique peer name, 1..15 letters, digits, dot, underscore or hyphen", page);
+      peerNames.add(peer.name);
+      if (!validASN(peer.remote_asn)) issue(`${path}.remote_asn`, "Use ASN 1..4294967294, excluding 23456 and 65535", page);
+      check(path, page, () => {
+        const remote = ipv4(peer.address); ipv4(peer.local_address);
+        if (peerAddresses.has(peer.address) || peer.address === peer.local_address) throw new Error("Peer address must be unique and different from the local address");
+        peerAddresses.add(peer.address);
+        const link = interfaces.get(peer.interface);
+        if (!link?.up) throw new Error("Select an up configured interface");
+        if (!link.addresses.some(address => address.split("/")[0] === peer.local_address)) throw new Error("Select a static local IPv4 address on the interface");
+        const contains = (cidr: string) => { const network = ipaddr.parseCIDR(cidr); return network[0].kind() === "ipv4" && remote.match(network); };
+        if (link.kind === "wireguard") {
+          const wg = link.wireguard.peers.find(item => item.enabled !== false && item.public_key === peer.wireguard_public_key);
+          if (!wg || !wg.allowed_ips.some(contains)) throw new Error("Select an enabled WireGuard peer whose static AllowedIPs cover the BGP address");
+          const key = `${link.name}/${peer.wireguard_public_key}`;
+          if (peerKeys.has(key)) throw new Error("Only one BGP neighbor per WireGuard peer");
+          peerKeys.add(key);
+        } else if (peer.wireguard_public_key || !link.addresses.some(contains)) throw new Error("Non-WireGuard peers must be directly connected and have no WireGuard key");
+      });
+    });
+  }
   if (config.system) {
     const { hostname, domain, timezone } = config.system, page = "/settings/general";
     if (hostname && !/^(?!-)[a-z0-9-]{1,63}(?<!-)$/.test(hostname)) issue("system.hostname", "Host name must be 1..63 lowercase letters, digits or hyphens, not starting or ending with a hyphen", page);
@@ -601,6 +648,30 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     const link = interfaces.get(rule.out_interface);
     if (!link || !(rule.family === "ipv4" && config.dhcp_clients?.[rule.out_interface]) && !link.addresses.some((address) => prefix(address, false).family === rule.family)) throw new Error("Egress requires a managed interface address of the selected family or an IPv4 DHCP client");
   }));
+  const rewrites = config.firewall.nat.destination_rewrite ?? [], rewriteKeys = new Set<string>();
+  if (rewrites.length > 256) issue("firewall.nat.destination_rewrite", "At most 256 destination rewrite rules", "/firewall/nat/dnat");
+  rewrites.forEach((rule, index) => check(`firewall.nat.destination_rewrite.${index}`, "/firewall/nat/dnat", () => {
+    bound(rule.destination_port, 1, 65535, `firewall.nat.destination_rewrite.${index}.destination_port`, "/firewall/nat/dnat");
+    if (!["tcp", "udp"].includes(rule.protocol)) throw new Error("Select TCP or UDP");
+    const target = numericAddress(rule.target_address), family = target.kind();
+    if (!globalUnicast(target) || (family === "ipv4" && target.toByteArray()[0]! >= 224)) throw new Error("Target must be a usable unicast address");
+    const wan = interfaces.get(rule.out_interface), lan = interfaces.get(rule.target_interface);
+    if (!wan?.up || wan.role !== "wan") throw new Error("Select an up managed WAN");
+    if (!lan?.up || lan.role !== "lan") throw new Error("Select an up managed LAN");
+    if (!(family === "ipv4" && config.dhcp_clients?.[wan.name]) && !wan.addresses.some(address => prefix(address, false).family === family)) throw new Error("WAN requires an address of the target family, or DHCPv4");
+    if (config.interfaces.some(link => link.addresses.some(address => address.split("/")[0] === rule.target_address))) throw new Error("The target must be another device, not a firewall address");
+    const subnets = lan.addresses.map(address => ipaddr.parseCIDR(address)).filter(network => network[0].kind() === family && target.match(network));
+    if (!subnets.length) throw new Error("Target must be inside a static subnet on the selected LAN");
+    if (family === "ipv4" && !subnets.some(network => {
+      if (network[1] >= 31) return true;
+      const address = target.toByteArray().reduce((total, byte) => total * 256 + byte, 0);
+      const size = 2 ** (32 - network[1]);
+      return address % size !== 0 && address % size !== size - 1;
+    })) throw new Error("Target cannot be the subnet network or broadcast address");
+    const key = `${wan.name}/${rule.protocol}/${rule.destination_port}/${family}`;
+    if (rewriteKeys.has(key)) throw new Error("Duplicate WAN/protocol/port/family match");
+    rewriteKeys.add(key);
+  }));
   const input = config.firewall.input;
   if (input) {
     const page = "/firewall/input", seen = new Set<string>();
@@ -667,7 +738,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write", mdns: "mdns.write",
-    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write",
+    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

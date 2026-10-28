@@ -74,6 +74,33 @@ async function stage(): Promise<void> {
       </div>
       <v-divider />
       <div class="setting-row">
+        <div class="setting-name">
+          Publisher
+        </div>
+        <div class="setting-control">
+          <v-chip
+            :color="publisherColor"
+            size="small"
+            variant="tonal"
+          >
+            {{ store.mqttStatus.stale ? (publisher ? 'Stale' : 'Unavailable') : publisher?.state ?? 'Unavailable' }}
+          </v-chip>
+          <p
+            v-if="store.mqttStatus.error || publisher?.error"
+            class="setting-desc"
+          >
+            {{ store.mqttStatus.error || publisher?.error }}
+          </p>
+          <p
+            v-if="publisher?.last_published_at_unix != null"
+            class="setting-desc"
+          >
+            Last broker acknowledgment (UTC): {{ formatTimestamp(publisher.last_published_at_unix * 1000) }}
+          </p>
+        </div>
+      </div>
+      <v-divider />
+      <div class="setting-row">
         <label
           for="mqtt-enabled"
           class="setting-name"
@@ -207,33 +234,6 @@ async function stage(): Promise<void> {
             hide-details
             control-variant="stacked"
           />
-        </div>
-      </div>
-      <v-divider />
-      <div class="setting-row">
-        <div class="setting-name">
-          Publisher
-        </div>
-        <div class="setting-control">
-          <v-chip
-            :color="publisherColor"
-            size="small"
-            variant="tonal"
-          >
-            {{ store.mqttStatus.stale ? (publisher ? 'Stale' : 'Unavailable') : publisher?.state ?? 'Unavailable' }}
-          </v-chip>
-          <p
-            v-if="store.mqttStatus.error || publisher?.error"
-            class="setting-desc"
-          >
-            {{ store.mqttStatus.error || publisher?.error }}
-          </p>
-          <p
-            v-if="publisher?.last_published_at_unix != null"
-            class="setting-desc"
-          >
-            Last broker acknowledgment (UTC): {{ formatTimestamp(publisher.last_published_at_unix * 1000) }}
-          </p>
         </div>
       </div>
       <v-divider />

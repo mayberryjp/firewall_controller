@@ -5,11 +5,18 @@ import ProcessHealthView from "@/views/ProcessHealthView.vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
 import { config, processHealthSnapshot, state } from "../fixtures";
+import * as api from "@/services/netcontrol";
+import { ApiFailure } from "@/services/api";
 
 const stubs = {
   VTable: { template: "<table><slot /></table>" },
   VChip: { props: ["color"], template: '<span class="health-chip" :data-color="color"><slot /></span>' },
   VProgressLinear: true,
+  VBtn: { props: ["disabled", "icon"], template: '<button :disabled="disabled" :data-icon="icon"><slot /></button>' },
+  VDialog: { props: ["modelValue"], template: '<div v-if="modelValue" role="dialog"><slot /></div>' },
+  VCard: { props: ["title"], template: "<div>{{ title }}<slot /></div>" },
+  VCardText: { template: "<div><slot /></div>" },
+  VCardActions: { template: "<div><slot /></div>" },
 };
 let wrapper: ReturnType<typeof mount>;
 beforeEach(() => {
@@ -124,6 +131,45 @@ describe("Process health diagnostics", () => {
     expect(store.draft).toEqual(draft);
     expect(refreshState).not.toHaveBeenCalled(); expect(refreshRuntime).not.toHaveBeenCalled();
     expect(reconcile).not.toHaveBeenCalled();
-    expect(wrapper.find("button").exists()).toBe(false);
+    expect(wrapper.findAll("button")).toHaveLength(3);
+    expect(wrapper.get('button[aria-label="Restart ntp"]').attributes("data-icon")).toBe("mdi-restart");
+    expect(wrapper.get('button[aria-label="Restart ntp"]').text()).toBe("");
+  });
+  it("confirms a targeted restart without submitting a draft or repeating async requests", async () => {
+    const store = useControllerStore();
+    store.stage(config());
+    const draft = cloneConfig(store.draft!);
+    const restart = vi.spyOn(api, "restartProcess").mockResolvedValue({ target: "ntp", status: "restart_requested", generation: 1 });
+    render();
+    await wrapper.get('button[aria-label="Restart ntp"]').trigger("click");
+    expect(restart).not.toHaveBeenCalled();
+    expect(wrapper.get('[role="dialog"]').text()).toContain("caches, counters");
+    await wrapper.findAll("button").find(button => button.text() === "Confirm restart")!.trigger("click");
+    await flushPromises();
+    expect(restart).toHaveBeenCalledExactlyOnceWith("ntp");
+    expect(wrapper.text()).toContain("restart requested, not completed");
+    expect(store.draft).toEqual(draft);
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+  });
+  it("disables inactive and unsupported observations and requires supervised daemon restart", async () => {
+    const store = useControllerStore();
+    store.platform.data!.process_health.daemon!.watchdog_enabled = false;
+    render();
+    expect(wrapper.get('button[aria-label="Restart syslog"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.get('button[aria-label="Restart netcontrold"]').attributes("disabled")).toBeDefined();
+    store.platform.data = { ...store.platform.data!, process_health: { ...store.platform.data!.process_health, components: [
+      ...store.platform.data!.process_health.components,
+      { id: "future", component: "future", resource: "future", state: "running", healthy: true, retrying: false, collected_at: null },
+    ] } };
+    await flushPromises();
+    expect(wrapper.get('button[aria-label="Restart future"]').attributes("disabled")).toBeDefined();
+  });
+  it("reports explicit authorization failures inline", async () => {
+    vi.spyOn(api, "restartProcess").mockRejectedValue(new ApiFailure("HTTP 403: system.restart required", 403));
+    render();
+    await wrapper.get('button[aria-label="Restart ntp"]').trigger("click");
+    await wrapper.findAll("button").find(button => button.text() === "Confirm restart")!.trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("system.restart required");
   });
 });

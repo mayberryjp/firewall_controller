@@ -1,16 +1,19 @@
-import { mount, type VueWrapper } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import RemoteDnsView from "@/views/RemoteDnsView.vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
 import { state } from "../fixtures";
+import * as api from "@/services/netcontrol";
+import { dnsResponse } from "../diagnosticsFixtures";
 
 const box = { template: "<div><slot /></div>" };
-function render() {
+function render(stubLookups = true) {
   return mount(RemoteDnsView, {
     global: {
       stubs: {
+        DNSLookup: stubLookups,
         VAlert: box,
         VTable: { template: "<table><slot /></table>" },
         VBtn: { props: ["disabled"], template: '<button :disabled="disabled"><slot /></button>' },
@@ -51,6 +54,37 @@ beforeEach(() => {
 });
 
 describe("Remote DNS", () => {
+  it("keeps independent domain inputs, RTTs and answers in each server row", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.dns!.lab0!.servers.push("1.1.1.1");
+    const lookup = vi.spyOn(api, "lookupDNS").mockImplementation(async input => ({
+      ...dnsResponse(), server: input.server!, hostname: input.hostname,
+      rtt_ms: input.server === "1.1.1.1" ? 25 : 12.5,
+      addresses: input.server === "1.1.1.1" ? ["198.51.100.9"] : ["192.0.2.7"],
+    }));
+    const wrapper = render(false);
+    try {
+      expect(wrapper.findAll("th").map(cell => cell.text())).toEqual(["Server", "Domain", "Test", "RTT", "Result", "Actions"]);
+      expect(wrapper.findAll("tbody tr")).toHaveLength(2);
+      for (const row of wrapper.findAll("tbody tr")) {
+        expect(row.findAll("td")).toHaveLength(6);
+        expect(row.findAll("td")[5]!.classes()).toContain("column-actions");
+      }
+      await wrapper.get('[aria-label="Domain for 192.0.2.53"]').setValue("first.test");
+      await wrapper.get('[aria-label="Domain for 1.1.1.1"]').setValue("second.test");
+      await wrapper.get('button[aria-label="Test DNS 192.0.2.53"]').trigger("click"); await flushPromises();
+      expect(wrapper.get('[aria-label="RTT for 192.0.2.53"]').text()).toBe("13 ms");
+      expect(wrapper.get('[aria-label="Result for 192.0.2.53"]').text()).toBe("192.0.2.7");
+      expect(wrapper.get('[aria-label="Result for 1.1.1.1"]').text()).toBe("\u2014");
+      expect(wrapper.get('[aria-label="RTT for 1.1.1.1"]').text()).not.toContain("13 ms");
+      await wrapper.get('button[aria-label="Test DNS 1.1.1.1"]').trigger("click"); await flushPromises();
+      expect(wrapper.get('[aria-label="RTT for 1.1.1.1"]').text()).toBe("25 ms");
+      expect(wrapper.get('[aria-label="Result for 1.1.1.1"]').text()).toBe("198.51.100.9");
+      expect(wrapper.get('[aria-label="Result for 192.0.2.53"]').text()).toBe("192.0.2.7");
+      expect(lookup).toHaveBeenNthCalledWith(2, expect.objectContaining({ server: "1.1.1.1", hostname: "second.test" }), expect.any(AbortSignal));
+      expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(false);
+    } finally { wrapper.unmount(); lookup.mockRestore(); }
+  });
   it.each([true, false])("preserves the DHCP DNS override (%s) while editing remote servers", async override_dhcp_dns => {
     const store = useControllerStore();
     store.state.data!.desired.dns!.lab0!.override_dhcp_dns = override_dhcp_dns;

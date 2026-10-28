@@ -2,6 +2,8 @@ import { ApiFailure, request } from "@/services/api";
 import { z } from "zod";
 import { numericAddress } from "@/services/configuration";
 import { hostHealthSchema } from "@/services/hostHealth";
+import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
+import { dnsLookupRequestSchema, dnsLookupSchema, restartResponseSchema, restartTargetSchema, type DNSLookupRequest } from "@/services/operations";
 import {
   mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema, timezonesSchema,
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
@@ -10,10 +12,28 @@ import {
   applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, mdnsSchema, mdnsStatusPageSchema,
   gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
   connectionDeletionSchema, upgradeVersionSchema, upgradeJobSchema, upgradeStatusSchema, type Connection,
-  platformStatusSchema,
+  platformStatusSchema, bgpSchema, bgpStatusSchema, bgpRoutesSchema,
 } from "@/types/domain";
 
 const id = encodeURIComponent;
+export const getBGPConfig = (signal?: AbortSignal) => request("GET", "/services/bgp", bgpSchema, undefined, signal);
+export const getBGPStatus = (signal?: AbortSignal) => request("GET", "/services/bgp/status", bgpStatusSchema, undefined, signal);
+export const getBGPRoutes = (signal?: AbortSignal) => request("GET", "/routes/bgp", bgpRoutesSchema, undefined, signal);
+export const getLinkDiagnostics = (signal?: AbortSignal) =>
+  request("GET", "/statistics/link-diagnostics", linkDiagnosticsSchema, undefined, signal);
+export function lookupDNS(input: DNSLookupRequest, signal?: AbortSignal) {
+  const value = dnsLookupRequestSchema.parse(input);
+  const schema = dnsLookupSchema.refine(result => !value.server ||
+    ((result.status !== "answered" || result.server === value.server) &&
+      (result.server === null || result.server === value.server) &&
+      result.attempts.every(attempt => attempt.server === value.server)),
+  "DNS response resolver differs from the requested server");
+  return request("POST", "/diagnostics/dns-lookup", schema, value, signal);
+}
+export function restartProcess(target: string) {
+  const value = restartTargetSchema.parse(target);
+  return request("POST", "/processes/restart", restartResponseSchema.refine(result => result.target === value, "Restart response target differs from the requested process"), { target: value });
+}
 const submittedTransactionSchema = transactionSchema.extend({ ignored_fields: z.array(z.string()).optional() });
 export const getHostHealth = (signal?: AbortSignal) => request("GET", "/statistics/host", hostHealthSchema, undefined, signal);
 export const getMqttStatus = (signal?: AbortSignal) => request("GET", "/services/mqtt/status", mqttStatusSchema, undefined, signal);

@@ -15,7 +15,7 @@ const relayChanged = computed(() => changes.value.some(item => item.area === "in
 const mdnsAddedLinks = computed(() => props.after.mdns?.interface_mode === "deny"
   ? mdnsInterfaces(props.after).filter(name => !mdnsInterfaces(props.before).includes(name)) : []);
 const hasWarnings = computed(() => changedServices.value.length || relayChanged.value || changes.value.some(item =>
-  ["gateway_monitors", "firewall-icmp", "firewall-input", "mdns"].includes(item.area)) || mdnsAddedLinks.value.length);
+  ["gateway_monitors", "firewall-icmp", "firewall-input", "mdns", "bgp"].includes(item.area)) || mdnsAddedLinks.value.length);
 function source(value: unknown): string {
   return value === undefined ? "" : `${JSON.stringify(JSON.parse(stableJson(value)), null, 2)}\n`;
 }
@@ -52,6 +52,22 @@ const totals = computed(() => files.value.reduce((total, file) => ({
   >
     mDNS deny-mode membership expands to: {{ mdnsAddedLinks.join(', ') }}. Review discovery exposure on these LAN links before applying.
   </v-alert>
+  <v-alert
+    v-if="changes.some(item => item.area === 'dnat')"
+    type="warning"
+    variant="tonal"
+    class="mb-4"
+  >
+    Destination rewrite preserves client source IP and destination port. Replies must return through this firewall; same-subnet direct replies usually break reverse NAT. Use routed return paths or a separate target subnet. Normal forwarding filters see the rewritten target and LAN egress; no allow rule, route or source NAT is added. Explicit masquerade rules still apply. The target's own matching upstream traffic is also redirected: choose a nonmatching upstream path/transport to avoid loops. Changes, removal and rollback affect new connections only; existing translations remain until expiry or explicit deletion.
+  </v-alert>
+  <v-alert
+    v-if="changes.some(item => item.area === 'bgp') && after.bgp?.neighbors.some(peer => peer.accept_default)"
+    type="warning"
+    variant="tonal"
+    class="mb-4"
+  >
+    Default routes may be imported from: {{ after.bgp.neighbors.filter(peer => peer.accept_default).map(peer => peer.name).join(', ') }}. This does not advertise a default route.
+  </v-alert>
   <details
     v-if="hasWarnings"
     class="diff-warnings"
@@ -62,6 +78,14 @@ const totals = computed(() => files.value.reduce((total, file) => ({
       :key="service"
       :service="service"
     />
+    <v-alert
+      v-if="changes.some(item => item.area === 'bgp')"
+      type="warning"
+      variant="tonal"
+      class="mb-4"
+    >
+      BGP changes withdraw and relearn routes. All live-up connected IPv4 networks are exported; static and learned routes are not redistributed. Default-route import is opt-in. Learned WireGuard AllowedIPs also authorize incoming source addresses: trust the selected peer. Keep static bootstrap routes/AllowedIPs and explicit trusted-peer TCP 179 input permits; none are automatically created.
+    </v-alert>
     <v-alert
       v-if="changes.some(item => item.area === 'mdns')"
       type="info"

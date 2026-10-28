@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useDisplay } from "vuetify";
 import { useRoute } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
@@ -8,6 +9,10 @@ import ConnectionStatus from "@/components/layout/ConnectionStatus.vue";
 const store = useControllerStore(), route = useRoute();
 const { lgAndUp } = useDisplay();
 const appName = import.meta.env.VITE_APP_NAME || "Modan モダン";
+const deviceName = computed(() => {
+  const system = store.state.data?.desired.system;
+  return [system?.hostname, system?.domain].filter(Boolean).join(".") || undefined;
+});
 </script>
 
 <template>
@@ -54,6 +59,7 @@ const appName = import.meta.env.VITE_APP_NAME || "Modan モダン";
         :icon="section.name === 'settings-section' ? true : undefined"
         :prepend-icon="section.name === 'settings-section' ? undefined : section.icon"
         :aria-label="section.title"
+        :title="section.name === 'settings-section' ? deviceName : undefined"
         variant="text"
         rounded
       >

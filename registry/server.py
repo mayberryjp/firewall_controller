@@ -33,11 +33,11 @@ MAX_DEVICES = 500
 NAME_LIMIT = 80
 ADDRESS_LIMIT = 300
 CREDENTIAL_LIMIT = 4096
-OVERVIEW_WIDGETS = {"interfaces", "gateways", "wireguard", "system", "counters"}
+OVERVIEW_WIDGETS = {"interfaces", "gateways", "wireguard", "bgp", "system", "counters"}
 
 
 def default_overview_layout() -> dict[str, object]:
-    return {"version": 1, "columns": [["interfaces", "gateways", "wireguard"], ["system", "counters"]]}
+    return {"version": 1, "columns": [["interfaces", "gateways", "wireguard", "bgp"], ["system", "counters"]]}
 
 
 def normalize_overview_layout(value: object) -> dict[str, object]:

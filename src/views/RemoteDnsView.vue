@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, validateConfig } from "@/services/configuration";
+import DNSLookup from "@/components/feature/DNSLookup.vue";
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.desired);
@@ -105,6 +106,18 @@ function remove(address: string): void {
             Server
           </th>
           <th scope="col">
+            Domain
+          </th>
+          <th scope="col">
+            Test
+          </th>
+          <th scope="col">
+            RTT
+          </th>
+          <th scope="col">
+            Result
+          </th>
+          <th scope="col">
             Actions
           </th>
         </tr>
@@ -116,6 +129,7 @@ function remove(address: string): void {
         >
           <tr v-if="!isEditing(index)">
             <td>{{ address }}</td>
+            <DNSLookup :server="address" />
             <td class="column-actions">
               <v-btn
                 icon="mdi-pencil-outline"
@@ -151,6 +165,7 @@ function remove(address: string): void {
                 @keydown.enter.prevent="stage"
               />
             </td>
+            <td colspan="4" />
             <td class="column-actions">
               <v-btn
                 color="primary"
@@ -171,7 +186,7 @@ function remove(address: string): void {
           </tr>
         </template>
         <tr v-if="!rows.length && editIndex === null">
-          <td colspan="2">
+          <td colspan="6">
             No servers.
           </td>
         </tr>
@@ -183,5 +198,7 @@ function remove(address: string): void {
 <style scoped>
 section { padding-bottom: 56px; }
 .service-table :deep(th), .service-table :deep(td) { white-space: normal; overflow-wrap: anywhere; }
-.service-table :deep(.column-actions) { width: 140px; }
+.service-table :deep(table) { min-width: 640px; }
+.service-table :deep(th), .service-table :deep(td:first-child) { white-space: nowrap; }
+.service-table :deep(.column-actions) { width: 140px; min-width: 120px; white-space: nowrap; }
 </style>

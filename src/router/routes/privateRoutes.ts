@@ -19,12 +19,15 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/routes", name: "routes", component: () => import("@/views/RoutesView.vue") },
     { path: "/policy-rules", name: "policy-rules", redirect: "/routes" },
     { path: "/gateway-monitors", name: "gateway-monitors", component: () => import("@/views/GatewayMonitorsView.vue") },
+    { path: "/routing/bgp", name: "bgp", component: () => import("@/views/BGPView.vue") },
   ],
   "firewall-section": [
     { path: "/firewall", name: "firewall", component: () => import("@/views/FirewallView.vue") },
     { path: "/firewall/input", name: "firewall-input", component: () => import("@/views/FirewallInputView.vue") },
     { path: "/connections", name: "connections", component: () => import("@/views/ConnectionsView.vue") },
     { path: "/nat", name: "nat", component: () => import("@/views/NATView.vue") },
+    { path: "/firewall/nat", redirect: { name: "nat" } },
+    { path: "/firewall/nat/dnat", name: "dnat", component: () => import("@/views/DNATView.vue") },
   ],
   "vpn-section": [
     { path: "/wireguard", name: "wireguard", component: () => import("@/views/WireGuardView.vue") },
@@ -44,6 +47,11 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   "diagnostics-section": [
     { path: "/diagnostics/traffic", name: "real-time-traffic", component: () => import("@/views/RealTimeTrafficView.vue") },
     { path: "/diagnostics/process-health", name: "process-health", component: () => import("@/views/ProcessHealthView.vue") },
+    { path: "/diagnostics/interface-drops", name: "interface-drops", component: () => import("@/views/InterfaceDropsView.vue") },
+    { path: "/diagnostics/qdiscs", name: "qdiscs", component: () => import("@/views/QdiscsView.vue") },
+    { path: "/diagnostics/tcp-windowing", name: "tcp-windowing", component: () => import("@/views/TCPWindowingView.vue") },
+    { path: "/diagnostics/capture-details", name: "capture-details", component: () => import("@/views/CaptureDetailsView.vue") },
+    { path: "/diagnostics/link-diagnostics", name: "link-diagnostics", redirect: { name: "interface-drops" } },
   ],
   "settings-section": [
     { path: "/settings/general", name: "settings-general", component: () => import("@/views/SettingsView.vue") },
