@@ -134,4 +134,28 @@ export async function request<T>(
   return decoded.data;
 }
 
+export async function inspectApiPath(input: string, signal?: AbortSignal): Promise<{ status: number; body: string }> {
+  const path = input.trim();
+  const pathname = path.split("?")[0]!;
+  if (!/^\/api\/v1\/[A-Za-z0-9_~:@/.-]+$/.test(pathname) ||
+      pathname.slice(8).split("/").some(segment => !segment || segment === "." || segment === "..") ||
+      /[\s\\#\u0000-\u001f\u007f]/.test(path)) {
+    throw new ApiFailure("Enter an appliance path beginning with /api/v1/ without URLs, fragments or traversal segments.");
+  }
+  try {
+    const response = await api.request<string>({
+      method: "GET", url: path.slice(7), signal, responseType: "text", validateStatus: () => true,
+    });
+    const registryAuthError = response.headers instanceof AxiosHeaders
+      ? response.headers.get("X-Registry-Auth-Error")
+      : response.headers["x-registry-auth-error"];
+    if (response.status === 401 && registryAuthError === "true") unauthorized();
+    return { status: response.status, body: String(response.data ?? "") };
+  } catch (error) {
+    if (error instanceof ApiFailure) throw error;
+    if (signal?.aborted) throw new ApiFailure("Request cancelled.");
+    throw new ApiFailure("Unable to read the appliance response. Check connectivity and try again.");
+  }
+}
+
 export default api;

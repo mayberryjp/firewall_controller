@@ -57,6 +57,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "QDISCS", name: "qdiscs", path: "/diagnostics/qdiscs", icon: "mdi-format-list-numbered" },
     { title: "TCP WINDOWING", name: "tcp-windowing", path: "/diagnostics/tcp-windowing", icon: "mdi-swap-horizontal" },
     { title: "Capture details", name: "capture-details", path: "/diagnostics/capture-details", icon: "mdi-clipboard-check-outline" },
+    { title: "API explorer", name: "api-explorer", path: "/diagnostics/api", icon: "mdi-api" },
     { title: "BGP ROUTES", name: "bgp-routes", path: "/diagnostics/bgp-routes", icon: "mdi-router-network" },
     { title: "Download config", name: "download-config", path: "/diagnostics/download-config", icon: "mdi-download" },
   ] },

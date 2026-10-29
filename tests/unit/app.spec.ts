@@ -48,7 +48,7 @@ describe("routed navigation sections", () => {
   });
   it("includes Download config in Diagnostics", () => {
     const diagnostics = navigationSections.find(section => section.name === "diagnostics-section");
-    expect(diagnostics?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "bgp-routes", "download-config"]);
+    expect(diagnostics?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "api-explorer", "bgp-routes", "download-config"]);
     expect(diagnostics?.pages.find(page => page.name === "download-config")).toMatchObject({ title: "Download config", path: "/diagnostics/download-config" });
   });
   it("preserves every page URL and its authenticated section", () => {

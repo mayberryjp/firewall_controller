@@ -238,10 +238,13 @@ describe("appliance configuration and all-service repair", () => {
       ]));
     }
   });
-  it("keeps two vnStat scopes and per-row/top-level errors", () => {
+  it("keeps the host-wide vnStat worker and per-row/top-level errors", () => {
     const data = runtime(), services = data.appliance_services.filter(isApplianceStatus);
-    services[2]!.database_directory = "/state/host";
-    services[3]!.database_directory = "/state/managed"; services[3]!.error = "inventory failed";
+    const vnstat = services.find(service => service.name === "vnstat");
+    expect(services.filter(service => service.name.startsWith("vnstat"))).toEqual([
+      { name: "vnstat", scope: "host", state: "disabled" },
+    ]);
+    vnstat!.database_directory = "/state/host"; vnstat!.error = "inventory failed";
     data.error = "runtime failed";
     expect(runtimeSchema.parse(decodeJson(encodeJson(data)))).toEqual(data);
   });

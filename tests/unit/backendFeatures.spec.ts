@@ -211,13 +211,14 @@ describe("required explicit WAN/LAN role", () => {
     expect(interfaceSchema.safeParse(link).success).toBe(false);
     expect(interfaceSchema.safeParse(preset("interfaces")).success).toBe(false);
   });
-  it.each(["dummy", "vlan", "wireguard"] as const)("requires explicit role on %s and renders labeled choices", kind => {
+  it.each(["dummy", "vlan", "wireguard"] as const)("requires a stored role on %s and offers choices only when editable", kind => {
     const common = { ...config().interfaces[0]!, kind };
     const link = kind === "vlan" ? { ...common, vlan: { parent: "parent0", id: 1 } } :
       kind === "wireguard" ? { ...common, wireguard: { key_ref: "key", listen_port: 51820, peers: [] } } : common;
     for (const role of ["wan", "lan"]) expect(interfaceSchema.parse({ ...link, role }).role).toBe(role);
     const field = resourceFields("interfaces", [], [], false, kind, undefined, []).find(item => item.key === "role");
-    expect(field?.choices).toEqual([{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }, { title: "Unassigned", value: "unassigned" }]);
+    if (kind === "vlan") expect(field).toBeUndefined();
+    else expect(field?.choices).toEqual([{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }, { title: "Unassigned", value: "unassigned" }]);
     if (kind === "dummy") {
       const kindField = resourceFields("interfaces", [], [], false, kind, undefined, []).find(item => item.key === "kind");
       expect(kindField?.choices).toContainEqual({ title: "Loopback", value: "dummy" });

@@ -30,6 +30,31 @@ async function connected() {
   return store;
 }
 describe("independent reads and complete shared draft", () => {
+  it("keeps configuration writable while MQTT is reconnecting", async () => {
+    const processHealth = {
+      status: "unhealthy", healthy: false, collected_at: "2026-10-29T00:00:00Z", stale: false,
+      components: [{ id: "mqtt", component: "mqtt", resource: null, state: "reconnecting", healthy: false, retrying: true, collected_at: "2026-10-29T00:00:00Z" }],
+    };
+    const alert = { id: "mqtt:reconnecting", component: "mqtt", resource: null, severity: "warning", code: "reconnecting", message: "MQTT reconnecting", retrying: true, first_seen_at: "2026-10-29T00:00:00Z", last_seen_at: null };
+    vi.mocked(api.getState).mockResolvedValue({ ...state(), process_health: processHealth, active_alerts: [alert] });
+    vi.mocked(api.getPlatformStatus).mockResolvedValue({ process_health: processHealth, active_alerts: [alert] });
+    const store = await connected();
+    await store.refreshPlatformStatus();
+    store.mqttStatus.data = { device_id: "firewall", enabled: true, state: "reconnecting", error: "Broker unavailable", last_published_at_unix: null };
+    store.mqttStatus.stale = false;
+    expect(store.healthStatus?.process_health.components[0]?.state).toBe("reconnecting");
+    expect(store.healthStatus?.active_alerts).toEqual([alert]);
+    expect(store.readOnlyReason).toBe("");
+    expect(store.operationBlockedReason).toBe("");
+    const candidate = config(); candidate.routes[0]!.metric = 42;
+    store.stage(candidate);
+    expect(store.draft?.routes[0]?.metric).toBe(42);
+    expect(store.canApply).toBe(true);
+    const pending = transaction(); pending.candidate = candidate;
+    vi.mocked(api.submitPackage).mockResolvedValue(pending);
+    await store.apply(120, "Update configuration while MQTT reconnects");
+    expect(api.submitPackage).toHaveBeenCalledWith(expect.objectContaining({ config: candidate }));
+  });
   it("expires cached health even when an older successful state read masks failed health polling", async () => {
     const store = await connected();
     vi.useFakeTimers();

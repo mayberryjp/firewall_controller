@@ -291,7 +291,7 @@ test("refresh discovery stays off the page and failures retain the fixed-size co
   const healthy = (await bubble.boundingBox())!;
   expect(healthy.width).toBe(healthy.height); expect(healthy.width).toBeLessThanOrEqual(40);
   releaseRead();
-  await expect(page.locator('[aria-label="Committed revision 0"]')).toBeVisible();
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R0");
   failed = true;
   await page.clock.fastForward(6000);
   await expect(bubble).toHaveAttribute("aria-label", "Read failed");
@@ -445,7 +445,7 @@ test("navbar tooltips appear once with readable contrast on hover and keyboard f
   await connect(page);
   const status = page.getByRole("group", { name: "Firewall status" });
   const controls = [
-    status.getByRole("link", { name: "Committed revision 0", exact: true }),
+    status.getByRole("link", { name: "Save configuration", exact: true }),
   ];
   const tooltip = page.getByRole("tooltip").filter({ has: page.locator(".v-overlay__content:visible") });
   for (const control of controls) {
@@ -455,8 +455,8 @@ test("navbar tooltips appear once with readable contrast on hover and keyboard f
     expect(await control.getAttribute("title")).toBeNull();
     const description = await control.getAttribute("aria-describedby");
     await expect(tooltip).toHaveAttribute("id", description!);
-    const label = await control.getAttribute("aria-label");
-    await expect(tooltip).toContainText(label!);
+    await expect(tooltip).toContainText("Committed revision 0");
+    await expect(tooltip).toContainText("Review and save configuration: 0 changed entities");
     const contrast = await tooltip.locator(".v-overlay__content").evaluate(element => {
       const style = getComputedStyle(element);
       const luminance = (color: string): number => {
@@ -478,7 +478,7 @@ test("navbar tooltips appear once with readable contrast on hover and keyboard f
   await page.keyboard.press("Shift+Tab");
   await expect(controls[0]!).toBeFocused();
   await expect(tooltip).toHaveCount(1);
-  await expect(tooltip).toHaveText("Committed revision 0");
+  await expect(tooltip).toHaveText("Committed revision 0; Review and save configuration: 0 changed entities");
 });
 
 test("top navigation opens routed sections in the black reference theme", async ({ page, isMobile }, testInfo) => {
@@ -496,7 +496,7 @@ test("top navigation opens routed sections in the black reference theme", async 
     } else if (section.name === "config-section") {
       await expect(navigation.getByRole("link", { name: "Config", exact: true })).toHaveCount(0);
       if (isMobile) await page.keyboard.press("Escape");
-      await page.getByRole("group", { name: "Firewall status" }).getByRole("link", { name: /^Committed revision / }).click();
+      await page.getByRole("group", { name: "Firewall status" }).getByRole("link", { name: "Save configuration", exact: true }).click();
     } else await navigation.getByRole("link", { name: section.title, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`${section.pages[0]!.path}$`));
     const pages = page.getByRole("navigation", { name: `${section.title} pages` });
@@ -1378,13 +1378,13 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   const backend = await mockBackend(page);
   await connect(page);
   await expect(page.getByRole("button", { name: "Connected", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R0");
   await navigate(page, "Static Routes");
   await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
   await page.getByLabel("Metric", { exact: true }).fill("42");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   expect(backend.writes).toHaveLength(0);
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("SAVE R0");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("navbar-status.png"), fullPage: false, animations: "disabled" });
   expect(await page.getByRole("banner").getByRole("link", { name: "Modan モダン", exact: true }).evaluate(element => {
@@ -1417,7 +1417,7 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
   await expect(page.getByRole("region", { name: "Commit detail", exact: true })).toContainText("committed");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Committed revision 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R1");
   expect(backend.writes.filter(write => write.path.endsWith("/confirm"))).toHaveLength(1);
   expect(await page.evaluate(() => Object.values(localStorage))).toEqual(["11111111-1111-4111-8111-111111111111"]);
   expect(await page.evaluate(() => sessionStorage.length)).toBe(0);
@@ -1599,7 +1599,7 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Committed revision 1", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R1");
 });
 
 test("removing host input requires visible protection review and no immediate write", async ({ page }) => {
@@ -1670,7 +1670,7 @@ async function navigate(page: Page, label: string): Promise<void> {
   const pages = page.getByRole("navigation", { name: `${section.title} pages` });
   if (!await pages.isVisible()) {
     if (section.name === "config-section") {
-      await page.getByRole("group", { name: "Firewall status" }).getByRole("link", { name: /^Committed revision / }).click();
+      await page.getByRole("group", { name: "Firewall status" }).getByRole("link", { name: "Save configuration", exact: true }).click();
     } else {
       await openNavigation(page);
       await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: section.title, exact: true }).click();
@@ -1809,8 +1809,12 @@ test("appliance settings share one draft and explain clock and local logger roll
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await navigate(page, "vnStat");
   await expect(page.getByRole("main")).not.toContainText("Operator prerequisites");
-  await page.getByLabel("Desired enabled", { exact: true }).check();
+  await page.getByRole("button", { name: "Add collector", exact: true }).click();
+  await page.getByLabel("Collector", { exact: true }).fill("192.0.2.10:9999");
   await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("row", { name: /192\.0\.2\.10:9999/ })).toBeVisible();
+  await page.getByLabel("Enable vnStat", { exact: true }).check();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(backend.writes).toHaveLength(0);
   await navigate(page, "SAVE");
   await expect(page.getByRole("main")).toContainText("whole appliance clock");
@@ -1823,7 +1827,7 @@ test("appliance settings share one draft and explain clock and local logger roll
   expect(backend.writes[0]?.body).toMatchObject({ config: {
     ntp: { enabled: true, servers: ["clock.example"] },
     syslog: { enabled: true, servers: [{ host: "logs.example", port: 6514, transport: "tls" }] },
-    vnstat: { enabled: true }, routes: config().routes, gateway_monitors: [],
+    vnstat: { enabled: true, collector: "192.0.2.10:9999" }, routes: config().routes, gateway_monitors: [],
   } });
   expect(backend.writes).toHaveLength(1);
 });
@@ -2064,7 +2068,7 @@ test("VLANs have a dedicated route while Interfaces edits physical behavior only
   await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   expect(backend.writes).toHaveLength(1);
   expect(backend.writes[0]?.body).toMatchObject({ config: {
-    interfaces: [{ ...initial.interfaces[0], mtu: 1550 }, { ...existing, mtu: 1450, addresses: ["10.10.0.2/24"] }, { name: "vlan30", kind: "vlan", role: "unassigned", vlan: { parent: "lab0", id: 30 }, addresses: ["10.30.0.1/24"] }],
+    interfaces: [{ ...initial.interfaces[0], mtu: 1550 }, { ...existing, mtu: 1450, addresses: ["10.10.0.2/24"] }, { name: "vlan30", kind: "vlan", role: initial.interfaces[0]!.role, vlan: { parent: "lab0", id: 30 }, addresses: ["10.30.0.1/24"] }],
     routes: initial.routes, firewall: initial.firewall, softflowd: initial.softflowd,
   } });
 });

@@ -5,6 +5,42 @@ import { config, processHealthSnapshot } from "../fixtures";
 import { encodeJson } from "../../src/services/json";
 import { dnsLookupRequestSchema } from "../../src/services/operations";
 
+test("API explorer reads suggested and custom paths without appliance writes", async ({ page }) => {
+  const backend = await mockBackend(page);
+  const requests: string[] = [];
+  await page.route("**/proxy/services/vnstat/status", route => {
+    requests.push(route.request().method());
+    return route.fulfill({ contentType: "application/json", body: '{"state":"error","last_error":"Retained accounting state","counter":18446744073709551615}' });
+  });
+  await page.route("**/proxy/custom/diagnostic?detail=1", route => {
+    requests.push(route.request().method());
+    return route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"Worker unavailable","future_field":true}' });
+  });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/diagnostics/api");
+  const explorer = page.getByRole("region", { name: "API explorer", exact: true });
+  await explorer.getByRole("button", { name: "GET", exact: true }).click();
+  await expect(page.getByRole("region", { name: "API response" })).toContainText("HTTP 200");
+  await expect(page.getByLabel("Response body")).toContainText("18446744073709551615");
+  await expect(page.getByLabel("Response body")).toContainText("Retained accounting state");
+  const input = explorer.getByRole("combobox", { name: "Appliance API path" });
+  await input.fill("/api/v1/platform/status");
+  await page.getByRole("option", { name: "/api/v1/platform/status", exact: true }).click();
+  await expect(input).toHaveValue("/api/v1/platform/status");
+  await input.fill("/api/v1/custom/diagnostic?detail=1");
+  await explorer.getByRole("button", { name: "GET", exact: true }).click();
+  await expect(page.getByRole("region", { name: "API response" })).toContainText("HTTP 503");
+  await expect(page.getByLabel("Response body")).toContainText('"future_field": true');
+  await expect(page.getByLabel("Response body")).toContainText("Worker unavailable");
+  expect(requests).toEqual(["GET", "GET"]);
+  expect(backend.writes).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("DNS lookup, focused diagnostic tables and icon-only confirmed restart", async ({ page }, testInfo) => {
   const initialConfig = config();
   initialConfig.dns = { lab0: { servers: ["192.0.2.53"], domains: [] } };

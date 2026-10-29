@@ -9,7 +9,7 @@ async function navigate(page: Page, title: string) {
   if (!section) throw new Error(`Unknown page: ${title}`);
   const tabs = page.getByRole("navigation", { name: `${section.title} pages` });
   if (!await tabs.isVisible()) {
-    if (section.name === "config-section") await page.getByRole("group", { name: "Firewall status" }).getByRole("link", { name: /^Committed revision / }).click();
+    if (section.name === "config-section") await page.getByRole("group", { name: "Firewall status" }).getByRole("link", { name: "Save configuration", exact: true }).click();
     else {
       const hamburger = page.getByRole("button", { name: "Open navigation menu", exact: true });
       if (await hamburger.isVisible() && await hamburger.getAttribute("aria-expanded") !== "true") await hamburger.click();

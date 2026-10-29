@@ -54,6 +54,7 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/diagnostics/qdiscs", name: "qdiscs", component: () => import("@/views/QdiscsView.vue") },
     { path: "/diagnostics/tcp-windowing", name: "tcp-windowing", component: () => import("@/views/TCPWindowingView.vue") },
     { path: "/diagnostics/capture-details", name: "capture-details", component: () => import("@/views/CaptureDetailsView.vue") },
+    { path: "/diagnostics/api", name: "api-explorer", component: () => import("@/views/ApiExplorerView.vue") },
     { path: "/diagnostics/download-config", name: "download-config", component: () => import("@/views/DownloadConfigView.vue") },
     { path: "/diagnostics/link-diagnostics", name: "link-diagnostics", redirect: { name: "interface-drops" } },
   ],

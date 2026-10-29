@@ -545,7 +545,7 @@ The parent dropdown offers only physical Ethernet interfaces from the current
 configuration and available adopted parents, not VLANs, loopbacks or tunnels.
 The IPv4 cell accepts comma-separated static addresses with prefixes; DHCP clients
 are supported only on physical Ethernet interfaces.
-New VLANs default to an unassigned role, admin down and no addresses.
+New VLANs inherit their parent's role and default to admin down and no addresses.
 Existing VLAN settings not shown in the row are preserved; committed parent/ID
 values remain immutable and renames require dependency acknowledgement. VLANs
 are excluded from the Physical Interfaces inventory, including unmanaged VLANs.

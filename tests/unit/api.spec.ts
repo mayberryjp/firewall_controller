@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
-import api, { ApiFailure, onUnauthorized, request, setApiDevice } from "@/services/api";
+import api, { ApiFailure, inspectApiPath, onUnauthorized, request, setApiDevice } from "@/services/api";
 import { registryApiBaseUrl, setRegistrySessionToken } from "@/services/registry";
 import * as net from "@/services/netcontrol";
 import { useConfigExport } from "@/composables/useConfigExport";
@@ -23,6 +23,22 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("inspects appliance GET responses without schema pruning or loss of precision", async () => {
+    body = '{"counter":18446744073709551615,"future_field":true}';
+    expect(await inspectApiPath(" /api/v1/services/vnstat/status ")).toEqual({ status: 200, body });
+    expect(captured?.url).toBe("/services/vnstat/status");
+    expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
+    expect(captured?.headers.get("Authorization")).toBe("Bearer registry-test-session");
+    status = 503; body = '{"error":"Retained accounting state requires archival"}';
+    expect(await inspectApiPath("/api/v1/statistics/vnstat?limit=10")).toEqual({ status: 503, body });
+    expect(captured?.url).toBe("/statistics/vnstat?limit=10");
+    status = 502; body = "Upstream unavailable";
+    expect(await inspectApiPath("/api/v1/runtime")).toEqual({ status: 502, body });
+  });
+  it.each(["https://example.com/api/v1/state", "//example.com/api/v1/state", "/api/v1/../session", "/api/v1/%2e%2e/session", "/api/v1/state#fragment", "/api/v1/\\state", "/api/v1//state", "/state", ""])("rejects unsafe API explorer path %s before sending credentials", async path => {
+    await expect(inspectApiPath(path)).rejects.toThrow("Enter an appliance path");
+    expect(adapter).not.toHaveBeenCalled();
+  });
   it("preserves DNAT and BGP in actual API reads and reads BGP status/routes separately", async () => {
     const candidate = bgpConfig(); candidate.firewall.nat.destination_rewrite = [dnatRule()];
     body = encodeJson({ ...state(), desired: candidate, observed: candidate });
