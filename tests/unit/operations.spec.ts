@@ -57,7 +57,7 @@ describe("operational contracts", () => {
     const row = processHealthSnapshot().process_health.components[0]!;
     const desired = config(); desired.gateway_monitors = [monitor(), { mode: "dhcp", name: "auto", enabled: true, interface: "lab0", target: "198.51.100.1", probe_interval_ms: 1000, loss_timeout_ms: 2000, window_ms: 30000, latency_threshold_ms: 150, loss_threshold_percent: 20, rtt_variation_threshold_ms: 0, failure_hold_ms: 3000, recovery_hold_ms: 5000 }];
     for (const [component, resource, target] of [
-      ["appliance_services", "vnstat-managed", "vnstat-managed"], ["softflowd", "capture", "flow:capture"],
+      ["appliance_services", "vnstat", "vnstat"], ["appliance_services", "vnstat-host", null], ["appliance_services", "vnstat-managed", null], ["softflowd", "capture", "flow:capture"],
       ["dhcp_relay", "lab0", "dhcp-relay"], ["dhcp_client", "wan0", "dhcp-client:wan0"],
       ["gateway_monitors", "uplink", "gateway:uplink"], ["gateway_monitors", "auto", "dhcp-gateway-monitors"],
       ["managed_processes", "dynamic-dns", "dynamic-dns"], ["daemon_tasks", "dynamic_dns", "dynamic-dns"],

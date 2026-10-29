@@ -12,7 +12,7 @@ import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 const props = defineProps<{ service: ApplianceService }>();
 const store = useControllerStore();
 const service = toRef(props, "service");
-const titles = { ntp: "NTP", syslog: "Syslog", vnstat: "Dual-scope vnStat" };
+const titles = { ntp: "NTP", syslog: "Syslog", vnstat: "vnStat" };
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
 const editing = computed(() => store.draft ?? stored.value);
 const form = ref<Record<string, unknown>>({}), initial = ref(""), error = ref(""), errors = ref<Record<string, string[]>>({});
@@ -57,7 +57,7 @@ function stage(): void {
     error.value = failure instanceof Error ? failure.message : "Unable to stage service";
   }
 }
-const statusNames = computed(() => service.value === "vnstat" ? ["vnstat-host", "vnstat-managed"] : [service.value]);
+const statusNames = computed(() => [service.value]);
 const statusRows = computed(() => statusNames.value.map(name => ({
   name, status: store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === name),
 })));

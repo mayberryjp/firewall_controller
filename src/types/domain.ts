@@ -176,7 +176,9 @@ export const syslogSchema = z.object({
   ...annotation,
   enabled: z.boolean().default(false), servers: list(syslogServerSchema).default([]),
 }).strict().default({ enabled: false, servers: [] });
-export const vnstatSchema = z.object({ ...annotation, enabled: z.boolean().default(false) }).strict().default({ enabled: false });
+export const vnstatSchema = z.object({
+  ...annotation, enabled: z.boolean().default(false), collector: z.string().nullable().optional(),
+}).strict().default({ enabled: false });
 export const mdnsSchema = z.object({
   ...annotation,
   enabled: z.boolean().default(false),
@@ -375,6 +377,9 @@ export const gatewayStatisticsDetailSchema = z.object({ sample: sampleSchema, mo
 export const gatewayStatusPageSchema = z.object({ monitors: list(gatewayStatisticsSchema), error: optionalText });
 export const applianceStatusSchema = z.object({
   ...supervisionFields,
+  collector: z.string().nullable().optional(),
+  last_report_date: z.string().nullable().optional(), last_report_error: z.string().nullable().optional(),
+  sent_datagrams: z.string().regex(/^(0|[1-9]\d*)$/).optional(), failed_datagrams: z.string().regex(/^(0|[1-9]\d*)$/).optional(),
   destination_errors: z.array(z.string()).optional(),
   captured_records: integer.nonnegative().optional(), forwarded_records: integer.nonnegative().optional(),
   failed_deliveries: integer.nonnegative().optional(),

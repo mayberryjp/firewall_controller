@@ -702,6 +702,9 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       issue("firewall.input", "Input policy metadata exceeds 65536 bytes", page);
     }
   }
+  if (config.vnstat.collector !== null && config.vnstat.collector !== undefined) {
+    check("vnstat.collector", "/services/vnstat", () => endpoint(config.vnstat.collector!, true));
+  }
   if (config.softflowd.length > 16) issue("softflowd", "At most 16 instances including disabled entries", "/services/netflow");
   const serviceNames = new Set<string>();
   config.softflowd.forEach((service, index) => {

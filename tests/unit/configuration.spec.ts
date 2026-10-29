@@ -5,6 +5,24 @@ import { differenceContext, differences, endpoint, equalConfig, importConfig, no
 import { config, statistics, transaction } from "../fixtures";
 
 describe("lossless boundary and import", () => {
+  it.each([null, "192.0.2.10:9999", "[2001:db8::10]:9999"])("preserves vnStat collector %s across import, transactions and export with its owning permission", collector => {
+    const before = config(), after = config();
+    after.vnstat = { enabled: true, collector, metadata: { display_name: "Accounting", description: "Saved notes" } };
+    expect(importConfig(encodeJson(after)).vnstat).toEqual(after.vnstat);
+    const pending = transaction(); pending.candidate = after;
+    expect(transactionSchema.parse(pending).candidate.vnstat).toEqual(after.vnstat);
+    expect(validateConfig(after).filter(issue => issue.path.startsWith("vnstat."))).toEqual([]);
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "vnstat.write"]);
+  });
+  it.each(["", "collector.example:9999", "192.0.2.10:0", "192.0.2.10:65536", "9999:192.0.2.10", "0.0.0.0:9999", "255.255.255.255:9999", "224.0.0.1:9999", "[::]:9999", "[ff02::1]:9999"])("rejects invalid vnStat collector %s even when disabled", collector => {
+    const value = config(); value.vnstat = { enabled: false, collector };
+    expect(validateConfig(value).some(issue => issue.path === "vnstat.collector")).toBe(true);
+  });
+  it("rejects retained IPv6 vnStat collectors when IPv6 is disabled globally", () => {
+    const value = config(); value.ipv6_enabled = false;
+    value.vnstat = { enabled: false, collector: "[2001:db8::10]:9999" };
+    expect(validateConfig(value).some(issue => issue.path === "vnstat.collector" && issue.message.includes("IPv6 is disabled"))).toBe(true);
+  });
   it("validates blackhole route targets and requires only routes.write", () => {
     const before = config(), after = config();
     after.blackhole = blackholeSchema.parse({ name: "blackhole0", action: "unreachable" });

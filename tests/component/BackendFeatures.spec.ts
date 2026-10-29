@@ -1989,14 +1989,73 @@ describe("October 17 frontend workflows", () => {
     expect(store.draft?.syslog).toEqual({ enabled: true, servers: [{ host: "logs.example", port: 514, transport: "udp" }] });
     expect(wrapper.find("tbody").text()).toContain("UDP"); expect(wrapper.text()).not.toContain("Operator prerequisites");
     wrapper.unmount();
-  });  it("renders both vnStat scopes as diagnostic paths, not traffic history", async () => {
-    const store = useControllerStore();
-    store.runtime.data!.appliance_services[2] = { name: "vnstat-host", scope: "host", state: "simulated", pid: 11, database_directory: "/host-db" };
-    store.runtime.data!.appliance_services[3] = { name: "vnstat-managed", scope: "managed", state: "unhealthy", pid: 12, database_directory: "/managed-db", error: "inventory failed" };
+  });  it("adds, edits, toggles and removes a single vnStat collector inline while preserving shared changes", async () => {
+    const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage"), confirm = vi.spyOn(window, "confirm");
+    store.draft = cloneConfig(store.state.data!.desired);
+    store.draft.ntp.servers = ["clock.example"];
+    store.draft.vnstat.metadata = { display_name: "Accounting", description: "Keep existing notes" };
+    store.runtime.error = "Unavailable"; store.runtime.stale = true;
+    store.runtime.data!.appliance_services = [{ name: "vnstat", scope: "host", state: "running", last_report_error: "Collector route unavailable" }];
     const wrapper = await render(VnStatView, "/services/vnstat");
-    expect(wrapper.find("tbody").text()).toContain("vnstat-host"); expect(wrapper.find("tbody").text()).toContain("vnstat-managed");
-    expect(wrapper.text()).toContain("/host-db"); expect(wrapper.text()).toContain("/managed-db");
-    expect(wrapper.text()).toContain("inventory failed"); expect(wrapper.text()).not.toContain("Operator prerequisites");
+    expect(wrapper.get('[role="status"]').text()).toBe("Collector route unavailable");
+    const press = async (label: string) => { await wrapper.findAll("button").find(button => button.text() === label)!.trigger("click"); await flushPromises(); };
+    const field = () => wrapper.findAllComponents({ name: "VTextField" }).find(item => item.attributes("aria-label") === "Collector")!;
+    await press("Add collector");
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+    expect(wrapper.find('[aria-label="Collector editor"]').exists()).toBe(true);
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Labels");
+    field().vm.$emit("update:modelValue", "192.0.2.10:9999"); await flushPromises();
+    expect(store.editorDirty).toBe(true);
+    await press("Save");
+    expect(store.draft!.vnstat).toMatchObject({ enabled: false, collector: "192.0.2.10:9999", metadata: { description: "Keep existing notes" } });
+    expect(store.editorDirty).toBe(false);
+    expect(wrapper.findAll("button").find(button => button.text() === "Add collector")!.attributes("disabled")).toBeDefined();
+    await wrapper.get('input[type="checkbox"]').setValue(true);
+    expect(store.draft!.vnstat.enabled).toBe(true);
+    await wrapper.get('button[aria-label="Edit collector"]').trigger("click");
+    field().vm.$emit("update:modelValue", "[2001:db8::10]:9999"); await flushPromises(); await press("Save");
+    expect(store.draft!.vnstat.collector).toBe("[2001:db8::10]:9999");
+    await wrapper.get('input[type="checkbox"]').setValue(false);
+    expect(store.draft!.vnstat).toMatchObject({ enabled: false, collector: "[2001:db8::10]:9999" });
+    await wrapper.get('button[aria-label="Delete collector"]').trigger("click");
+    expect(store.draft!.vnstat).toMatchObject({ enabled: false, collector: null, metadata: { description: "Keep existing notes" } });
+    expect(store.draft!.ntp.servers).toEqual(["clock.example"]);
+    expect(submit).not.toHaveBeenCalled(); expect(confirm).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("keeps vnStat validation inline, preserves input on failure and cancels without losing shared changes", async () => {
+    const store = useControllerStore();
+    const wrapper = await render(VnStatView, "/services/vnstat");
+    const press = async (label: string) => { await wrapper.findAll("button").find(button => button.text() === label)!.trigger("click"); await flushPromises(); };
+    const field = () => wrapper.findAllComponents({ name: "VTextField" }).find(item => item.attributes("aria-label") === "Collector")!;
+    await press("Add collector");
+    for (const destination of ["collector.example:9999", "192.0.2.10:0", "224.0.0.1:9999"]) {
+      field().vm.$emit("update:modelValue", destination); await flushPromises(); await press("Save");
+      expect(wrapper.get('[role="alert"]').text()).not.toBe("");
+      expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(true);
+      expect(field().attributes("modelvalue")).toBe(destination);
+    }
+    await press("Cancel");
+    expect(store.editorDirty).toBe(false); expect(store.draft).toBeNull();
+    expect(wrapper.find('[aria-label="Collector editor"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it("preserves accounting-only vnStat and permits adding or clearing its collector without changing enabled", async () => {
+    const store = useControllerStore(); store.state.data!.desired.vnstat = { enabled: true, collector: null };
+    const wrapper = await render(VnStatView, "/services/vnstat");
+    const field = () => wrapper.findAllComponents({ name: "VTextField" }).find(item => item.attributes("aria-label") === "Collector")!;
+    const save = async () => { await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click"); await flushPromises(); };
+    expect(wrapper.text()).toContain("Accounting only");
+    await wrapper.get('button[aria-label="Edit collector"]').trigger("click");
+    field().vm.$emit("update:modelValue", "192.0.2.10:9999"); await flushPromises(); await save();
+    expect(store.draft!.vnstat).toEqual({ enabled: true, collector: "192.0.2.10:9999" });
+    await wrapper.get('button[aria-label="Edit collector"]').trigger("click");
+    field().vm.$emit("update:modelValue", ""); await flushPromises(); await save();
+    expect(store.draft!.vnstat).toEqual({ enabled: true, collector: null });
+    expect(store.diff).toEqual([]);
+    expect(store.state.data!.desired.vnstat).toEqual({ enabled: true, collector: null });
+    wrapper.unmount();
   });
   it("uses one monitor table with expandable active statistics and a single empty state", async () => {
     const store = useControllerStore();

@@ -1094,14 +1094,22 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   TLS needs trusted certificates; UDP/TCP are unencrypted and UDP unacknowledged.
   DNS destinations use IPv4, canonical IPv6 literals choose IPv6. Running does
   not verify complete capture or delivery; no durable queue/ack guarantee exists.
-- One vnStat toggle covers all host and managed interfaces, including loopback,
-  unmanaged and dynamically created links. Separate instance/PID/database scopes
-  are shown. Inventory/poll/update is 5 seconds, save/rescan 1 minute; manually
-  inserted links may take up to a minute. Never sum overlapping physical/VLAN/
-  veth/loopback links/scopes as device-wide traffic. No HTTP historical counters
-  are exposed: paths/status are diagnostics, not traffic numbers. Graceful
-  repair/restart preserves history; changed boot/namespace identity selects
-  another database.
+- vnStat uses one host-wide native worker, covering loopback, unmanaged and
+  dynamically created interfaces. The owning service page stages a single
+  collector row with inline Add/Edit and a saved-row enabled toggle. New rows
+  start disabled; the toggle controls accounting and reporting together.
+  The nullable collector is one literal `IP:port` or `[IPv6]:port` destination;
+  null keeps accounting without reporting. Destinations are validated even
+  when disabled, and IPv6 destinations require global IPv6 enabled. Existing
+  metadata is preserved without adding label controls. Configuration uses the
+  existing SAVE review, transaction confirmation and rollback flow.
+- Daily UDP reports use the appliance hostname and vnStat-compatible oneline
+  format in the host's local 23:59 minute. UDP has no delivery acknowledgement;
+  reporting errors are local, non-blocking warnings. No cron, external vnStat
+  binary or automatic firewall permit is installed. Restart targets `vnstat`,
+  not the retired host/managed names. Never sum overlapping physical/VLAN/veth/
+  loopback counters as device-wide traffic. Coordinate frontend/backend rollout
+  for handoff `2026-10-28-10`; real collector interoperability remains unverified.
 - Status uses the independently polled `/runtime` dataset. Missing rows are
   Unknown; disabled/simulated/error states stay distinct, including top-level
   and per-row failures in HTTP 200. Simulation changes no clock and creates no
@@ -1116,7 +1124,7 @@ for every enabled service (gateway monitoring, appliance services, softflowd,
 DHCP relay). Confirmation/rollback/restore require the relevant change permissions.
 Hints do not imply credential capabilities; 403 stays visible without replay.
 
-Install trusted operator-provided chronyd/syslog-ng/vnstatd/vnstat and configure
+Install trusted operator-provided chronyd/syslog-ng and configure
 binary paths, explicit `-allow-host-services`, exclusive host ownership,
 namespace/clock/kernel-log privileges, backend log source, trust bundle and host
 DNS/routes. Stop competing clock/logging daemons first. The frontend exposes no

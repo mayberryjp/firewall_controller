@@ -88,7 +88,7 @@ export function runtime(): RuntimeState { return {
   parent_interfaces: [], softflowd: [{ name: "capture", state: "simulated" }], dhcp_relay: [{ interface: "lab0", state: "disabled" }],
   gateway_monitors: [], appliance_services: [
     { name: "ntp", scope: "host", state: "disabled" }, { name: "syslog", scope: "host", state: "disabled" },
-    { name: "vnstat-host", scope: "host", state: "disabled" }, { name: "vnstat-managed", scope: "managed", state: "disabled" },
+    { name: "vnstat", scope: "host", state: "disabled" },
   ],
 }; }
 export function transaction(status = "pending_confirmation"): Transaction {

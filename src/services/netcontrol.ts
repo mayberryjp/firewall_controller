@@ -122,7 +122,9 @@ export const getGatewayStatus = (signal?: AbortSignal) =>
 export const getApplianceStatus = (service: ApplianceService, signal?: AbortSignal) =>
   request("GET", `/services/${service}/status`, applianceStatusPageSchema, undefined, signal);
 export const getApplianceConfig = (service: ApplianceService, signal?: AbortSignal) =>
-  request("GET", `/services/${service}`, service === "ntp" ? ntpSchema : service === "syslog" ? syslogSchema : vnstatSchema, undefined, signal);
+  service === "ntp" ? request("GET", "/services/ntp", ntpSchema, undefined, signal) :
+    service === "syslog" ? request("GET", "/services/syslog", syslogSchema, undefined, signal) :
+      request("GET", "/services/vnstat", vnstatSchema, undefined, signal);
 export const reconcileServices = (service: RepairService = "softflowd") =>
   request("POST", `/services/${service}/reconcile`, runtimeSchema);
 export const restoreRevision = (revision: string, body: Omit<PackageRequest, "config">) =>
