@@ -40,12 +40,16 @@ describe("routed navigation sections", () => {
   it("keeps Config routable without a duplicate primary navigation entry", () => {
     expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]);
     expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels"]);
-    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors", "bgp"]);
+    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors", "bgp", "bgp-peers"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
     expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall", "firewall-input", "connections", "nat", "dnat"]);
     expect(navigationSections.find(section => section.name === "vpn-section")?.pages.map(page => page.name)).toEqual(["wireguard"]);
-    expect(navigationSections.find(section => section.name === "diagnostics-section")?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details"]);
+  });
+  it("includes Download config in Diagnostics", () => {
+    const diagnostics = navigationSections.find(section => section.name === "diagnostics-section");
+    expect(diagnostics?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "bgp-routes", "download-config"]);
+    expect(diagnostics?.pages.find(page => page.name === "download-config")).toMatchObject({ title: "Download config", path: "/diagnostics/download-config" });
   });
   it("preserves every page URL and its authenticated section", () => {
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
@@ -83,14 +87,19 @@ describe("routed navigation sections", () => {
     await router.push("/diagnostics/link-diagnostics");
     expect(router.currentRoute.value.path).toBe("/diagnostics/interface-drops");
   });
-  it("loads all page and detail views with distinct top-level pages", async () => {
+  it("loads distinct top-level views except for explicitly separate BGP editor modes", async () => {
     const children = privateRoutes.flatMap(section => section.children ?? []).filter(child => child.component);
     const views = await Promise.all(children.map(async child => {
       const load = child.component as () => Promise<{ default: object }>;
       return (await load()).default;
     }));
     expect(views.every(view => view && typeof view === "object")).toBe(true);
-    const pages = views.filter((_, index) => !children[index]!.path.includes(":"));
+    const processIndex = children.findIndex(child => child.name === "bgp");
+    const peersIndex = children.findIndex(child => child.name === "bgp-peers");
+    expect(views[peersIndex]).toBe(views[processIndex]);
+    expect(children[peersIndex]!.props).toEqual({ mode: "peers" });
+    expect(children[processIndex]!.props).toBeUndefined();
+    const pages = views.filter((_, index) => !children[index]!.path.includes(":") && index !== peersIndex);
     expect(new Set(pages).size).toBe(pages.length);
   });
   it("redirects config entry and legacy URLs to canonical config pages", async () => {

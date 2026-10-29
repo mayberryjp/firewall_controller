@@ -42,8 +42,8 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
     case "interfaces": return ([
       { ...text("name", "Interface name", "Rename is a delete/create; review all references. 1..15 characters."), disabled: kind === "ethernet" },
       { ...select("kind", "Kind", vlan ? ["vlan"] : wireguard || kind === "wireguard" ? ["wireguard"] : kind === "ethernet" ? ["ethernet"] : ["dummy", "vlan"]), disabled: vlan || immutable || kind === "ethernet" || kind === "wireguard" },
-      { key: "role", label: "Required interface role", kind: "select", choices: [{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }, { title: "Unassigned", value: "unassigned" }],
-        hint: "Explicit metadata only; no NAT, firewall or routing is configured. VLAN roles are not inherited." },
+      ...(kind === "vlan" ? [] : [{ key: "role", label: "Required interface role", kind: "select" as const, choices: [{ title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }, { title: "Unassigned", value: "unassigned" }],
+        hint: "Explicit metadata only; no NAT, firewall or routing is configured." }]),
       number("mtu", "MTU", "1280..65535"), { key: "up", label: "Administratively up (not carrier readiness)", kind: "switch" },
       { key: "addresses", label: "Interface address prefixes", kind: "lines", hint: "Host bits are retained, e.g. 192.0.2.10/24. Global unicast includes private addresses." },
       ...(kind === "ethernet" ? [

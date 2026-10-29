@@ -6,13 +6,13 @@ import {
   configSchema, knownStatuses, terminal,
   type Config, type StateView, type RuntimeState, type Transaction, type PlatformStatus,
   type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
-  type BGPStatus, type BGPRoutes,
+  type BGPStatus, type BGPRoutes, type BGPAdvertisedRoutes,
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, stableJson, syncWireGuardRoutes, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
 import type { HostHealth } from "@/services/hostHealth";
 import type { LinkDiagnostics } from "@/services/linkDiagnostics";
-import { mqttStatusSchema, dynamicDnsStatusSchema, mdnsStatusPageSchema } from "@/types/domain";
+import { mqttStatusSchema, dynamicDnsStatusSchema, mdnsStatusPageSchema, udpRelayStatusPageSchema } from "@/types/domain";
 import type { z } from "zod";
 import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
 
@@ -36,9 +36,12 @@ export const useControllerStore = defineStore("controller", () => {
   const platform = dataset<PlatformStatus>();
   const linkDiagnostics = dataset<LinkDiagnostics>();
   const bgpStatus = dataset<BGPStatus>(), bgpRoutes = dataset<BGPRoutes>();
+  const bgpAdvertisedRoutes = dataset<BGPAdvertisedRoutes>();
+  const bgpRouteDirection = ref<"received" | "advertised">("received"), bgpAdvertisedRoutesExpired = ref(true);
+  const udpRelayStatus = dataset<z.infer<typeof udpRelayStatusPageSchema>>(), udpRelayExpired = ref(true);
   const bgpUnsupported = ref(false);
   const bgpExpired = ref(true), bgpRoutesExpired = ref(true), bgpMonitoring = ref(false);
-  for (const [query, expired] of [[bgpStatus, bgpExpired], [bgpRoutes, bgpRoutesExpired]] as const) {
+  for (const [query, expired] of [[bgpStatus, bgpExpired], [bgpRoutes, bgpRoutesExpired], [bgpAdvertisedRoutes, bgpAdvertisedRoutesExpired], [udpRelayStatus, udpRelayExpired]] as const) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     watch(() => query.lastSuccess, time => {
       clearTimeout(timer);
@@ -50,8 +53,11 @@ export const useControllerStore = defineStore("controller", () => {
   }
   const bgpStatusCurrent = computed(() => connected.value && !bgpExpired.value && !bgpStatus.stale && !bgpStatus.error);
   const bgpRoutesCurrent = computed(() => connected.value && !bgpRoutesExpired.value && !bgpRoutes.stale && !bgpRoutes.error);
+  const bgpAdvertisedRoutesCurrent = computed(() => connected.value && !bgpAdvertisedRoutesExpired.value &&
+    !bgpAdvertisedRoutes.stale && !bgpAdvertisedRoutes.error && !bgpAdvertisedRoutes.data?.error && bgpAdvertisedRoutes.data?.state === "running");
+  const udpRelayStatusCurrent = computed(() => connected.value && !udpRelayExpired.value && !udpRelayStatus.stale && !udpRelayStatus.error && !udpRelayStatus.data?.error);
   watch(() => stableJson((state.data?.active_transaction?.candidate ?? state.data?.desired)?.bgp), () => {
-    bgpStatus.stale = true; bgpRoutes.stale = true;
+    bgpStatus.stale = true; bgpRoutes.stale = true; bgpAdvertisedRoutes.stale = true;
   }, { flush: "sync" });
   const sessionVersion = ref(0);
   const restartPending = ref(""), restartReconnecting = ref(false), restartNotice = ref(""), restartError = ref("");
@@ -112,7 +118,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, platform, linkDiagnostics, bgpStatus, bgpRoutes, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, platform, linkDiagnostics, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, udpRelayStatus, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -209,6 +215,7 @@ export const useControllerStore = defineStore("controller", () => {
   const refreshState = () => load(state, api.getState);
   const refreshRuntime = () => load(runtime, api.getRuntime);
   const refreshLinkDiagnostics = () => load(linkDiagnostics, api.getLinkDiagnostics);
+  const refreshUDPRelayStatus = () => load(udpRelayStatus, api.getUDPRelayStatus);
   async function refreshBGPStatus(): Promise<void> {
     if (bgpUnsupported.value) return;
     const session = epoch;
@@ -221,6 +228,7 @@ export const useControllerStore = defineStore("controller", () => {
     });
   }
   const refreshBGPRoutes = () => bgpUnsupported.value ? Promise.resolve() : load(bgpRoutes, api.getBGPRoutes);
+  const refreshBGPAdvertisedRoutes = () => load(bgpAdvertisedRoutes, api.getBGPAdvertisedRoutes);
   function reconnectAfterRestart(session: number): void {
     restartReconnecting.value = true;
     let attempts = 0;
@@ -263,7 +271,11 @@ export const useControllerStore = defineStore("controller", () => {
     } finally {
       if (session === epoch) {
         restartPending.value = "";
-        if (target === "bgp" || target === "netcontrold") { bgpStatus.stale = true; bgpRoutes.stale = true; }
+        if (target === "bgp" || target === "netcontrold") { bgpStatus.stale = true; bgpRoutes.stale = true; bgpAdvertisedRoutes.stale = true; }
+        if (target.startsWith("udp-broadcast-relay:") || target === "netcontrold") {
+          udpRelayStatus.stale = true;
+          if (connected.value) void refreshUDPRelayStatus();
+        }
       }
     }
   }
@@ -587,8 +599,10 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale) revisionCache.set(id, comparisonRevision.data);
   }
   return {
+    udpRelayStatus, udpRelayStatusCurrent, refreshUDPRelayStatus,
     linkDiagnostics, refreshLinkDiagnostics, sessionVersion, operationBlockedReason,
     bgpStatus, bgpRoutes, bgpUnsupported, bgpStatusCurrent, bgpRoutesCurrent, bgpMonitoring, refreshBGPStatus, refreshBGPRoutes,
+    bgpAdvertisedRoutes, bgpAdvertisedRoutesCurrent, bgpRouteDirection, refreshBGPAdvertisedRoutes,
     restartProcess, restartPending, restartReconnecting, restartNotice, restartError,
     platform, platformUnsupported, healthStatus, refreshPlatformStatus,
     connected, connecting, authError, state, runtime, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, revisions, revisionDetail,

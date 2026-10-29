@@ -135,19 +135,21 @@ describe("navbar firewall status", () => {
   it("keeps accessible labels without native titles duplicating the Vuetify tooltips", () => {
     stageDraft();
     const wrapper = status();
-    for (const label of ["Committed revision 0", "Save configuration"]) {
-      expect(wrapper.get(`[aria-label="${label}"]`).attributes("title")).toBeUndefined();
-    }
+    expect(wrapper.get('[aria-label="Save configuration"]').attributes("title")).toBeUndefined();
   });
-  it("shows green connection status and revision navigation without a refresh icon", () => {
+  it("shows SAVE before the revision only when there are unsaved changes", async () => {
     const store = useControllerStore(), refresh = vi.spyOn(store, "refresh").mockResolvedValue();
+    store.state.data = { ...state(), revision: "74" };
     const wrapper = status();
     expect(wrapper.find('[aria-label="Connected"]').exists()).toBe(false);
-    expect(wrapper.get('[aria-label="Committed revision 0"]').attributes("data-to")).toBe("/config");
-    expect(wrapper.get('[aria-label="Committed revision 0"]').text()).toBe("Config r0");
+    expect(wrapper.findAll("button")).toHaveLength(1);
+    expect(wrapper.get('[aria-label="Save configuration"]').attributes("data-to")).toBe("/config/changes");
+    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("R74");
+    stageDraft();
+    await flushPromises();
+    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("SAVE R74");
     expect(wrapper.find('[aria-label="Refresh firewall state"]').exists()).toBe(false);
     expect(refresh).not.toHaveBeenCalled();
-    expect(wrapper.find('[aria-label="Save configuration"]').exists()).toBe(false);
   });
   it("reports unavailable observation separately from a healthy connection", () => {
     useControllerStore().state.error = "Read failed";
@@ -189,7 +191,9 @@ describe("navbar firewall status", () => {
   it("routes saving to the single review page without mounting another configuration dialog", async () => {
     stageDraft();
     const apply = vi.spyOn(useControllerStore(), "apply"), wrapper = status();
-    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("Save");
+    expect(wrapper.findAll("button")).toHaveLength(1);
+    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("SAVE R0");
+    expect(wrapper.get('[aria-label="Save configuration"]').attributes("color")).toBe("warning");
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("prepend-icon")).toBe("mdi-content-save-outline");
     await wrapper.get('[aria-label="Save configuration"]').trigger("click");
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("data-to")).toBe("/config/changes");

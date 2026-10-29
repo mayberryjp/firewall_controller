@@ -15,28 +15,16 @@ const changesLabel = computed(() => store.editorDirty ? "Unstaged form input; st
   >
     <v-btn
       v-if="store.connected"
-      v-tooltip:bottom="revisionLabel"
-      :to="store.state.data ? '/config' : undefined"
-      :aria-label="revisionLabel"
-      :disabled="!store.state.data || store.editorDirty"
-      prepend-icon="mdi-file-cog-outline"
-      size="small"
-      variant="text"
-    >
-      Config r{{ store.state.data?.revision ?? "?" }}
-    </v-btn>
-    <v-btn
-      v-if="store.connected && hasChanges"
-      v-tooltip:bottom="changesLabel"
+      v-tooltip:bottom="`${revisionLabel}; ${changesLabel}`"
       aria-label="Save configuration"
-      to="/config/changes"
+      :to="store.state.data ? '/config/changes' : undefined"
       prepend-icon="mdi-content-save-outline"
-      color="warning"
+      :color="hasChanges ? 'warning' : undefined"
       size="small"
       variant="text"
-      :disabled="store.busy || store.editorDirty"
+      :disabled="!store.state.data || store.busy || store.editorDirty"
     >
-      Save
+      {{ hasChanges ? "SAVE " : "" }}R{{ store.state.data?.revision ?? "?" }}
     </v-btn>
   </div>
 </template>

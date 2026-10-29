@@ -14,7 +14,7 @@ for (const enabled of [true, false]) {
     await page.getByLabel("Registry admin password").fill("registry-test-password");
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await page.getByRole("button", { name: "Connect", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
     await page.goto("/settings/general");
     const view = page.getByRole("region", { name: "General settings", exact: true });
     const control = view.getByLabel("Ignore DHCP-provided DNS servers", { exact: true });

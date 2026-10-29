@@ -142,7 +142,6 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     }
     if (section === "interfaces" && vlan && editingIndex.value < 0) {
       form.value.kind = "vlan";
-      form.value.role = "unassigned";
       form.value.vlan = { parent: "", id: 1 };
     }
     if (section === "interfaces") {
@@ -229,6 +228,9 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       }
       const candidate = cloneConfig(editingConfig.value);
       if (section === "interfaces") {
+        if (value.kind === "vlan") {
+          value.role = candidate.interfaces.find(link => link.name === record(value.vlan).parent)?.role ?? "unassigned";
+        }
         if (value.kind === "ethernet") {
           const metadata = objectMetadataSchema.parse({ ...record(value.metadata), display_name: value.display_name ?? "" });
           if (metadata) value.metadata = metadata; else delete value.metadata;

@@ -1485,9 +1485,9 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.findAll("button").some(button => button.text() === "Add interface")).toBe(false);
     expect(wrapper.find('button[aria-label="Edit / stage"]').exists()).toBe(true);
   });
-  it("creates VLANs on their dedicated page without altering other interfaces", async () => {
+  it.each(["lan", "wan", "unassigned"] as const)("creates VLANs inheriting parent role %s without altering other interfaces", async role => {
     const store = useControllerStore(), before = config(), submit = vi.spyOn(api, "submitPackage");
-    before.interfaces[0] = { ...before.interfaces[0]!, name: "eth0", kind: "ethernet" };
+    before.interfaces[0] = { ...before.interfaces[0]!, name: "eth0", kind: "ethernet", role };
     store.state.data!.desired.interfaces = before.interfaces;
     const wrapper = await render(VLANsView, "/vlans");
     expect(wrapper.text()).not.toContain("lab0");
@@ -1505,7 +1505,7 @@ describe("October 17 frontend workflows", () => {
     await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(store.draft?.interfaces).toHaveLength(2);
     expect(store.draft?.interfaces[0]).toEqual(before.interfaces[0]);
-    expect(store.draft?.interfaces[1]).toMatchObject({ name: "vlan30", kind: "vlan", role: "unassigned", mtu: 1500, up: true, addresses: [], vlan: { parent: "eth0", id: 30 } });
+    expect(store.draft?.interfaces[1]).toMatchObject({ name: "vlan30", kind: "vlan", role, mtu: 1500, up: true, addresses: [], vlan: { parent: "eth0", id: 30 } });
     expect(store.draft?.routes).toEqual(before.routes);
     expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Name", "VLAN ID", "Admin state", "MTU", "Parent", "IPv4", "Actions"]);
     expect(wrapper.findAll("tbody td").map(cellValue)).toContain("30");
@@ -1589,7 +1589,8 @@ describe("October 17 frontend workflows", () => {
   it("edits VLAN behavior at its original shared-config index and retains immutable identity", async () => {
     const store = useControllerStore(), base = config().interfaces[0]!;
     const metadata = { display_name: "Guest network", description: "Saved VLAN notes" };
-    store.state.data!.desired.interfaces.push({ ...base, name: "vlan30", kind: "vlan", addresses: ["2001:db8:30::1/64"], vlan: { parent: "lab0", id: 30 }, metadata });
+    store.state.data!.desired.interfaces.push({ ...base, name: "vlan30", kind: "vlan", role: "unassigned", addresses: ["2001:db8:30::1/64"], vlan: { parent: "lab0", id: 30 }, metadata });
+    store.draft = { ...store.state.data!.desired, interfaces: [{ ...base, role: "wan" }, store.state.data!.desired.interfaces[1]!] };
     const wrapper = await render(VLANsView, "/vlans");
     await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
     const fields = wrapper.findAllComponents(FieldInput);
@@ -1602,8 +1603,8 @@ describe("October 17 frontend workflows", () => {
     fields.find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.30.0.1/24, 10.30.0.2/24");
     await flushPromises();
     await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
-    expect(store.draft?.interfaces[0]).toEqual(base);
-    expect(store.draft?.interfaces[1]).toEqual({ ...store.state.data!.desired.interfaces[1], mtu: 1450, addresses: ["10.30.0.1/24", "10.30.0.2/24", "2001:db8:30::1/64"] });
+    expect(store.draft?.interfaces[0]).toEqual({ ...base, role: "wan" });
+    expect(store.draft?.interfaces[1]).toEqual({ ...store.state.data!.desired.interfaces[1], role: "wan", mtu: 1450, addresses: ["10.30.0.1/24", "10.30.0.2/24", "2001:db8:30::1/64"] });
   });
   it("keeps VLAN IPv4 validation inline without changing saved settings", async () => {
     const store = useControllerStore(), base = config().interfaces[0]!;

@@ -1,12 +1,17 @@
-import type { Config, MDNSConfig } from "@/types/domain";
+import type { Config, ManagedInterface, MDNSConfig } from "@/types/domain";
 import type { ValidationIssue } from "@/services/configuration";
 
 const asciiLower = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 
+export function eligibleMDNSInterface(config: Config, link: ManagedInterface): boolean {
+  if (!link.up || (link.kind !== "ethernet" && link.kind !== "vlan")) return false;
+  return link.role === "lan" || (link.kind === "vlan" && config.interfaces.some(parent =>
+    parent.name === link.vlan?.parent && parent.kind === "ethernet" && parent.up && parent.role === "lan"));
+}
+
 export function mdnsInterfaces(config: Config, settings = config.mdns): string[] {
   if (!settings) return [];
-  return config.interfaces.filter(link => link.up && link.role === "lan" &&
-    (link.kind === "ethernet" || link.kind === "vlan") &&
+  return config.interfaces.filter(link => eligibleMDNSInterface(config, link) &&
     settings.interfaces.includes(link.name) === (settings.interface_mode === "allow"))
     .map(link => link.name).sort();
 }
@@ -35,8 +40,8 @@ export function validateMDNS(config: Config): ValidationIssue[] {
     const link = config.interfaces.find(link => link.name === name);
     if (!link || (link.kind !== "ethernet" && link.kind !== "vlan")) {
       issue("interfaces", `${name} must be a configured Ethernet/VLAN link.`);
-    } else if (settings.interface_mode === "allow" && (!link.up || link.role !== "lan")) {
-      issue("interfaces", `${name} must be administratively up with role LAN in allow mode.`);
+    } else if (settings.interface_mode === "allow" && !eligibleMDNSInterface(config, link)) {
+      issue("interfaces", `${name} must be administratively up with role LAN or be a VLAN on an up LAN Ethernet parent in allow mode.`);
     }
   }
   const filters = settings.reflection.filters.map(asciiLower);
@@ -48,9 +53,10 @@ export function validateMDNS(config: Config): ValidationIssue[] {
     const service = labels.length >= 3 && labels[0]!.startsWith("_") && ["_tcp", "_udp"].includes(labels[1]!);
     const subtype = labels.length >= 5 && labels[0]!.startsWith("_") && labels[1] === "_sub" &&
       labels[2]!.startsWith("_") && ["_tcp", "_udp"].includes(labels[3]!);
+    const instance = labels.length >= 4 && labels[1]!.startsWith("_") && ["_tcp", "_udp"].includes(labels[2]!);
     const provider = labels.length >= 2 && labels.every(label => !label.includes("_"));
-    if (!localName(filter) || !(service || subtype || provider)) {
-      issue("reflection.filters", `${filter || "(empty)"} must be an absolute local service, subtype or provider name with a trailing dot; no patterns.`);
+    if (!localName(filter) || !(service || subtype || instance || provider)) {
+      issue("reflection.filters", `${filter || "(empty)"} must be an absolute local service, subtype, exact instance or provider name with a trailing dot; no patterns.`);
     }
   }
   const publishing = settings.publishing;

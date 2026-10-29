@@ -21,20 +21,22 @@ test("mDNS stages discovery, reviews and confirms a full package on desktop and 
   await page.getByLabel("Registry admin password").fill("registry-test-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await page.goto("/services/mdns");
   const view = page.getByRole("region", { name: "mDNS / Discovery", exact: true });
-  await expect(view).toContainText("State: disabled");
-  await view.getByLabel("Enable mDNS", { exact: true }).check();
-  await view.getByLabel("Discovery filters", { exact: true }).fill("_IPP._TCP.LOCAL.\nprinter.local.");
-  await view.getByRole("button", { name: "Stage settings", exact: true }).click();
-  await expect(view.getByLabel("Discovery filters", { exact: true })).toHaveValue("_ipp._tcp.local.\nprinter.local.");
-  await expect(view).toContainText("State: disabled");
+  await expect(view.getByRole("button", { name: "Add service", exact: true })).toBeVisible();
+  await view.getByRole("button", { name: "Add service", exact: true }).click();
+  await view.getByLabel("Service 1", { exact: true }).fill("_IPP._TCP");
+  await view.getByRole("button", { name: "Add service", exact: true }).click();
+  await view.getByLabel("Service 2", { exact: true }).fill("printer.local.");
+  await view.getByRole("button", { name: "Add service", exact: true }).click();
+  await view.getByLabel("Service 3", { exact: true }).fill("_udp._govee-lan._udp.local.");
+  await view.getByRole("button", { name: "Stage changes", exact: true }).click();
+  await expect(view.getByLabel("Service 1", { exact: true })).toHaveValue("_ipp._tcp.local.");
+  await expect(view.getByLabel("Service 2", { exact: true })).toHaveValue("_udp._govee-lan._udp.local.");
+  await expect(view.getByLabel("Service 3", { exact: true })).toHaveValue("printer.local.");
+  await expect(view).not.toContainText("Applied discovery status");
   expect(backend.writes).toEqual([]); expect(dialogs).toEqual([]);
-  await view.getByText("Traffic counters and sample times", { exact: true }).click();
-  await expect(view).toContainText("9007199254740993");
-  await expect(view).toContainText("18446744073709551615");
-  await expect(view).toContainText("2026-10-25 12:00:00");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
   await page.getByRole("link", { name: "Save configuration", exact: true }).click();
@@ -46,14 +48,15 @@ test("mDNS stages discovery, reviews and confirms a full package on desktop and 
   expect(backend.writes[0]).toMatchObject({
     path: "/transactions",
     body: { config: {
-      mdns: { ...initial.mdns, enabled: true, reflection: { enabled: true, filters: ["_ipp._tcp.local.", "printer.local."] } },
+      mdns: { ...initial.mdns, enabled: true, reflection: { enabled: true, filters: ["_ipp._tcp.local.", "_udp._govee-lan._udp.local.", "printer.local."] } },
       kernel: initial.kernel, ntp: initial.ntp,
     } },
   });
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(page.getByRole("region", { name: "Commit detail", exact: true })).toContainText("committed");
   await page.goto("/services/mdns");
-  await expect(view).toContainText("State: simulated");
-  await expect(view).toContainText("Applied membership: lan0, lan1");
+  await expect(view.getByLabel("Service 1", { exact: true })).toHaveValue("_ipp._tcp.local.");
+  await expect(view.getByLabel("Service 2", { exact: true })).toHaveValue("_udp._govee-lan._udp.local.");
+  await expect(view).not.toContainText("Traffic counters and sample times");
   expect(dialogs).toEqual([]);
 });

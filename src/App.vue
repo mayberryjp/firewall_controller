@@ -6,6 +6,9 @@ import { useControllerStore } from "@/stores/controller";
 import { usePolling } from "@/composables/usePolling";
 const store = useControllerStore(), route = useRoute(), router = useRouter();
 usePolling();
+watch(() => store.connected
+  ? [store.state.data?.desired.system?.hostname, store.state.data?.desired.system?.domain].filter(Boolean).join(".")
+  : "", (name) => { document.title = name || "Firewall Controller"; }, { immediate: true });
 watch(() => route.path, (path) => { store.monitoring = path === "/overview" || path.startsWith("/interfaces/"); }, { immediate: true });
 watch(() => store.connected, (connected) => {
   if (!connected && route.path !== "/connect") void router.replace({ name: "connect", query: { redirect: route.fullPath } });

@@ -10,11 +10,13 @@ const store = useControllerStore();
 const data = computed(() => store.linkDiagnostics.data);
 const now = ref(Date.now());
 let expiry: ReturnType<typeof setTimeout> | undefined;
-watch(() => store.linkDiagnostics.lastSuccess, () => {
+watch(() => [store.linkDiagnostics.lastSuccess, store.statistics.lastSuccess], function updateFreshness() {
   clearTimeout(expiry); now.value = Date.now();
   const elapsed = store.linkDiagnostics.lastSuccess === null ? 0 : Math.max(0, now.value - store.linkDiagnostics.lastSuccess);
-  const remaining = 5001 - (data.value?.age_ms ?? 5001) - elapsed;
-  if (remaining > 0) expiry = setTimeout(() => { now.value = Date.now(); }, remaining);
+  const deadlines = [5001 - (data.value?.age_ms ?? 5001) - elapsed];
+  if (store.statistics.lastSuccess !== null) deadlines.push(5001 - Math.max(0, now.value - store.statistics.lastSuccess));
+  const remaining = Math.min(...deadlines.filter(time => time > 0));
+  if (Number.isFinite(remaining)) expiry = setTimeout(updateFreshness, remaining);
 }, { immediate: true });
 onUnmounted(() => clearTimeout(expiry));
 const current = computed(() => Boolean(data.value?.status === "available" && !store.linkDiagnostics.stale &&
@@ -27,11 +29,40 @@ const rows = computed(() => props.kind === "interfaces" ? data.value?.interfaces
 const emptyLabel = computed(() => rows.value === null || rows.value === undefined
   ? "Measurements unavailable." : "No observations.");
 function value(item: string | number | null | undefined): string | number { return item ?? "Unavailable"; }
+function increase(delta: string | null | undefined): string | undefined {
+  return current.value && delta !== null && delta !== undefined && BigInt(delta) > 0n ? `+${delta}` : undefined;
+}
+function decreasePercentage(decreases: string, acknowledgements: string): string {
+  const total = BigInt(acknowledgements), events = BigInt(decreases);
+  if (total === 0n || events > total) return "Unavailable";
+  return `${(Number((events * 10000n + total / 2n) / total) / 100).toFixed(2)}%`;
+}
 function counterColor(item: string | null | undefined, complete = true): string {
   if (!current.value || item === null || item === undefined) return "default";
   return BigInt(item) > 0n ? "warning" : BigInt(item) === 0n ? complete ? "success" : "default" : "info";
 }
 const informationColor = computed(() => current.value ? "info" : "default");
+const interfaceTraffic = computed(() => {
+  const result = new Map<string, { drops: string; color: string }>();
+  const query = store.statistics, sample = query.data;
+  if (!current.value || !sample || query.stale || query.error || query.lastSuccess === null ||
+    now.value - query.lastSuccess > 5000 || !["available", "partial"].includes(sample.sample.status)) return result;
+  for (const row of sample.interfaces) {
+    if (row.status !== "available" || row.error || row.index === undefined) continue;
+    const counters = row.counters;
+    const packets = [counters?.rx_packets, counters?.tx_packets];
+    if (!packets.every(item => item !== undefined && /^\d+$/.test(item))) continue;
+    const total = BigInt(packets[0]!) + BigInt(packets[1]!);
+    const drops = [counters?.rx_dropped, counters?.tx_dropped];
+    const dropped = drops.every(item => item !== undefined && /^\d+$/.test(item))
+      ? BigInt(drops[0]!) + BigInt(drops[1]!) : null;
+    result.set(`${row.index}/${row.name}`, {
+      drops: dropped === null ? "Unavailable" : decreasePercentage(dropped.toString(), (total + dropped).toString()),
+      color: dropped === null || total + dropped === 0n ? "default" : dropped > 0n ? "warning" : "success",
+    });
+  }
+  return result;
+});
 const sampleLabels: Record<string, string> = {
   available: "Current", starting: "Starting", unavailable: "Unavailable", stale: "Stale", simulated: "Simulated",
 };
@@ -75,13 +106,6 @@ onMounted(() => {
         >
           Capture {{ data.packet_headers.statistics_complete ? 'complete' : 'incomplete' }}{{ current ? '' : ' (historical)' }}
         </v-chip>
-        <router-link
-          v-if="kind === 'windows'"
-          to="/diagnostics/capture-details"
-          class="text-caption"
-        >
-          Capture details
-        </router-link>
       </template>
     </div>
     <p
@@ -111,7 +135,14 @@ onMounted(() => {
       class="resource-table"
       density="compact"
     >
-      <thead><tr><th>Interface</th><th>Errors (RX + TX)</th><th>Errors delta</th><th>Drops (RX + TX)</th><th>Drops delta</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Interface</th><th>Errors (RX + TX)</th><th>Errors delta</th><th>Drops (RX + TX)</th><th>Drops delta</th>
+          <th title="Cumulative RX + TX drops / (packets + drops) from interface statistics; not a current loss rate">
+            Drop percentage
+          </th>
+        </tr>
+      </thead>
       <tbody>
         <tr
           v-for="row in data?.interfaces ?? []"
@@ -134,6 +165,11 @@ onMounted(() => {
               title="Cumulative errors, not a current error rate"
             >
               {{ row.errors }}
+              <span
+                v-if="increase(row.errors_delta)"
+                class="ms-2"
+                title="Increase since the previous diagnostic sample"
+              >{{ increase(row.errors_delta) }}</span>
             </v-chip>
           </td>
           <td>
@@ -153,6 +189,11 @@ onMounted(() => {
               title="Cumulative drops, not a current loss rate"
             >
               {{ row.drops }}
+              <span
+                v-if="increase(row.drops_delta)"
+                class="ms-2"
+                title="Increase since the previous diagnostic sample"
+              >{{ increase(row.drops_delta) }}</span>
             </v-chip>
           </td>
           <td>
@@ -164,9 +205,18 @@ onMounted(() => {
               {{ value(row.drops_delta) }}
             </v-chip>
           </td>
+          <td>
+            <v-chip
+              size="small"
+              variant="tonal"
+              :color="interfaceTraffic.get(`${row.index}/${row.name}`)?.color ?? 'default'"
+            >
+              {{ interfaceTraffic.get(`${row.index}/${row.name}`)?.drops ?? 'Unavailable' }}
+            </v-chip>
+          </td>
         </tr>
         <tr v-if="!rows?.length">
-          <td colspan="5">
+          <td colspan="6">
             {{ emptyLabel }}
           </td>
         </tr>
@@ -247,6 +297,11 @@ onMounted(() => {
               title="Cumulative qdisc drops, not a current loss rate"
             >
               {{ value(row.queue?.drops) }}
+              <span
+                v-if="increase(row.drops_delta)"
+                class="ms-2"
+                title="Increase since the previous diagnostic sample"
+              >{{ increase(row.drops_delta) }}</span>
             </v-chip>
           </td>
           <td>
@@ -292,7 +347,7 @@ onMounted(() => {
         class="resource-table"
         density="compact"
       >
-        <thead><tr><th>Interface</th><th>TCP ACK packets</th><th>Zero-window observations</th><th>Zero-window transitions</th><th>Window decreases</th><th>Minimum raw window</th><th>Maximum raw window</th></tr></thead>
+        <thead><tr><th>Interface</th><th>TCP ACK packets</th><th>Zero-window observations</th><th>Zero-window transitions</th><th>Window decreases (% of ACKs)</th><th>Minimum raw window</th><th>Maximum raw window</th></tr></thead>
         <tbody>
           <tr
             v-for="row in data?.packet_headers?.interfaces ?? []"
@@ -345,6 +400,10 @@ onMounted(() => {
               >
                 {{ row.window_decreases }}
               </v-chip>
+              <span
+                class="text-caption ms-2"
+                title="Observed window decreases divided by observed TCP ACK packets since collector start; not a packet-loss rate"
+              >{{ decreasePercentage(row.window_decreases, row.tcp_ack_packets) }}</span>
             </td>
             <td>
               <v-chip
@@ -452,16 +511,17 @@ onMounted(() => {
     </v-table>
     <p class="text-caption text-medium-emphasis mt-3">
       <template v-if="kind === 'interfaces'">
-        Deltas are per sample; unavailable on first/reset samples. Totals do not indicate current loss. Do not sum parent, VLAN and tunnel observations.
+        Packets discarded while entering or leaving a network interface. Increasing drops can indicate overloaded queues, limited resources, or traffic the interface cannot handle, helping explain packet loss and poor performance.
       </template>
       <template v-else-if="kind === 'queues'">
-        Each qdisc is separate; do not sum parent/child rows. Backlog is occupancy, not delay. Growth is a byte difference; overlimits do not necessarily mean loss.
+        Queueing disciplines control how outgoing packets are buffered, prioritized, and transmitted. They affect latency and fairness under load; their statistics help identify congestion, queue buildup, and intentional packet drops.
       </template>
       <template v-else-if="kind === 'windows'">
-        Plaintext ingress TCP ACKs, including forwarded traffic. Windows are raw 16-bit fields, not scaled bytes or cwnd. Zero windows indicate receiver pressure, not link failure. Counters are since collector start and can reset.
+        TCP uses the receiver's advertised window to limit how much unacknowledged data the sender can transmit. Small or zero windows can reveal a receiver struggling to consume data and limit throughput, even when bandwidth is available.
+        A zero window means the receiver is advertising no space for more data. The sender pauses normal data transmission and periodically probes until the receiver opens its window again; this does not by itself indicate packet loss or a failed link.
       </template>
       <template v-else>
-        Measurement quality for TCP window monitoring. These counters describe missed or interrupted observations, not necessarily traffic dropped by the firewall. Incomplete capture can undercount TCP window events. Counters reset when the collector restarts.
+        Information about how and where packets were recorded, including the interface, filter, captured packet length, and capture losses. These details establish what the capture can show and help distinguish real network problems from missing or truncated capture data.
       </template>
     </p>
     <p

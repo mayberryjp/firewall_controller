@@ -27,7 +27,8 @@ export const navigationSections: NavigationSection[] = [
   { title: "Routing", name: "routing-section", path: "/routing", icon: "mdi-transit-connection-variant", pages: [
     { title: "Static Routes", name: "routes", path: "/routes", icon: "mdi-transit-connection-variant" },
     { title: "Gateway monitors", name: "gateway-monitors", path: "/gateway-monitors", icon: "mdi-access-point-network" },
-    { title: "BGP", name: "bgp", path: "/routing/bgp", icon: "mdi-router-network" },
+    { title: "BGP PROCESS", name: "bgp", path: "/routing/bgp", icon: "mdi-router-network" },
+    { title: "BGP PEERS", name: "bgp-peers", path: "/routing/bgp/peers", icon: "mdi-account-network-outline" },
   ] },
   { title: "Firewall/NAT", name: "firewall-section", path: "/firewall", icon: "mdi-wall", pages: [
     { title: "Firewall forwarding", name: "firewall", path: "/firewall", icon: "mdi-wall" },
@@ -44,6 +45,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "DHCPv4 relay", name: "dhcp-relay", path: "/services/dhcp-relay", icon: "mdi-lan-connect" },
     { title: "Remote DNS", name: "remote-dns", path: "/services/remote-dns", icon: "mdi-dns-outline" },
     { title: "mDNS / Discovery", name: "mdns", path: "/services/mdns", icon: "mdi-access-point-network" },
+    { title: "UDP BROADCAST RELAY", name: "udp-broadcast-relay", path: "/services/udp-broadcast-relay", icon: "mdi-broadcast" },
     { title: "NTP", name: "ntp", path: "/services/ntp", icon: "mdi-clock-outline" },
     { title: "Syslog", name: "syslog", path: "/services/syslog", icon: "mdi-text-box-outline" },
     { title: "vnStat", name: "vnstat", path: "/services/vnstat", icon: "mdi-chart-bar" },
@@ -55,6 +57,8 @@ export const navigationSections: NavigationSection[] = [
     { title: "QDISCS", name: "qdiscs", path: "/diagnostics/qdiscs", icon: "mdi-format-list-numbered" },
     { title: "TCP WINDOWING", name: "tcp-windowing", path: "/diagnostics/tcp-windowing", icon: "mdi-swap-horizontal" },
     { title: "Capture details", name: "capture-details", path: "/diagnostics/capture-details", icon: "mdi-clipboard-check-outline" },
+    { title: "BGP ROUTES", name: "bgp-routes", path: "/diagnostics/bgp-routes", icon: "mdi-router-network" },
+    { title: "Download config", name: "download-config", path: "/diagnostics/download-config", icon: "mdi-download" },
   ] },
   { title: "Settings", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
     { title: "General", name: "settings-general", path: "/settings/general", icon: "mdi-cog-outline" },

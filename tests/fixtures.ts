@@ -73,6 +73,17 @@ export function mdnsStatus(): MDNSStatus {
     statistics_complete: false, warnings: ["receive_loss_accounting_unavailable"], limits: { interfaces: 32, filters: 64 },
   };
 }
+export function udpRelayStatus() {
+  return {
+    name: "udp-broadcast-relay" as const, instance_id: 1, scope: "managed" as const, enabled: true, state: "running",
+    port: 4001, interfaces: ["lan0", "iot0"], multicast_address: "239.255.255.250", source: "original" as const,
+    started_at: "2026-10-28T12:00:00.123456Z", collected_at: "2026-10-28T12:00:01.987654Z", error: null,
+    received_packets: "9007199254740993", transmitted_packets: "18446744073709551615",
+    received_bytes: "0", transmitted_bytes: "0", policy_drops: "0", loop_drops: "0", rate_limit_drops: "0", send_errors: "0",
+    receive_drops: null, statistics_complete: false, last_send_error: null, last_send_error_at: null,
+    retrying: false, restart_count: 0, limits: { interfaces: 32, payload_bytes: 65507, packets_per_second: 200, burst: 400, poll_ms: 100, shutdown_ms: 1000 },
+  };
+}
 export function runtime(): RuntimeState { return {
   parent_interfaces: [], softflowd: [{ name: "capture", state: "simulated" }], dhcp_relay: [{ interface: "lab0", state: "disabled" }],
   gateway_monitors: [], appliance_services: [

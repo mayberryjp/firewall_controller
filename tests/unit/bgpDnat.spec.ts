@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bgpSchema, bgpStatusSchema, bgpRoutesSchema, configSchema, destinationRewriteSchema, stateSchema, transactionSchema, runtimeSchema, interfaceSchema } from "@/types/domain";
+import { bgpSchema, bgpStatusSchema, bgpRoutesSchema, bgpAdvertisedRoutesSchema, configSchema, destinationRewriteSchema, stateSchema, transactionSchema, runtimeSchema, interfaceSchema } from "@/types/domain";
 import { differenceContext, differences, equalConfig, importConfig, normalize, requiredPermissions, serviceRepairPermissions, validateConfig } from "@/services/configuration";
 import { bgpPeerStatus } from "@/services/bgp";
 import { processRestartTarget } from "@/services/operations";
@@ -8,6 +8,14 @@ import { bgpConfig, bgpStatus, bgpRoutes, dnatRule } from "../bgpFixtures";
 import { config, state, runtime, transaction, processHealthSnapshot } from "../fixtures";
 
 describe("BGP and DNAT configuration contracts", () => {
+  it("parses advertised routes separately without inventing received path attributes", () => {
+    const row = { prefix: "203.0.113.0/24", neighbor: "remote", interface: "wg0", next_hop: "10.10.0.1", source: "bgp" };
+    const response = { source: "bgp", scope: "linux:opaque", state: "running", error: null, routes: [row, { ...row, neighbor: "second" }] };
+    expect(bgpAdvertisedRoutesSchema.parse(response).routes).toEqual(response.routes);
+    expect(bgpRoutesSchema.safeParse(response).success).toBe(false);
+    expect(bgpAdvertisedRoutesSchema.parse({ ...response, state: "simulated", routes: [] }).routes).toEqual([]);
+    expect(bgpAdvertisedRoutesSchema.safeParse({ ...response, routes: null }).success).toBe(false);
+  });
   it("preserves BGP, DNAT, metadata and unrelated settings across state, import, normalization, and transaction parsing", () => {
     const candidate = bgpConfig();
     candidate.bgp!.metadata = { display_name: "Router", description: "BGP identity" };

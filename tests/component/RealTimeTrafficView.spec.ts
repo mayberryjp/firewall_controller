@@ -55,6 +55,10 @@ describe("Real Time Traffic", () => {
     await sample(0); await sample(3, 300n);
     expect(charts()).toHaveLength(2);
     expect(charts().map(chart => chart.props("height"))).toEqual(["220", "220"]);
+    expect(charts().map(chart => chart.props("options").markers)).toEqual([
+      { size: 0, hover: { size: 0 } },
+      { size: 0, hover: { size: 0 } },
+    ]);
     expect(charts()[0]!.props("series")).toEqual([
       { name: "eth0", data: [{ x: Date.parse(trafficStatistics().sample.collected_at), y: null }, { x: Date.parse(trafficStatistics(3).sample.collected_at), y: 300 }] },
       { name: "eth1", data: [{ x: Date.parse(trafficStatistics().sample.collected_at), y: null }, { x: Date.parse(trafficStatistics(3).sample.collected_at), y: 600 }] },

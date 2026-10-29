@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
-import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot, mdnsStatus } from "../fixtures";
+import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot, mdnsStatus, udpRelayStatus } from "../fixtures";
 import { bgpSchema, mdnsSchema } from "../../src/types/domain";
-import { bgpStatus, bgpRoutes } from "../bgpFixtures";
+import { bgpStatus, bgpRoutes, bgpAdvertisedRoutes } from "../bgpFixtures";
 import { mdnsInterfaces } from "../../src/services/mdns";
 import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics, RuntimeState } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
@@ -14,6 +14,11 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
   const writes: Array<{ path: string; body: unknown }> = [];
   const activeConfig = () => Object.values(transactions).find(item => item.status === "pending_confirmation")?.candidate ?? committed;
+  const relayStatus = () => (activeConfig().udp_broadcast_relay?.instances ?? []).map(instance => ({
+    ...udpRelayStatus(), ...instance, instance_id: instance.id,
+    enabled: Boolean(activeConfig().udp_broadcast_relay?.enabled && instance.enabled),
+    state: activeConfig().udp_broadcast_relay?.enabled && instance.enabled ? "simulated" : "disabled",
+  }));
   const routingStatus = () => {
     const settings = activeConfig().bgp;
     return {
@@ -50,7 +55,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       appliance_services: [...runtime().appliance_services.map(item => ({
         ...item, state: stored[item.name === "ntp" ? "ntp" : item.name === "syslog" ? "syslog" : "vnstat"].enabled ? "simulated" : "disabled",
         database_directory: item.name.startsWith("vnstat") ? `/test-diagnostic/${item.scope}` : undefined,
-      })), discoveryStatus(), routingStatus()],
+      })), discoveryStatus(), routingStatus(), ...relayStatus()],
     };
   };
   await page.route("**/api/v1/**", async route => {
@@ -115,9 +120,12 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
           active_transaction: Object.values(transactions).find(item => !["committed", "rolled_back"].includes(item.status)) });
       }
       if (path === "/runtime") return reply(runtimeState());
+      if (path === "/services/udp-broadcast-relay") return reply(committed.udp_broadcast_relay ?? { enabled: false, instances: [] });
+      if (path === "/services/udp-broadcast-relay/status") return reply({ instances: relayStatus(), error: "" });
       if (path === "/services/bgp") return reply(activeConfig().bgp ?? bgpSchema.parse({}));
       if (path === "/services/bgp/status") return reply(routingStatus());
       if (path === "/routes/bgp") return reply({ ...bgpRoutes(), state: routingStatus().state, routes: activeConfig().bgp?.enabled ? bgpRoutes().routes : [] });
+      if (path === "/routes/bgp/advertised") return reply({ ...bgpAdvertisedRoutes(), state: routingStatus().state, routes: activeConfig().bgp?.enabled ? bgpAdvertisedRoutes().routes : [] });
       if (path === "/platform/status") return reply({
         process_health: { status: "healthy", healthy: true, stale: false, collected_at: "2026-10-27T01:02:03.987Z", components: [] },
         active_alerts: [],
@@ -177,7 +185,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         } else pending.status = "rolled_back";
         return reply(pending);
       }
-      if (/^\/services\/(softflowd|dhcp-relay|gateway-monitoring|ntp|syslog|vnstat|mdns)\/reconcile$/.test(path)) {
+      if (/^\/services\/(softflowd|dhcp-relay|gateway-monitoring|ntp|syslog|vnstat|mdns|udp-broadcast-relay)\/reconcile$/.test(path)) {
         if (options.serviceDenied) return reply({ error: "interfaces.write permission required", transaction: null }, 403);
         return reply(runtimeState());
       }

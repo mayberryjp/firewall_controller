@@ -15,7 +15,7 @@ const relayChanged = computed(() => changes.value.some(item => item.area === "in
 const mdnsAddedLinks = computed(() => props.after.mdns?.interface_mode === "deny"
   ? mdnsInterfaces(props.after).filter(name => !mdnsInterfaces(props.before).includes(name)) : []);
 const hasWarnings = computed(() => changedServices.value.length || relayChanged.value || changes.value.some(item =>
-  ["gateway_monitors", "firewall-icmp", "firewall-input", "mdns", "bgp"].includes(item.area)) || mdnsAddedLinks.value.length);
+  ["gateway_monitors", "firewall-icmp", "firewall-input", "mdns", "bgp", "udp_broadcast_relay"].includes(item.area)) || mdnsAddedLinks.value.length);
 function source(value: unknown): string {
   return value === undefined ? "" : `${JSON.stringify(JSON.parse(stableJson(value)), null, 2)}\n`;
 }
@@ -53,14 +53,6 @@ const totals = computed(() => files.value.reduce((total, file) => ({
     mDNS deny-mode membership expands to: {{ mdnsAddedLinks.join(', ') }}. Review discovery exposure on these LAN links before applying.
   </v-alert>
   <v-alert
-    v-if="changes.some(item => item.area === 'dnat')"
-    type="warning"
-    variant="tonal"
-    class="mb-4"
-  >
-    Destination rewrite preserves client source IP and destination port. Replies must return through this firewall; same-subnet direct replies usually break reverse NAT. Use routed return paths or a separate target subnet. Normal forwarding filters see the rewritten target and LAN egress; no allow rule, route or source NAT is added. Explicit masquerade rules still apply. The target's own matching upstream traffic is also redirected: choose a nonmatching upstream path/transport to avoid loops. Changes, removal and rollback affect new connections only; existing translations remain until expiry or explicit deletion.
-  </v-alert>
-  <v-alert
     v-if="changes.some(item => item.area === 'bgp') && after.bgp?.neighbors.some(peer => peer.accept_default)"
     type="warning"
     variant="tonal"
@@ -73,6 +65,14 @@ const totals = computed(() => files.value.reduce((total, file) => ({
     class="diff-warnings"
   >
     <summary>Operational warnings</summary>
+    <v-alert
+      v-if="changes.some(item => item.area === 'udp_broadcast_relay')"
+      type="warning"
+      variant="tonal"
+      class="mb-4"
+    >
+      UDP Broadcast Relay extends IPv4 discovery between the selected links. No firewall permits, NAT rules or reply routes are created. Allow the relay port and separately routed replies; original-source mode requires return routing to the client. Govee requires LAN Control, UDP 4002 replies and UDP 4003 commands; ECHONET Lite uses UDP 3610. Reserve exclusive UDP ports and native host-service/CAP_NET_RAW access. Full packets must fit the outgoing MTU. Changes and restarts interrupt discovery and reset counters; runtime link or port failures retry without blocking configuration.
+    </v-alert>
     <ApplianceWarnings
       v-for="service in changedServices"
       :key="service"

@@ -2,6 +2,7 @@ import ipaddr from "ipaddr.js";
 import { configSchema, mqttSchema, blackholeSchema, systemSchema, bgpSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService, type Route } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 import { normalizeMDNS, validateMDNS } from "@/services/mdns";
+import { validateUDPRelay } from "@/services/udpBroadcastRelay";
 
 export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
 export function stableJson(value: unknown): string {
@@ -23,6 +24,8 @@ export function normalize(config: Config): Config {
   if (result.system && stableJson(result.system) === stableJson(systemSchema.parse({}))) delete result.system;
   if (result.bgp && stableJson(result.bgp) === stableJson(bgpSchema.parse({}))) delete result.bgp;
   result.bgp?.neighbors.sort((a, b) => a.name.localeCompare(b.name));
+  result.udp_broadcast_relay?.instances.sort((first, second) => first.id - second.id);
+  result.udp_broadcast_relay?.instances.forEach(instance => instance.interfaces.sort());
   if (!result.firewall.nat.destination_rewrite?.length) delete result.firewall.nat.destination_rewrite;
   result.dynamic_dns?.sort((a, b) => a.name.localeCompare(b.name));
   for (const area of ["dhcp_clients", "dns"] as const) {
@@ -168,7 +171,7 @@ export function differences(before: Config, after: Config): Difference[] {
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
   named("dynamic_dns", old.dynamic_dns ?? [], next.dynamic_dns ?? [], item => item.name);
-  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "bgp"] as const) {
+  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "bgp", "udp_broadcast_relay"] as const) {
     if (stableJson(old[area]) !== stableJson(next[area])) result.push({
       area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
     });
@@ -234,7 +237,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     if (!doc.dhcp_clients) delete doc.dhcp_clients;
     if (!doc.dns) delete doc.dns;
     if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
-  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel", "bgp"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
+  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel", "bgp", "udp_broadcast_relay"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
   else if (change.area === "ipv6") doc.ipv6_enabled = change.after === false ? false : undefined;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
@@ -298,6 +301,7 @@ export function serviceRepairPermissions(config: Config, service: RepairService)
   }
   if (service === "mdns" || config.mdns?.enabled) permissions.push("mdns.write");
   if (config.bgp?.enabled) permissions.push("bgp.write");
+  if (service === "udp-broadcast-relay" || config.udp_broadcast_relay?.enabled) permissions.push("udp_broadcast_relay.write");
   return permissions;
 }
 export function validateServerHost(host: string): void {
@@ -346,7 +350,7 @@ export function ipv6Conflicts(config: Config): string[] {
   return conflicts;
 }
 export function validateConfig(config: Config, parents: ParentInterface[] = [], baseline?: Config): ValidationIssue[] {
-  const issues: ValidationIssue[] = validateMDNS(config);
+  const issues: ValidationIssue[] = [...validateMDNS(config), ...validateUDPRelay(config)];
   const issue = (path: string, message: string, page: string) => issues.push({ path, message, page });
   if (config.ipv6_enabled === false) {
     for (const path of ipv6Conflicts(config)) issue(path, "IPv6 is disabled globally. Enable IPv6 in General settings or remove this setting.", "/settings/general");
@@ -738,7 +742,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write", mdns: "mdns.write",
-    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write",
+    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write", udp_broadcast_relay: "udp_broadcast_relay.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

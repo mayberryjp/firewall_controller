@@ -29,7 +29,7 @@ describe("mDNS configuration and runtime contracts", () => {
   it.each([true, false])("preserves enabled=%s preferences and metadata across import, history, transactions and export", enabled => {
     const value = candidate(); value.mdns!.enabled = enabled;
     value.mdns!.metadata = { display_name: "Discovery", description: "Printers\nLAN only" };
-    value.mdns!.reflection.filters = ["_ipp._tcp.local.", "_color._sub._ipp._tcp.local.", "printer.local."];
+    value.mdns!.reflection.filters = ["_ipp._tcp.local.", "_color._sub._ipp._tcp.local.", "printer.local.", "_udp._govee-lan._udp.local."];
     value.mdns!.publishing.aaaa_on_ipv4 = true; value.mdns!.publishing.addresses = true;
     const roundtrip = importConfig(encodeJson(value));
     expect(roundtrip.mdns).toEqual(value.mdns);
@@ -38,6 +38,11 @@ describe("mDNS configuration and runtime contracts", () => {
     expect(pending.previous.mdns).toEqual(value.mdns); expect(pending.candidate.mdns).toEqual(value.mdns);
     expect(revisionDetailSchema.parse({ revision: "0", current: true, submitted_at: null, committed_at: null, config: value }).config.mdns).toEqual(value.mdns);
     expect(issues(value)).toEqual([]);
+  });
+  it.each(["_udp._govee-lan._udp.local.", "living-room._googlecast._tcp.local.", "printer_1._ipp._tcp.office.local."])("accepts exact instance filter %s without changing its identity", filter => {
+    const value = candidate(); value.mdns!.reflection.filters = [filter];
+    expect(issues(value)).toEqual([]);
+    expect(normalize(value).mdns!.reflection.filters).toEqual([filter]);
   });
   it("normalizes case/order, includes mDNS in SAVE context and authorizes metadata-only edits", () => {
     const before = candidate(), after = candidate();
@@ -64,21 +69,28 @@ describe("mDNS configuration and runtime contracts", () => {
       { ...value.interfaces[0]!, name: "down0", up: false },
       { ...value.interfaces[0]!, name: "dummy0", kind: "dummy" },
       { ...value.interfaces[0]!, name: "unused0", role: "unassigned" },
-      { ...value.interfaces[0]!, name: "vlan10", kind: "vlan", vlan: { parent: "lan0", id: 10 } },
+      { ...value.interfaces[0]!, name: "vlan10", kind: "vlan", role: "unassigned", vlan: { parent: "lan0", id: 10 } },
     );
     expect(mdnsInterfaces(value)).toEqual(["lan0", "lan1"]);
+    value.mdns!.interfaces = ["lan0", "vlan10"];
+    expect(mdnsInterfaces(value)).toEqual(["lan0", "vlan10"]);
+    expect(issues(value)).toEqual([]);
     value.mdns!.interfaces = []; expect(mdnsInterfaces(value)).toEqual([]);
     value.mdns!.interface_mode = "deny"; value.mdns!.interfaces = ["lan1", "wan0"];
     expect(mdnsInterfaces(value)).toEqual(["lan0", "vlan10"]); expect(issues(value)).toEqual([]);
     value.interfaces.push({ ...value.interfaces[0]!, name: "lan2" });
     expect(mdnsInterfaces(value)).toEqual(["lan0", "lan2", "vlan10"]);
   });
-  it.each(["missing", "wan0", "down0", "dummy0"])("validates interface references even when disabled (%s)", name => {
+  it.each(["missing", "wan0", "down0", "dummy0", "wan-vlan", "down-vlan", "missing-parent-vlan", "down-parent-vlan"])("validates interface references even when disabled (%s)", name => {
     const value = candidate();
     value.interfaces.push(
       { ...value.interfaces[0]!, name: "wan0", role: "wan" },
       { ...value.interfaces[0]!, name: "down0", up: false },
       { ...value.interfaces[0]!, name: "dummy0", kind: "dummy" },
+      { ...value.interfaces[0]!, name: "wan-vlan", kind: "vlan", role: "unassigned", vlan: { parent: "wan0", id: 10 } },
+      { ...value.interfaces[0]!, name: "down-vlan", kind: "vlan", role: "unassigned", up: false, vlan: { parent: "lan0", id: 20 } },
+      { ...value.interfaces[0]!, name: "missing-parent-vlan", kind: "vlan", role: "unassigned", vlan: { parent: "missing", id: 30 } },
+      { ...value.interfaces[0]!, name: "down-parent-vlan", kind: "vlan", role: "unassigned", vlan: { parent: "down0", id: 40 } },
     );
     value.mdns!.enabled = false; value.mdns!.interfaces = [name];
     expect(issues(value).some(issue => issue.path === "mdns.interfaces")).toBe(true);
@@ -107,7 +119,7 @@ describe("mDNS configuration and runtime contracts", () => {
     value.mdns!.interfaces = ["lan0", "lan0"]; value.mdns!.reflection.filters = ["printer.local.", "PRINTER.LOCAL."];
     expect(issues(value).map(issue => issue.path)).toEqual(expect.arrayContaining(["mdns.interfaces", "mdns.reflection.filters"]));
   });
-  it.each(["*.local.", "printer.local", "printer.example.", "_http._sctp.local.", "pr inter.local.", "prínter.local.", `${"a".repeat(64)}.local.`])("rejects noncanonical filter %s", filter => {
+  it.each(["*.local.", "printer.local", "printer.example.", "_http._sctp.local.", "_udp._govee-lan._sctp.local.", "_udp._govee-lan._udp.example.", "_u*._govee-lan._udp.local.", "pr inter.local.", "prínter.local.", `${"a".repeat(64)}.local.`])("rejects noncanonical filter %s", filter => {
     const value = candidate(); value.mdns!.reflection.filters = [filter];
     expect(issues(value).some(issue => issue.path === "mdns.reflection.filters")).toBe(true);
   });
@@ -130,6 +142,13 @@ describe("mDNS configuration and runtime contracts", () => {
     value.mdns!.publishing.domain = "local."; value.mdns!.publishing.aaaa_on_ipv4 = true; value.mdns!.publishing.a_on_ipv6 = true;
     expect(issues(value).map(issue => issue.path)).toEqual(expect.arrayContaining(["mdns.publishing.aaaa_on_ipv4", "mdns.publishing.a_on_ipv6"]));
     value.mdns!.publishing.addresses = true; expect(issues(value)).toEqual([]);
+  });
+  it.each([undefined, null, "UDP 5353 is owned"])("decodes native mDNS error %s in dedicated and aggregate runtime responses", error => {
+    const row: Record<string, unknown> = { ...mdnsStatus(), error };
+    if (error === undefined) delete row.error;
+    const expected = { ...row, error: error ?? null };
+    expect(mdnsStatusPageSchema.parse({ instances: [row], error: "" }).instances[0]).toEqual(expected);
+    expect(runtimeSchema.parse({ ...runtime(), appliance_services: [row] }).appliance_services[0]).toEqual(expected);
   });
   it("preserves heterogeneous runtime fields and exact counters, rejecting malformed mDNS instead of using an NTP-shaped fallback", () => {
     const row = mdnsStatus(), envelope = { instances: [row], error: "" };

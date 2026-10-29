@@ -12,13 +12,16 @@ import {
   applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, mdnsSchema, mdnsStatusPageSchema,
   gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
   connectionDeletionSchema, upgradeVersionSchema, upgradeJobSchema, upgradeStatusSchema, type Connection,
-  platformStatusSchema, bgpSchema, bgpStatusSchema, bgpRoutesSchema,
+  platformStatusSchema, bgpSchema, bgpStatusSchema, bgpRoutesSchema, bgpAdvertisedRoutesSchema, udpBroadcastRelaySchema, udpRelayStatusPageSchema,
 } from "@/types/domain";
 
 const id = encodeURIComponent;
+export const getUDPRelayConfig = (signal?: AbortSignal) => request("GET", "/services/udp-broadcast-relay", udpBroadcastRelaySchema, undefined, signal);
+export const getUDPRelayStatus = (signal?: AbortSignal) => request("GET", "/services/udp-broadcast-relay/status", udpRelayStatusPageSchema, undefined, signal);
 export const getBGPConfig = (signal?: AbortSignal) => request("GET", "/services/bgp", bgpSchema, undefined, signal);
 export const getBGPStatus = (signal?: AbortSignal) => request("GET", "/services/bgp/status", bgpStatusSchema, undefined, signal);
 export const getBGPRoutes = (signal?: AbortSignal) => request("GET", "/routes/bgp", bgpRoutesSchema, undefined, signal);
+export const getBGPAdvertisedRoutes = (signal?: AbortSignal) => request("GET", "/routes/bgp/advertised", bgpAdvertisedRoutesSchema, undefined, signal);
 export const getLinkDiagnostics = (signal?: AbortSignal) =>
   request("GET", "/statistics/link-diagnostics", linkDiagnosticsSchema, undefined, signal);
 export function lookupDNS(input: DNSLookupRequest, signal?: AbortSignal) {

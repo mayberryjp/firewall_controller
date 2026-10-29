@@ -48,6 +48,12 @@ async function repair(): Promise<void> {
         <p class="mt-3">
           Required permissions across stored enabled services: <span class="mono">{{ permissions }}</span>. The backend checks authorization under its engine lock; this client has no permission-discovery endpoint.
         </p>
+        <p
+          v-if="stored?.udp_broadcast_relay?.enabled || service === 'udp-broadcast-relay'"
+          class="mt-3"
+        >
+          UDP Broadcast Relay workers may also restart, briefly interrupting discovery and resetting instance counters. This repairs shared services, not one selected instance.
+        </p>
         <v-alert
           v-if="error"
           type="error"

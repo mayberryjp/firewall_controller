@@ -11,23 +11,21 @@ const selected = computed(() => store.draft ?? store.state.data?.desired);
 const rows = computed(() => selected.value?.firewall.nat.destination_rewrite ?? []);
 const editing = ref<number | null>(null), error = ref(""), initial = ref(""), snapshot = ref("");
 const form = ref<DestinationRewrite>({ out_interface: "", protocol: "tcp", destination_port: 53, target_interface: "", target_address: "" });
-const displayName = ref(""), description = ref("");
 const supported = computed(() => store.state.data?.desired.firewall.nat.destination_rewrite !== undefined);
 const blocked = computed(() => Boolean(store.readOnlyReason) || !selected.value || !supported.value);
 const family = computed(() => { try { return numericAddress(form.value.target_address).kind(); } catch { return undefined; } });
 const wanChoices = computed(() => selected.value?.interfaces.filter(link => link.up && link.role === "wan" &&
   (!family.value || family.value === "ipv4" && selected.value?.dhcp_clients?.[link.name] ||
     link.addresses.some(address => address.includes(":") === (family.value === "ipv6")))).map(interfaceChoice) ?? []);
-const lanChoices = computed(() => selected.value?.interfaces.filter(link => link.up && link.role === "lan" &&
+const targetChoices = computed(() => selected.value?.interfaces.filter(link => link.up && link.role === "lan" &&
   link.addresses.some(address => !family.value || address.includes(":") === (family.value === "ipv6"))).map(interfaceChoice) ?? []);
-const input = () => stableJson([form.value, displayName.value, description.value]);
+const input = () => stableJson(form.value);
 watch(input, () => { store.editorDirty = editing.value !== null && input() !== initial.value; }, { flush: "sync" });
 onUnmounted(() => { store.editorDirty = false; });
 function open(index: number): void {
   error.value = ""; editing.value = index;
   const row = rows.value[index];
   form.value = row ? { ...row } : { out_interface: "", protocol: "tcp", destination_port: 53, target_interface: "", target_address: "" };
-  displayName.value = row?.metadata?.display_name ?? ""; description.value = row?.metadata?.description ?? "";
   initial.value = input(); snapshot.value = stableJson(rows.value); store.editorDirty = false;
 }
 function close(): void { editing.value = null; store.editorDirty = false; }
@@ -43,7 +41,7 @@ function save(): void {
   error.value = "";
   try {
     if (snapshot.value !== stableJson(rows.value)) throw new Error("Rules changed. Cancel and reopen the editor.");
-    const rule = destinationRewriteSchema.parse({ ...form.value, metadata: { display_name: displayName.value, description: description.value } });
+    const rule = destinationRewriteSchema.parse(form.value);
     const values = [...rows.value];
     if (editing.value === -1) values.push(rule);
     else if (editing.value !== null) values[editing.value] = rule;
@@ -92,7 +90,7 @@ function move(index: number, offset: number): void {
       {{ error }}
     </p>
     <v-table class="inline-table">
-      <thead><tr><th>WAN</th><th>Protocol</th><th>Port</th><th>Target LAN</th><th>Target address</th><th>Actions</th></tr></thead>
+      <thead><tr><th>WAN</th><th>Protocol</th><th>Port</th><th>Target interface</th><th>Target address</th><th>Actions</th></tr></thead>
       <tbody>
         <template
           v-for="(row, index) in [...rows, ...(editing === -1 ? [null] : [])]"
@@ -134,8 +132,8 @@ function move(index: number, offset: number): void {
             <td>
               <v-select
                 v-model="form.target_interface"
-                :items="lanChoices"
-                label="Target LAN"
+                :items="targetChoices"
+                label="Target interface"
                 density="compact"
                 hide-details
                 :disabled="blocked"
@@ -150,17 +148,6 @@ function move(index: number, offset: number): void {
                 :disabled="blocked"
                 @keydown.enter.prevent="save"
               />
-              <details class="mt-2">
-                <summary>Labels</summary><v-text-field
-                  v-model="displayName"
-                  label="Display name"
-                  :disabled="blocked"
-                /><v-textarea
-                  v-model="description"
-                  label="Description"
-                  :disabled="blocked"
-                />
-              </details>
             </td>
             <td>
               <v-btn

@@ -47,7 +47,7 @@ export function processRestartTarget(row: Component, config?: Config): string | 
   if (!resource) return null;
   switch (row.component) {
     case "daemon": return "netcontrold";
-    case "appliance_services": return ["ntp", "syslog", "mdns", "bgp", "vnstat-host", "vnstat-managed"].includes(resource) ? resource : null;
+    case "appliance_services": return /^udp-broadcast-relay:([1-9]|[1-5][0-9]|6[0-3])$/.test(resource) ? resource : ["ntp", "syslog", "mdns", "bgp", "vnstat-host", "vnstat-managed"].includes(resource) ? resource : null;
     case "dhcp_relay": return "dhcp-relay";
     case "softflowd": return `flow:${resource}`;
     case "gateway_monitors": {

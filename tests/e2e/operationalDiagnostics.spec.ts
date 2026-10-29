@@ -65,7 +65,7 @@ test("DNS lookup, focused diagnostic tables and icon-only confirmed restart", as
   await expect(drops).toContainText("18446744073709551615");
   await expect(drops.getByRole("columnheader", { name: "Drops delta", exact: true })).toBeVisible();
   await expect(drops.locator(".v-chip").filter({ hasText: /^1$/ })).toHaveClass(/text-warning/);
-  await expect(drops.locator(".v-chip").filter({ hasText: /^18446744073709551615$/ })).toHaveClass(/text-warning/);
+  await expect(drops.locator(".v-chip").filter({ hasText: /^18446744073709551615\s*\+1$/ })).toHaveClass(/text-warning/);
   await expect(drops).not.toContainText("Queue (packets)");
   await page.screenshot({ path: testInfo.outputPath("interface-drops.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("tab", { name: "QDISCS", exact: true }).click();
@@ -87,13 +87,14 @@ test("DNS lookup, focused diagnostic tables and icon-only confirmed restart", as
   await expect(windows.locator("table")).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("tcp-windowing.png"), fullPage: true, animations: "disabled" });
-  await windows.getByRole("link", { name: "Capture details", exact: true }).click();
+  await expect(windows.getByRole("link", { name: "Capture details", exact: true })).toHaveCount(0);
+  await page.getByRole("tab", { name: "Capture details", exact: true }).click();
   await expect(page).toHaveURL(/\/diagnostics\/capture-details$/);
   const capture = page.getByRole("region", { name: "Capture details", exact: true });
   await expect(capture).toContainText("Capture incomplete");
   await expect(capture.getByRole("columnheader", { name: "Kernel drops", exact: true })).toBeVisible();
   await expect(capture).toContainText("18446744073709551615");
-  await expect(capture).toContainText("not necessarily traffic dropped by the firewall");
+  await expect(capture).toContainText("help distinguish real network problems from missing or truncated capture data");
   await expect(capture.locator(".v-chip").filter({ hasText: /^18446744073709551615$/ })).toHaveClass(/text-warning/);
   await expect(capture).not.toContainText("Zero-window observations");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

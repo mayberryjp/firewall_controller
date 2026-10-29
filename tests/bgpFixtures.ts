@@ -1,4 +1,4 @@
-import { bgpSchema, type BGPStatus, type BGPRoutes, type DestinationRewrite } from "../src/types/domain";
+import { bgpSchema, type BGPStatus, type BGPRoutes, type BGPAdvertisedRoutes, type DestinationRewrite } from "../src/types/domain";
 import { config } from "./fixtures";
 export function bgpConfig() {
   const candidate = config();
@@ -21,6 +21,12 @@ export function bgpRoutes(): BGPRoutes {
     prefix: "198.51.100.0/24", neighbor: "remote", interface: "lab0", next_hop: "192.0.2.2",
     as_path: [65002], origin: 0, local_pref: 100, med: 0, selected: true, installed: false, reason: "connected_or_static_route", source: "bgp",
   }] };
+}
+export function bgpAdvertisedRoutes(): BGPAdvertisedRoutes {
+  return { source: "bgp", scope: "linux:test", state: "running", error: null, routes: [
+    { prefix: "203.0.113.0/24", neighbor: "remote", interface: "lab0", next_hop: "192.0.2.10", source: "bgp" },
+    { prefix: "203.0.113.0/24", neighbor: "second", interface: "lab0", next_hop: "192.0.2.10", source: "bgp" },
+  ] };
 }
 export function dnatRule(): DestinationRewrite {
   return { out_interface: "wan0", protocol: "udp", destination_port: 53, target_interface: "lab0", target_address: "192.0.2.53" };

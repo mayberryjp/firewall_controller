@@ -128,6 +128,15 @@ describe("unified configuration diff", () => {
     expect(added.findAll(".addition").length).toBeGreaterThan(0);
     expect(added.findAll(".line-code").some(line => line.text() === "null")).toBe(false);
   });
+  it("shows DNAT changes without an operational warning", () => {
+    const before = config(), after = config();
+    before.firewall.nat.destination_rewrite = [];
+    after.firewall.nat.destination_rewrite = [{ out_interface: "wan0", protocol: "tcp", destination_port: 53, target_interface: "lab0", target_address: "192.0.2.53" }];
+    const wrapper = diff(before, after);
+    expect(wrapper.findAll(".addition").length).toBeGreaterThan(0);
+    expect(wrapper.findComponent({ name: "VAlert" }).exists()).toBe(false);
+    expect(wrapper.find(".diff-warnings").exists()).toBe(false);
+  });
   it("shows an empty state for semantically unchanged configuration", () => {
     const wrapper = diff();
     expect(wrapper.text()).toContain("No semantic changes."); expect(wrapper.find("table").exists()).toBe(false);

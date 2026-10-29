@@ -10,7 +10,7 @@ import { differences, requiredPermissions } from "@/services/configuration";
 import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema } from "@/types/domain";
 import { config, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus } from "../fixtures";
 import { dnsResponse, linkDiagnostics } from "../diagnosticsFixtures";
-import { bgpConfig, bgpStatus, bgpRoutes, dnatRule } from "../bgpFixtures";
+import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -39,6 +39,15 @@ describe("controller-proxied API boundary", () => {
     expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
     status = 503; body = encodeJson({ error: "Worker unavailable" });
     await expect(net.getBGPStatus()).rejects.toThrow("HTTP 503");
+  });
+  it("reads advertised paths through the separate bodyless and queryless endpoint", async () => {
+    body = encodeJson(bgpAdvertisedRoutes());
+    expect(await net.getBGPAdvertisedRoutes()).toEqual(bgpAdvertisedRoutes());
+    expect(captured?.url).toBe("/routes/bgp/advertised");
+    expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
+    expect(captured?.params).toBeUndefined();
+    status = 404; body = encodeJson({ error: "Unknown endpoint" });
+    await expect(net.getBGPAdvertisedRoutes()).rejects.toThrow("HTTP 404");
   });
   it("uses the operational POST contracts without revisions or extra request fields", async () => {
     body = encodeJson(dnsResponse("lab0"));
@@ -111,8 +120,7 @@ describe("controller-proxied API boundary", () => {
       const download = useConfigExport();
       await download.downloadCommittedConfig();
       expect(filenames).toEqual(["netcontrol-config-r18446744073709551615.json"]);
-      expect(confirm).toHaveBeenCalledOnce();
-      expect(confirm.mock.calls[0]![0]).toContain("a pending candidate may be running instead");
+      expect(confirm).not.toHaveBeenCalled();
       const blob = createObjectURL.mock.calls[0]![0] as unknown as Blob;
       const text = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsText(blob);

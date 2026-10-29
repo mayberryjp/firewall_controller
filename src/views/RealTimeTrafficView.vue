@@ -93,7 +93,7 @@ function options(id: string, unit: string): ApexOptions {
     theme: { mode: "dark" },
     colors: watchedInterfaces.value.map(name => interfaceColors[Math.max(0, interfaceNames.value.indexOf(name)) % interfaceColors.length]!),
     stroke: { width: 2, curve: "straight" },
-    markers: { size: 2 },
+    markers: { size: 0, hover: { size: 0 } },
     grid: { borderColor: "#29313d" },
     legend: { position: "top", showForSingleSeries: true },
     xaxis: {

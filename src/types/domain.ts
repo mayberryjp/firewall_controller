@@ -59,6 +59,13 @@ export const bgpRoutesSchema = z.object({
   })),
 });
 export type BGPRoutes = z.infer<typeof bgpRoutesSchema>;
+export const bgpAdvertisedRoutesSchema = z.object({
+  source: z.literal("bgp"), scope: z.string(), state: z.string(), error: z.string().nullable(),
+  routes: z.array(z.object({
+    prefix: z.string(), neighbor: z.string(), interface: z.string(), next_hop: z.string(), source: z.literal("bgp"),
+  })),
+});
+export type BGPAdvertisedRoutes = z.infer<typeof bgpAdvertisedRoutesSchema>;
 export const kernelSchema = z.object({ namespace: stringMap, host: stringMap }).strict();
 export const peerSchema = z.object({
   ...annotation,
@@ -187,6 +194,20 @@ export const mdnsSchema = z.object({
   }).strict().default({}),
 }).strict();
 export type MDNSConfig = z.infer<typeof mdnsSchema>;
+export const udpRelayInstanceSchema = z.object({
+  ...annotation,
+  id: integer.min(1).max(63), enabled: z.boolean(), port: integer.min(1).max(65535),
+  interfaces: z.array(z.string()).min(2).max(32),
+  multicast_address: z.string().ip({ version: "v4" }).refine(value => {
+    const first = Number(value.split(".")[0]); return first >= 224 && first <= 239;
+  }, "Use an IPv4 multicast group").nullable().default(null),
+  source: z.enum(["original", "interface_address", "interface_address_and_port"]).default("original"),
+}).strict();
+export const udpBroadcastRelaySchema = z.object({
+  ...annotation, enabled: z.boolean().default(false), instances: z.array(udpRelayInstanceSchema).max(63).default([]),
+}).strict();
+export type UDPRelayInstance = z.infer<typeof udpRelayInstanceSchema>;
+export type UDPBroadcastRelay = z.infer<typeof udpBroadcastRelaySchema>;
 export const dhcpClientSchema = z.object({
   ...annotation,
   client_id: z.string().default(""), hostname: z.string().default(""),
@@ -249,6 +270,7 @@ export const configSchema = z.object({
   gateway_monitors: list(gatewayMonitorSchema).default([]),
   ntp: ntpSchema, syslog: syslogSchema, vnstat: vnstatSchema,
   mdns: mdnsSchema.optional(),
+  udp_broadcast_relay: udpBroadcastRelaySchema.optional(),
   bgp: bgpSchema.optional(),
   mqtt: mqttSchema.optional(),
   dynamic_dns: list(dynamicDnsSchema).optional(),
@@ -372,11 +394,29 @@ export const mdnsCounterNames = [
   "queue_drops", "oversize_drops", "unsupported_record_drops", "send_errors",
 ] as const;
 const decimalCounter = z.string().regex(/^(0|[1-9]\d*)$/);
+export const udpRelayCounterNames = [
+  "received_packets", "transmitted_packets", "received_bytes", "transmitted_bytes",
+  "policy_drops", "loop_drops", "rate_limit_drops", "send_errors",
+] as const;
+export const udpRelayStatusSchema = z.object({
+  ...supervisionFields,
+  name: z.literal("udp-broadcast-relay"), instance_id: integer.min(1).max(63), scope: z.literal("managed"),
+  enabled: z.boolean(), state: z.string(), port: integer, interfaces: z.array(z.string()),
+  multicast_address: z.string().nullable(), source: udpRelayInstanceSchema.shape.source,
+  started_at: timestamp.nullable(), collected_at: timestamp.nullable(), error: z.string().nullable().default(null),
+  received_packets: decimalCounter, transmitted_packets: decimalCounter,
+  received_bytes: decimalCounter, transmitted_bytes: decimalCounter,
+  policy_drops: decimalCounter, loop_drops: decimalCounter, rate_limit_drops: decimalCounter, send_errors: decimalCounter,
+  last_send_error: z.string().nullable(), last_send_error_at: timestamp.nullable(),
+  receive_drops: decimalCounter.nullable(), statistics_complete: z.boolean(), limits: z.record(integer.nonnegative()),
+});
+export const udpRelayStatusPageSchema = z.object({ instances: z.array(udpRelayStatusSchema), error: z.string() });
+export type UDPRelayStatus = z.infer<typeof udpRelayStatusSchema>;
 export const mdnsStatusSchema = z.object({
   ...supervisionFields,
   name: z.literal("mdns"), scope: z.literal("managed"), enabled: z.boolean(),
   state: z.enum(["disabled", "simulated", "running", "stopped", "error"]),
-  started_at: timestamp.nullable(), collected_at: timestamp.nullable(), error: z.string().nullable(),
+  started_at: timestamp.nullable(), collected_at: timestamp.nullable(), error: z.string().nullable().default(null),
   effective_interfaces: z.array(z.string()), effective_families: z.array(z.enum(["ipv4", "ipv6"])),
   reflection_enabled: z.boolean(), publishing_enabled: z.boolean(),
   received_packets: decimalCounter, transmitted_packets: decimalCounter,
@@ -391,11 +431,12 @@ export type MDNSStatus = z.infer<typeof mdnsStatusSchema>;
 export type ApplianceStatus = z.infer<typeof applianceStatusSchema>;
 export const mdnsStatusPageSchema = z.object({ instances: z.array(mdnsStatusSchema).length(1), error: z.string() });
 const runtimeApplianceStatusSchema = z.union([
+  udpRelayStatusSchema,
   mdnsStatusSchema,
   bgpStatusSchema.extend({ name: z.literal("bgp") }),
-  applianceStatusSchema.refine(value => !["mdns", "bgp"].includes(value.name), "Invalid specialized service status"),
+  applianceStatusSchema.refine(value => !["mdns", "bgp", "udp-broadcast-relay"].includes(value.name), "Invalid specialized service status"),
 ]);
-export const isApplianceStatus = (value: z.infer<typeof runtimeApplianceStatusSchema>): value is ApplianceStatus => !["mdns", "bgp"].includes(value.name);
+export const isApplianceStatus = (value: z.infer<typeof runtimeApplianceStatusSchema>): value is ApplianceStatus => !["mdns", "bgp", "udp-broadcast-relay"].includes(value.name);
 export const runtimeSchema = z.preprocess(value => {
   if (value && typeof value === "object" && !Array.isArray(value) &&
       !("parent_interfaces" in value) && "parents" in value) {
@@ -523,7 +564,7 @@ export const upgradeStatusSchema = z.object({
 export type UpgradeJob = z.infer<typeof upgradeJobSchema>;
 export type UpgradeStatus = z.infer<typeof upgradeStatusSchema>;
 export type ApplianceService = "ntp" | "syslog" | "vnstat";
-export type RepairService = "softflowd" | "dhcp-relay" | "gateway-monitoring" | "mdns" | ApplianceService;
+export type RepairService = "softflowd" | "dhcp-relay" | "gateway-monitoring" | "mdns" | "udp-broadcast-relay" | ApplianceService;
 export interface PackageRequest {
   base_revision: string;
   confirm_timeout_seconds: number;

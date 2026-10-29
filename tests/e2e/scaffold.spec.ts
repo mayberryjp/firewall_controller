@@ -113,8 +113,8 @@ test("committed downloads exclude staged changes and retain drafts on archive er
   await page.getByRole("button", { name: "Save", exact: true }).click();
   const history = navigationSections.flatMap(section => section.pages).find(entry => entry.path === "/config/revisions")!;
   await navigate(page, history.title);
-  page.once("dialog", async dialog => {
-    expect(dialog.message()).toContain("a pending candidate may be running instead"); await dialog.accept();
+  page.on("dialog", dialog => {
+    throw new Error(`Unexpected download dialog: ${dialog.message()}`);
   });
   const downloading = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download committed configuration", exact: true }).click();
@@ -176,6 +176,7 @@ test("overview layout supports moving, hiding, restoring and registry persistenc
     await page.getByRole("button", { name: "Move System stats up", exact: true }).click();
     await page.getByRole("button", { name: "Move System stats up", exact: true }).click();
     await page.getByRole("button", { name: "Move System stats up", exact: true }).click();
+    await page.getByRole("button", { name: "Move System stats up", exact: true }).click();
   }
   await expect(page.locator('[data-column="0"] [data-widget]').first()).toHaveAttribute("data-widget", "system");
   await page.getByRole("button", { name: "Hide WireGuard", exact: true }).click();
@@ -209,7 +210,7 @@ test("overview layout supports moving, hiding, restoring and registry persistenc
   await page.getByRole("button", { name: "Save layout", exact: true }).click();
   await expect(customize).toBeEnabled();
   await page.reload();
-  await expect(page.locator("[data-widget]")).toHaveCount(5);
+  await expect(page.locator("[data-widget]")).toHaveCount(6);
   await expect(page.locator('[data-column="0"] [data-widget]').first()).toHaveAttribute("data-widget", "interfaces");
   expect(backend.writes).toHaveLength(0);
 });
@@ -311,7 +312,7 @@ test("refresh discovery stays off the page and failures retain the fixed-size co
   await expect(bubble).not.toHaveClass(/connection-bubble--expanded/);
   await expect(bubble).toHaveText("");
   await expect(safety).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
 });
 
 test("masquerading adds and edits inline without popups on desktop and mobile", async ({ page }, testInfo) => {
@@ -469,7 +470,7 @@ test("navbar tooltips appear once with readable contrast on hover and keyboard f
       return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
     });
     expect(contrast).toBeGreaterThanOrEqual(4.5);
-    await page.getByRole("heading", { name: "Overview", exact: true }).hover();
+    await page.getByRole("region", { name: "Overview", exact: true }).hover();
     await expect(tooltip).toHaveCount(0);
   }
   await controls[0]!.focus();
@@ -563,14 +564,14 @@ test("top navigation opens routed sections in the black reference theme", async 
   await page.screenshot({ path: testInfo.outputPath("networking-section.png"), fullPage: true, animations: "disabled" });
   await page.locator(".product-branding").click();
   await expect(page).toHaveURL(/\/overview$/);
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await page.locator(".connection-bubble").click();
   await page.getByRole("list", { name: "Registry session" }).getByText("Disconnect", { exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Disconnect and clear local state?");
   await page.getByRole("button", { name: "Keep connected", exact: true }).click();
 });
 
-test("compact overview contains four live status widgets without diagnostic clutter", async ({ page, isMobile }, testInfo) => {
+test("compact overview contains live status widgets without diagnostic clutter", async ({ page, isMobile }, testInfo) => {
   const initial = config(), counters = statistics();
   initial.gateway_monitors = [monitor()];
   initial.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
@@ -589,7 +590,7 @@ test("compact overview contains four live status widgets without diagnostic clut
   ] });
   await connect(page);
   const dashboard = page.getByRole("region", { name: "Overview", exact: true });
-  await expect(dashboard.getByRole("heading", { level: 2 })).toHaveText(["Interfaces", "Gateways", "WireGuard", "System stats", "Interface counters"]);
+  await expect(dashboard.getByRole("heading", { level: 2 })).toHaveText(["Interfaces", "Gateways", "WireGuard", "BGP peers", "System stats", "Interface counters"]);
   await expect(dashboard.getByRole("region", { name: "Interfaces", exact: true }).getByRole("cell", { name: "Up", exact: true })).toHaveCount(3);
   const interfaceWidget = dashboard.getByRole("region", { name: "Interfaces", exact: true });
   await expect(interfaceWidget.getByRole("columnheader")).toHaveText(["Name", "Admin state", "Operational state", "Active IP", "Mode"]);
@@ -851,15 +852,15 @@ test("connections viewer filters and pages read-only snapshots with exact counte
   expect(await view.locator(".connection-state").first().evaluate(element => getComputedStyle(element).whiteSpace)).toBe("nowrap");
   if (!isMobile) {
     await expect(page.locator(".section-layout")).toHaveClass(/section-layout--collapsed/);
-    const sidebar = page.getByRole("navigation", { name: "Firewall pages", exact: true });
+    const sidebar = page.getByRole("navigation", { name: "Firewall/NAT pages", exact: true });
     expect((await sidebar.boundingBox())!.width).toBeLessThanOrEqual(60);
     await expect(sidebar.getByRole("tab")).toHaveCount(0);
     await expect(sidebar.locator(".v-icon")).toHaveCount(1);
-    await page.getByRole("button", { name: "Expand Firewall navigation", exact: true }).click();
+    await page.getByRole("button", { name: "Expand Firewall/NAT navigation", exact: true }).click();
     await expect(page.locator(".section-layout")).not.toHaveClass(/section-layout--collapsed/);
-    await expect(sidebar.getByRole("tab")).toHaveCount(4);
+    await expect(sidebar.getByRole("tab")).toHaveCount(5);
     await expect(sidebar.getByRole("tab").locator(".v-icon")).toHaveCount(0);
-    await page.getByRole("button", { name: "Collapse Firewall navigation", exact: true }).click();
+    await page.getByRole("button", { name: "Collapse Firewall/NAT navigation", exact: true }).click();
     await expect(sidebar.getByRole("tab")).toHaveCount(0);
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -1467,7 +1468,7 @@ test("only overview polls operational data while background health remains indep
   await page.clock.fastForward(20000);
   expect(reads.filter(path => !path.endsWith("/runtime"))).toHaveLength(0);
   await navigate(page, "Overview");
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await page.clock.fastForward(6000);
   await expect.poll(() => reads.some(path => path.endsWith("/statistics"))).toBe(true);
 });
@@ -1477,9 +1478,9 @@ test("reload restores the registry session and rediscovers pending transactions"
   page.on("request", request => { if (request.method() === "POST" && request.url().endsWith("/api/v1/session")) signIns++; });
   await mockBackend(page, { initialStatus: "pending_confirmation" }); await connect(page);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await expect(page.getByLabel("Registry admin password")).toHaveCount(0);
-  await expect(page.getByRole("main")).toContainText("Overview");
+  await expect(page).toHaveURL(/\/overview$/);
   await navigate(page, "Commits");
   await expect(page.getByRole("main").getByRole("link", { name: "tx-test", exact: true })).toBeVisible();
   expect(signIns).toBe(1);
@@ -1844,14 +1845,14 @@ test("gateway fractional metrics, null gaps and stale health remain distinct", a
   await expect(monitorRow.getByRole("checkbox", { name: "Monitoring enabled for uplink", exact: true })).toBeVisible();
   const actions = monitorRow.getByRole("cell").filter({ has: page.getByRole("button", { name: "Edit / stage", exact: true }) });
   await expect(actions.getByRole("checkbox")).toHaveCount(0);
-  await expect(monitorRow.getByRole("cell").nth(2).getByRole("checkbox")).toBeVisible();
+  await expect(monitorRow.getByRole("cell").filter({ has: page.getByRole("checkbox", { name: "Monitoring enabled for uplink", exact: true }) })).toHaveCount(1);
   await expect(monitors.locator("tbody > tr")).toHaveCount(1);
   await expect(summary).toBeVisible(); await expect(summary).toContainText("33.33 %");
   await expect(summary).not.toContainText("no monitor sample");
   await expect(summary.locator('[data-metric="Loss"]')).toHaveAttribute("title", "33.33 %");
   await expect(summary).toContainText("1.25 ms"); await expect(summary).toContainText("RTT variation");
   await expect(summary).toContainText("Unavailable");
-  await expect(monitors.getByRole("columnheader")).toHaveText(["Name", "Interface", "Status", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Actions"]);
+  await expect(monitors.getByRole("columnheader")).toHaveText(["Name", "Interface", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions"]);
   await expect(monitorRow.getByRole("cell")).toHaveCount(9);
   await expect(summary.locator('[data-metric="Health"] .v-chip')).toHaveText("unknown");
   await expect(summary.locator(".v-chip")).toHaveCount(5);
@@ -1928,7 +1929,7 @@ test("operational pages keep content compact with readable details", async ({ pa
     await navigate(page, entry.title);
     const main = page.getByRole("main");
     await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections|services\/mdns)/.test(entry.path) ? 1 : 0);
+    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections)/.test(entry.path) ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
     await expect(main).not.toContainText("Operator prerequisites");
     await expect(main).not.toContainText("Last successful read");

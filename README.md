@@ -72,6 +72,34 @@ whole-appliance log capture/delivery or real vnStat history. Native host mode
 can take ownership of physical NICs on first start; keep console access and
 review the backend's networkd/resolved and persistent-state prerequisites.
 
+### UDP Broadcast Relay
+
+Services > **UDP BROADCAST RELAY** (`/services/udp-broadcast-relay`) follows the
+[October 28 relay handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-28.md#2026-10-28-06-native-udp-broadcast-relay).
+The compact instance editor stages global/instance enable, ID, UDP port,
+explicit interface selection, optional IPv4 multicast group, source mode and
+service/instance metadata through the existing SAVE, confirmation and rollback flow.
+Govee and ECHONET Lite presets populate an unsent, disabled instance with an
+unused ID; they never enable the service, push changes or create firewall rules.
+Only configured up Ethernet/VLAN links with IPv4 prefix <=30 or DHCP qualify.
+Loopback, dummy, WireGuard and IPv6 transport are not supported.
+
+Configuration changes require `udp_broadcast_relay.write` plus
+`transactions.write`; shared-service repair also requires the relay permission
+whenever it is globally enabled. Status uses `state.read`, polls only on this
+page, and keys rows by numeric instance ID. Expand a row for exact decimal
+counters, UTC sample times, unknown receive loss, retries and retained errors.
+Confirmed instance restart uses `system.restart` and `udp-broadcast-relay:ID`;
+it resets counters, not saved configuration. Runtime failures do not lock editing.
+Complete config/history/export packages preserve the section; older backends
+that omit it keep relay editing unavailable.
+
+Deploy the matching native backend first; the feature remains **Unreleased**.
+Provide native host-service/CAP_NET_RAW access, exclusive UDP ports, explicit
+firewall permits and routed replies. Govee requires LAN Control and separate
+UDP 4002 replies/4003 commands; ECHONET Lite uses UDP 3610. Packets must fit the
+egress MTU. Local browser mocks do not establish native or appliance acceptance.
+
 ### Native mDNS / Discovery
 
 Services > mDNS / Discovery (`/services/mdns`) follows the
@@ -155,19 +183,31 @@ by the frontend.
 
 ### BGP And Destination Rewrite
 
-Routing > **BGP** (`/routing/bgp`) stages the local ASN/router ID, enable switch
-and inline peer add/edit/delete controls into the shared SAVE/apply flow.
-Timer and global prefix-limit controls are under Options. Peer rows show colored
-applied session states; uncommitted changes show Not applied, and unavailable or
-expired observations are neutral. Neighbor failures do not lock unrelated edits.
-The read-only BGP routes table keeps selected and installed paths distinct and
-shows AS paths and actionable rejection/install reasons; learned routes and
-WireGuard AllowedIPs are never copied into desired configuration.
+Routing > **BGP PROCESS** (`/routing/bgp`) stages the local ASN/router ID, enable
+switch, timers, and global prefix limit, with all options visible. Routing >
+**BGP PEERS** (`/routing/bgp/peers`) owns inline peer add/edit/delete controls.
+Both use the shared SAVE/apply flow. For initial setup, save the process identity
+while disabled, add a peer, then enable BGP. Peer rows show colored applied session
+states and sent/received route counts; uncommitted changes show Not applied, and
+unavailable or expired observations are neutral with unknown counts. Neighbor
+failures do not lock unrelated edits. Diagnostics > **BGP ROUTES**
+(`/diagnostics/bgp-routes`) has separate Received and Advertised views with a
+client-side neighbor filter. Received routes keep selected and installed paths
+distinct, with AS paths and actionable rejection/install reasons. Advertised
+rows use `GET /api/v1/routes/bgp/advertised` and show only prefix, peer, interface
+and local next hop, keyed by neighbor/prefix. They represent UPDATEs queued to
+established sessions, not remote receipt, acceptance or installation. Connected
+candidates and peer counts are never used to invent advertised rows. Empty,
+stale, unavailable and stopped-worker results do not retain exports as current.
+Both reads use `state.read`; deploy the matching Unreleased backend before
+using Advertised. Learned routes and WireGuard AllowedIPs are never copied into
+desired configuration.
 
 The **BGP peers** overview box uses applied configuration, not the draft. It is
 included in new/default layouts; existing customized layouts are preserved and
-can add it through Customize layout. Status is polled only on the BGP page or
-while its overview box is visible; full route rows are fetched only on BGP.
+can add it through Customize layout. Status is polled on BGP PROCESS, BGP PEERS, or
+while its overview box is visible; full route rows are fetched only for the
+visible Received or Advertised view on BGP ROUTES.
 Both use non-overlapping three-second reads with bounded failure backoff and
 neutralize measurements after 15 seconds. Process health supports the existing
 confirmed, icon-only `bgp` restart, warning that routes are withdrawn/relearned.
