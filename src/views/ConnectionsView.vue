@@ -3,8 +3,9 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { getConnections, connectionSelector, deleteConnection, deleteAllConnections, type ConnectionsQuery } from "@/services/netcontrol";
 import { ApiFailure } from "@/services/api";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import type { Connection, ConnectionsPage } from "@/types/domain";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
 const data = ref<ConnectionsPage | null>(null), loading = ref(false), error = ref("");
@@ -208,7 +209,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
           variant="tonal"
           :color="stale ? 'warning' : !live || data.sample.status === 'simulated' ? 'grey' : 'success'"
         >{{ stale ? 'Stale' : !live ? 'Paused' : data.sample.status === 'simulated' ? 'Simulated' : 'Live' }}</v-chip>
-        {{ formatTimestamp(data.sample.collected_at) }} UTC
+        {{ formatTimestamp(data.sample.collected_at) }} {{ timeZone }}
       </span>
     </div>
     <form

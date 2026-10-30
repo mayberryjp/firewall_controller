@@ -158,7 +158,7 @@ function toggle(name: string, enabled: boolean): void {
             />
           </td>
         </tr>
-        <tr v-if="!links.length">
+        <tr v-if="stored && !links.length">
           <td colspan="5">
             No interface records available.
           </td>

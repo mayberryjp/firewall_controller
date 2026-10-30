@@ -9,7 +9,7 @@ import { config, runtime, transaction } from "../fixtures";
 describe("interface dropdown labels", () => {
   it("uses display names without changing interface identities", () => {
     expect(interfaceChoice({ name: "eno1", metadata: { display_name: "WAN", description: "" } }))
-      .toEqual({ title: "WAN (eno1)", value: "eno1" });
+      .toEqual({ title: "eno1 (WAN)", value: "eno1" });
     expect(interfaceChoice({ name: "eno1" })).toEqual({ title: "eno1", value: "eno1" });
     expect(interfaceChoice({ name: "eno1", metadata: { display_name: "", description: "Notes" } }))
       .toEqual({ title: "eno1", value: "eno1" });
@@ -202,7 +202,8 @@ describe("global IPv4 ICMP exception", () => {
     expect(after.firewall.policies).toEqual(before.firewall.policies);
     expect(differences(before, after).map(item => item.area)).toEqual(["firewall-icmp"]);
     after.firewall.policies!.hosts = [];
-    expect(validateConfig(after, [], before).some(issue => issue.path === "firewall.policies")).toBe(true);
+    expect(validateConfig(after, [], before)).toEqual([]);
+    expect(differences(before, after).map(item => item.area)).toEqual(["firewall-icmp", "firewall-policies"]);
   });
 });
 describe("required explicit WAN/LAN role", () => {
@@ -291,7 +292,7 @@ describe("DHCPv4 relay contract and validation", () => {
     candidate.firewall.allow_all_icmp = false;
     const pending = transaction(); pending.candidate = candidate;
     expect(transactionSchema.parse(decodeJson(encodeJson(pending))).candidate).toEqual(candidate);
-    const revision = { revision: "0", current: false, submitted_at: null, committed_at: null, config: candidate };
+    const revision = { revision: "2026.10.29.1", current: false, submitted_at: null, committed_at: null, config: candidate };
     expect(revisionDetailSchema.parse(decodeJson(encodeJson(revision))).config).toEqual(candidate);
   });
   it.each(["disabled", "simulated", "unavailable", "not_running", "running", "unhealthy", "exited", "future_status"])("retains runtime state %s and errors", state => {

@@ -2,7 +2,8 @@
 import { computed, onUnmounted, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import type { Transaction } from "@/types/domain";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
+const { formatTimestamp, timeZone } = useTimestamps();
 const props = withDefaults(defineProps<{ transaction: Transaction; showDetails?: boolean }>(), { showDetails: true });
 const emit = defineEmits<{ updated: [transaction: Transaction] }>();
 const store = useControllerStore();
@@ -39,8 +40,8 @@ async function execute(action: "confirm" | "rollback"): Promise<void> {
     >
       Confirm before automatic rollback: <time
         :datetime="transaction.confirmation_deadline"
-        :title="`${formatTimestamp(transaction.confirmation_deadline)} UTC`"
-      >{{ formatTimestamp(transaction.confirmation_deadline) }}</time> UTC
+        :title="`${formatTimestamp(transaction.confirmation_deadline)} ${timeZone}`"
+      >{{ formatTimestamp(transaction.confirmation_deadline) }}</time> {{ timeZone }}
       · {{ remaining ? `${remaining}s remaining` : "Deadline reached; awaiting server outcome" }}
     </p>
     <div class="d-flex flex-wrap ga-2">

@@ -2,7 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import { useControllerStore } from "@/stores/controller";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
+import { isInitialLoad } from "@/services/datasets";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const props = defineProps<{ kind: "interfaces" | "queues" | "windows" | "capture" }>();
 const labels = { interfaces: "Interface drops", queues: "QDISCS", windows: "TCP WINDOWING", capture: "Capture details" };
@@ -27,7 +29,7 @@ const rows = computed(() => props.kind === "interfaces" ? data.value?.interfaces
   props.kind === "queues" ? data.value?.queues : props.kind === "capture"
     ? data.value?.packet_headers ? [data.value.packet_headers] : null : data.value?.packet_headers?.interfaces);
 const emptyLabel = computed(() => rows.value === null || rows.value === undefined
-  ? "Measurements unavailable." : "No observations.");
+  ? isInitialLoad(store.linkDiagnostics) ? "" : "Measurements unavailable." : "No observations.");
 function value(item: string | number | null | undefined): string | number { return item ?? "Unavailable"; }
 function increase(delta: string | null | undefined): string | undefined {
   return current.value && delta !== null && delta !== undefined && BigInt(delta) > 0n ? `+${delta}` : undefined;
@@ -89,7 +91,10 @@ onMounted(() => {
       :query="store.linkDiagnostics"
       :label="labels[kind]"
     />
-    <div class="d-flex flex-wrap align-center ga-3 mb-4">
+    <div
+      v-if="!isInitialLoad(store.linkDiagnostics)"
+      class="d-flex flex-wrap align-center ga-3 mb-4"
+    >
       <v-chip
         size="small"
         variant="tonal"
@@ -97,7 +102,7 @@ onMounted(() => {
       >
         {{ sampleLabels[sampleState] }}
       </v-chip>
-      <span class="text-caption text-medium-emphasis">Collected (UTC): {{ formatTimestamp(data?.collected_at) }}</span>
+      <span class="text-caption text-medium-emphasis">Collected ({{ timeZone }}): {{ formatTimestamp(data?.collected_at) }}</span>
       <template v-if="(kind === 'windows' || kind === 'capture') && data?.packet_headers">
         <v-chip
           size="small"
@@ -123,7 +128,7 @@ onMounted(() => {
       Historical observations only. Measurements are not current.
     </p>
     <p
-      v-else-if="!current"
+      v-else-if="!current && !isInitialLoad(store.linkDiagnostics)"
       role="status"
       class="text-caption mb-3"
     >

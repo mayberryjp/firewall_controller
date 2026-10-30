@@ -1,12 +1,14 @@
 import { isLosslessNumber, LosslessNumber, parse, stringify } from "lossless-json";
-import { revisionSchema } from "@/types/domain";
+import { legacyRevisionSchema, revisionSchema } from "@/types/domain";
 
-const revisionKeys = new Set(["revision", "base_revision", "restored_from_revision", "next_before_revision"]);
+const revisionKeys = new Set(["revision", "base_revision", "committed_revision", "restored_from_revision", "next_before_revision"]);
 
 export function decodeJson(text: string): unknown {
   return parse(text, (key, value: unknown) => {
+    if (revisionKeys.has(key) && value !== null) {
+      return isLosslessNumber(value) ? legacyRevisionSchema.parse(value.value) : revisionSchema.parse(value);
+    }
     if (!isLosslessNumber(value)) return value;
-    if (revisionKeys.has(key)) return revisionSchema.parse(value.value);
     const number = Number(value.value);
     if (!Number.isFinite(number) || Math.abs(number) > Number.MAX_SAFE_INTEGER) throw new Error("Unsafe numeric value in API response");
     // Integer tokens must remain exact; bounded fractional measurements use JSON numbers.
@@ -17,8 +19,9 @@ export function decodeJson(text: string): unknown {
 
 export function encodeJson(value: unknown): string {
   const result = stringify(value, (key, item: unknown) => {
-    if (revisionKeys.has(key) && typeof item === "string") {
-      return new LosslessNumber(revisionSchema.parse(item));
+    if (revisionKeys.has(key) && item !== null && item !== undefined) {
+      const revision = revisionSchema.parse(item);
+      return legacyRevisionSchema.safeParse(revision).success ? new LosslessNumber(revision) : revision;
     }
     return item;
   });

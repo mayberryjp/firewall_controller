@@ -5,9 +5,11 @@ import VueApexCharts from "vue3-apexcharts";
 import type { ApexOptions } from "apexcharts";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import { useControllerStore } from "@/stores/controller";
-import { formatTimestamp } from "@/services/timestamps";
+import { isInitialLoad } from "@/services/datasets";
+import { useTimestamps } from "@/composables/useTimestamps";
 import { trafficFrame, trafficHistoryLimit, usableTrafficSample, type TrafficCounter, type TrafficFrame } from "@/services/traffic";
 import type { Statistics } from "@/types/domain";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
 const selectedInterface = ref("");
@@ -34,7 +36,7 @@ const metrics = [
   { id: "packets", title: "Packets", unit: "packets/s", incoming: "rx_packets", outgoing: "tx_packets" },
 ] as const;
 const visibleMetrics = computed(() => metrics.filter(metric => display.value === "both" || display.value === metric.id));
-const selectionMissing = computed(() => selectedInterface.value !== "" &&
+const selectionMissing = computed(() => Boolean(store.statistics.data) && selectedInterface.value !== "" &&
   !store.statistics.data?.interfaces.some(item => item.name === selectedInterface.value));
 function combinedRate(frame: TrafficFrame, name: string, incoming: TrafficCounter, outgoing: TrafficCounter): number | null {
   const rates = frame.interfaces[name], received = rates?.[incoming], sent = rates?.[outgoing];
@@ -45,6 +47,7 @@ function combinedRate(frame: TrafficFrame, name: string, incoming: TrafficCounte
 const hasRates = computed(() => history.value.some(frame => watchedInterfaces.value.some(name =>
   metrics.some(metric => combinedRate(frame, name, metric.incoming, metric.outgoing) !== null))));
 const sampleNotice = computed(() => {
+  if (isInitialLoad(store.statistics)) return "";
   if (selectionMissing.value) return `Interface ${selectedInterface.value} is no longer available. Select another interface to watch.`;
   const data = store.statistics.data;
   if (!data) return store.statistics.loading ? "Loading interface counters." : "No interface counters available.";
@@ -97,12 +100,12 @@ function options(id: string, unit: string): ApexOptions {
     grid: { borderColor: "#29313d" },
     legend: { position: "top", showForSingleSeries: true },
     xaxis: {
-      type: "datetime", tickAmount: 3, title: { text: "Time (UTC)" },
+      type: "datetime", tickAmount: 3, title: { text: `Time (${timeZone.value})` },
       labels: { datetimeUTC: true, hideOverlappingLabels: true, formatter: (value, timestamp) => formatTimestamp(timestamp ?? Number(value)) },
     },
     yaxis: { min: 0, title: { text: unit }, labels: { formatter: value => rateFormat.format(value) } },
     tooltip: {
-      x: { formatter: value => `${formatTimestamp(value)} UTC` },
+      x: { formatter: value => `${formatTimestamp(value)} ${timeZone.value}` },
       y: { formatter: value => value === null || value === undefined ? "Unavailable" : `${rateFormat.format(value)} ${unit}` },
     },
     noData: { text: "Waiting for traffic samples" },

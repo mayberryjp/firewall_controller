@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
+import { isInitialLoad } from "@/services/datasets";
 import { formatBytes } from "@/services/hostHealth";
 import OverviewWidget from "./OverviewWidget.vue";
 const store = useControllerStore();
@@ -63,7 +64,7 @@ watch(() => [store.statistics.data, store.statistics.stale, store.statistics.err
 function packetChange(name: string, key: string): PacketChange | undefined {
   return isPacket(key) ? changes.value[name]?.[key] : undefined;
 }
-const note = computed(() => store.statistics.error ? "Unavailable" : store.statistics.loading && !store.statistics.data ? "Loading" : store.statistics.stale ? "Stale" : store.statistics.data?.sample.status === "simulated" ? "Simulated" : "");
+const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLoad(store.statistics) ? "" : store.statistics.stale ? "Stale" : store.statistics.data?.sample.status === "simulated" ? "Simulated" : "");
 </script>
 
 <template>
@@ -123,7 +124,7 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
           </td>
         </tr>
       </tbody>
-      <tbody v-else>
+      <tbody v-else-if="!isInitialLoad(store.statistics)">
         <tr>
           <td :colspan="counters.length + 1">
             No interface counters available.

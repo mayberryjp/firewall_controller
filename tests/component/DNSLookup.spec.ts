@@ -128,7 +128,7 @@ describe("DNS server row lookup", () => {
     let finish!: (value: ReturnType<typeof dnsResponse>) => void;
     vi.mocked(api.lookupDNS).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     await setup(); await wrapper.get("button").trigger("click");
-    const store = useControllerStore(); store.state.data = { ...store.state.data!, revision: "1" }; await flushPromises();
+    const store = useControllerStore(); store.state.data = { ...store.state.data!, revision: "2026.10.29.2" }; await flushPromises();
     expect(vi.mocked(api.lookupDNS).mock.calls[0]![1]!.aborted).toBe(true);
     finish(dnsResponse()); await flushPromises();
     expect(wrapper.text()).not.toContain("13 ms");

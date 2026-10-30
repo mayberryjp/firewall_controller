@@ -12,6 +12,7 @@ const props = withDefaults(defineProps<{ seconds?: number | string; description?
 });
 const store = useControllerStore(), router = useRouter();
 const error = ref("");
+const submitting = ref(false);
 const confirmationSeconds = ref<number | string>(120), saveDescription = ref("");
 const pushed = ref<Transaction | null>(null);
 const current = computed(() => pushed.value ? store.transactions.data?.[pushed.value.id] ?? pushed.value : null);
@@ -44,13 +45,15 @@ watch([open, () => current.value?.status, () => store.busy], () => {
   if (open.value && current.value?.status === "committed" && !store.busy) void close();
 });
 async function apply(): Promise<void> {
-  if (!store.canApply || store.editorDirty) return;
+  if (submitting.value || !store.canApply || store.editorDirty) return;
+  submitting.value = true;
   try {
     error.value = "";
     const transaction = await store.apply(Number(props.editOptions ? confirmationSeconds.value : props.seconds), props.editOptions ? saveDescription.value : props.description);
     if (transaction) pushed.value = transaction;
     else error.value = store.actionError || "Push outcome could not be verified. Check Commits before trying again.";
   } catch (failure) { error.value = failure instanceof Error ? failure.message : "Unable to push changes"; }
+  finally { submitting.value = false; }
 }
 async function close(): Promise<void> {
   open.value = false;
@@ -110,6 +113,13 @@ async function close(): Promise<void> {
             {{ current.error }}
           </v-alert>
         </template>
+        <p
+          v-else-if="submitting"
+          role="status"
+          class="mb-3"
+        >
+          Pushing changes...
+        </p>
         <template v-else>
           <p class="mb-4">
             Push all changes, including deletions, to the firewall. This can interrupt network access.
@@ -123,8 +133,15 @@ async function close(): Promise<void> {
           >
             There is unstaged form input. Cancel and stage those edits before pushing.
           </v-alert>
+          <p
+            v-if="!store.diff.length"
+            role="status"
+            class="mb-4"
+          >
+            No changes to apply.
+          </p>
           <v-alert
-            v-if="!store.canApply"
+            v-else-if="!store.canApply"
             type="warning"
             class="mb-4"
           >
@@ -162,6 +179,15 @@ async function close(): Promise<void> {
           class="mb-4 push-diagnostic"
         >
           {{ error }}
+          <v-btn
+            v-if="store.uncertain?.id"
+            :to="`/config/commits/${encodeURIComponent(store.uncertain.id)}`"
+            variant="text"
+            :disabled="store.busy"
+            @click="open = false"
+          >
+            Review transaction
+          </v-btn>
         </v-alert>
         <details
           v-if="monitorFailure"
@@ -191,7 +217,7 @@ async function close(): Promise<void> {
         >
           {{ ['committed', 'rolled_back'].includes(current.status) ? 'Done' : 'Close' }}
         </v-btn>
-        <template v-else>
+        <template v-else-if="!submitting">
           <v-btn
             :disabled="store.busy"
             @click="open = false"

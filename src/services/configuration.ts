@@ -3,8 +3,14 @@ import { configSchema, mqttSchema, blackholeSchema, systemSchema, bgpSchema, typ
 import { decodeJson, utf8Size } from "@/services/json";
 import { normalizeMDNS, validateMDNS } from "@/services/mdns";
 import { validateUDPRelay } from "@/services/udpBroadcastRelay";
+import { sandoSchema } from "@/services/sandoState";
+import { firewallProtocolFamily, parseFirewallPorts, supportsFirewallPorts } from "@/services/firewallProtocols";
 
-export const cloneConfig = (config: Config): Config => JSON.parse(JSON.stringify(config)) as Config;
+export const cloneConfig = (config: Config): Config => {
+  const editable = JSON.parse(JSON.stringify(config)) as Config;
+  delete editable.software;
+  return editable;
+};
 export function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
@@ -17,6 +23,7 @@ export function stableJson(value: unknown): string {
 export function normalize(config: Config): Config {
   const parsed = configSchema.safeParse(config);
   const result = cloneConfig(parsed.success ? parsed.data : config);
+  if (result.sando && stableJson(result.sando) === stableJson(sandoSchema.parse({}))) delete result.sando;
   if (result.ipv6_enabled === true) delete result.ipv6_enabled;
   if (result.mqtt && stableJson(result.mqtt) === stableJson(mqttSchema.parse({}))) delete result.mqtt;
   if (!result.dynamic_dns?.length) delete result.dynamic_dns;
@@ -63,6 +70,11 @@ export function normalize(config: Config): Config {
   for (const rule of [...result.firewall.rules, ...result.firewall.nat.masquerade]) {
     if (!rule.source) delete rule.source;
     if ("destination" in rule && !rule.destination) delete rule.destination;
+  }
+  for (const rule of result.firewall.rules) {
+    if (!rule.protocol) delete rule.protocol;
+    if (rule.destination_ports?.length) rule.destination_ports.sort((a, b) => a - b);
+    else delete rule.destination_ports;
   }
   if (result.firewall.policies) {
     result.firewall.policies.hosts.sort((a, b) => a.id.localeCompare(b.id));
@@ -171,7 +183,7 @@ export function differences(before: Config, after: Config): Difference[] {
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
   named("dynamic_dns", old.dynamic_dns ?? [], next.dynamic_dns ?? [], item => item.name);
-  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "bgp", "udp_broadcast_relay"] as const) {
+  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "bgp", "udp_broadcast_relay", "sando"] as const) {
     if (stableJson(old[area]) !== stableJson(next[area])) result.push({
       area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
     });
@@ -237,7 +249,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     if (!doc.dhcp_clients) delete doc.dhcp_clients;
     if (!doc.dns) delete doc.dns;
     if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
-  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel", "bgp", "udp_broadcast_relay"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
+  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel", "bgp", "udp_broadcast_relay", "sando"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
   else if (change.area === "ipv6") doc.ipv6_enabled = change.after === false ? false : undefined;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
@@ -272,6 +284,11 @@ export function prefix(text: string, network: boolean): { family: string; addres
     throw new Error(`Host bits must be cleared. Review and enter ${suggested.toString()}/${bits}`);
   }
   return { family: address.kind(), address };
+}
+export function policyHostAddress(text: string): ipaddr.IPv4 | ipaddr.IPv6 {
+  const address = numericAddress(text);
+  if (!globalUnicast(address)) throw new Error("Use a canonical unicast host IP, without CIDR, loopback or link-local addresses");
+  return address;
 }
 function globalUnicast(address: ipaddr.IPv4 | ipaddr.IPv6, loopback = false): boolean {
   const bytes = address.toByteArray();
@@ -314,14 +331,27 @@ export function validateServerHost(host: string): void {
     throw new Error("Use canonical unicast/loopback IP or lowercase ASCII DNS labels, no URI, port, zone, whitespace or trailing dot");
   }
 }
-export function endpoint(text: string, collector = false): void {
+function endpointHost(text: string): { host: string; bracketed: boolean } {
   const match = /^(\[[^\]]+\]|[^:]+):([1-9]\d*)$/.exec(text);
-  if (!match?.[1] || !match[2]) throw new Error("Use IP:port; bracket IPv6");
-  const host = match[1].replace(/^\[|\]$/g, "");
-  const address = numericAddress(host);
+  if (!match?.[1] || !match[2]) throw new Error("Use host:port; bracket IPv6");
   if (Number(match[2]) > 65535) throw new Error("Port must be 1..65535");
-  if ((address.kind() === "ipv6") !== match[1].startsWith("[")) throw new Error("Bracket IPv6 only");
+  return { host: match[1].replace(/^\[|\]$/g, ""), bracketed: match[1].startsWith("[") };
+}
+export function endpoint(text: string, collector = false): void {
+  const { host, bracketed } = endpointHost(text);
+  const address = numericAddress(host);
+  if ((address.kind() === "ipv6") !== bracketed) throw new Error("Bracket IPv6 only");
   if (collector && !globalUnicast(address, true)) throw new Error("Collector must be unicast or loopback");
+}
+export function wireguardEndpoint(text: string): void {
+  if (!text) return;
+  const { host, bracketed } = endpointHost(text);
+  if (!bracketed && !ipaddr.isValid(host) && !/^[\d.]+$/.test(host)) {
+    validateServerHost(host);
+    return;
+  }
+  endpoint(text);
+  if (["unspecified", "multicast"].includes(numericAddress(host).range())) throw new Error("WireGuard endpoints must not be unspecified or multicast");
 }
 export interface ValidationIssue { path: string; message: string; page: string }
 export function ipv6Conflicts(config: Config): string[] {
@@ -330,7 +360,7 @@ export function ipv6Conflicts(config: Config): string[] {
     if (Array.isArray(value)) { value.forEach((item, index) => visit(item, `${path}.${index}`)); return; }
     if (value && typeof value === "object") {
       for (const [key, item] of Object.entries(value)) {
-        if (key !== "metadata" && key !== "kernel" && key !== "mqtt") visit(item, path ? `${path}.${key}` : key);
+        if (key !== "metadata" && key !== "kernel" && key !== "mqtt" && key !== "sando" && key !== "software") visit(item, path ? `${path}.${key}` : key);
       }
       return;
     }
@@ -351,6 +381,12 @@ export function ipv6Conflicts(config: Config): string[] {
 }
 export function validateConfig(config: Config, parents: ParentInterface[] = [], baseline?: Config): ValidationIssue[] {
   const issues: ValidationIssue[] = [...validateMDNS(config), ...validateUDPRelay(config)];
+  if (config.sando) {
+    const parsed = sandoSchema.safeParse(config.sando);
+    if (!parsed.success) for (const error of parsed.error.issues) issues.push({
+      path: `sando.${error.path.join(".")}`, message: error.message, page: "/settings/sando",
+    });
+  }
   const issue = (path: string, message: string, page: string) => issues.push({ path, message, page });
   if (config.ipv6_enabled === false) {
     for (const path of ipv6Conflicts(config)) issue(path, "IPv6 is disabled globally. Enable IPv6 in General settings or remove this setting.", "/settings/general");
@@ -609,7 +645,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
           if (bytes.length !== 32 || ![...bytes].some((byte) => byte.charCodeAt(0) !== 0) || btoa(bytes) !== peer.public_key || keys.has(peer.public_key)) throw new Error("Use a unique nonzero base64 32-byte WireGuard public key");
           keys.add(peer.public_key);
         });
-        if (peer.endpoint) check(`${peerPath}.endpoint`, page, () => endpoint(peer.endpoint!));
+        if (peer.endpoint) check(`${peerPath}.endpoint`, page, () => wireguardEndpoint(peer.endpoint!));
         bound(peer.persistent_keepalive_seconds, 0, 65535, `${peerPath}.persistent_keepalive_seconds`, page);
         const own = new Set<string>();
         peer.allowed_ips.forEach((network, j) => check(`${peerPath}.allowed_ips.${j}`, page, () => {
@@ -642,11 +678,20 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     if (routeIDs.has(key)) issue(path, "Duplicate table/destination/metric", page);
     routeIDs.add(key);
   });
+  let legacyExpanded = 0;
   config.firewall.rules.forEach((rule, index) => check(`firewall.rules.${index}`, "/firewall", () => {
+    const protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled !== false);
+    const ports = parseFirewallPorts(rule.destination_ports);
+    if (ports.length && !supportsFirewallPorts(rule.protocol)) throw new Error("Destination ports require TCP or UDP");
+    legacyExpanded += Math.max(1, ports.length);
     const source = rule.source ? prefix(rule.source, true) : undefined;
     const destination = rule.destination ? prefix(rule.destination, true) : undefined;
     if (source && destination && source.family !== destination.family) throw new Error("Source and destination must have the same family");
+    if (protocolFamily && [source, destination].some(network => network && network.family !== protocolFamily)) {
+      throw new Error("Source and destination must match the selected protocol's address family");
+    }
   }));
+  if (legacyExpanded > 4096) issue("firewall.rules", "Legacy rules expand beyond 4096 entries", "/firewall");
   config.firewall.nat.masquerade.forEach((rule, index) => check(`firewall.nat.masquerade.${index}`, "/nat", () => {
     if (rule.source && prefix(rule.source, true).family !== rule.family) throw new Error("Source must match selected family");
     const link = interfaces.get(rule.out_interface);
@@ -691,7 +736,12 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       ingress.rules.forEach((rule, ruleIndex) => {
         const rulePath = `${path}.rules.${ruleIndex}`, ports = rule.destination_ports ?? [];
         expanded += Math.max(1, ports.length);
-        if (rule.destination) check(`${rulePath}.destination`, page, () => { prefix(rule.destination!, true); });
+        let protocolFamily: "ipv4" | "ipv6" | undefined;
+        check(`${rulePath}.protocol`, page, () => { protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled !== false); });
+        if (rule.destination) check(`${rulePath}.destination`, page, () => {
+          const destination = prefix(rule.destination!, true);
+          if (protocolFamily && destination.family !== protocolFamily) throw new Error("Destination must match the selected protocol's address family");
+        });
         if (ports.length > 32 || new Set(ports).size !== ports.length) issue(`${rulePath}.destination_ports`, "Use at most 32 unique destination ports", page);
         if (ports.length && !["tcp", "udp"].includes(rule.protocol ?? "")) issue(`${rulePath}.protocol`, "Destination ports require TCP or UDP", page);
         ports.forEach((port, portIndex) => bound(port, 1, 65535, `${rulePath}.destination_ports.${portIndex}`, page));
@@ -723,8 +773,67 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   });
   if (baseline && stableJson(config.kernel) !== stableJson(baseline.kernel)) issue("kernel", "Kernel settings must be preserved unchanged; this spec does not define a kernel editor", "/config/changes");
   if (config.firewall.policies && config.firewall.rules.length) issue("firewall.rules", "Host/interface policy mode cannot be combined with legacy forwarding rules", "/firewall");
-  if (baseline && stableJson(normalize(config).firewall.policies) !== stableJson(normalize(baseline).firewall.policies)) {
-    issue("firewall.policies", "Host/interface policies are read-only in this controller; preserve them unchanged", "/firewall");
+  const policies = config.firewall.policies;
+  if (policies) {
+    const page = "/firewall", ids = new Set<string>(), hostNames = new Set<string>(), addresses = new Set<string>(), ingressNames = new Set<string>();
+    let expanded = 1;
+    if (policies.hosts.length > 128) issue("firewall.policies.hosts", "At most 128 hosts", page);
+    if (policies.interfaces.length > 32) issue("firewall.policies.interfaces", "At most 32 ingress interfaces", page);
+    policies.hosts.forEach((host, index) => {
+      const path = `firewall.policies.hosts.${index}`;
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(host.id) || ids.has(host.id)) issue(`${path}.id`, "Use a unique host ID of 1..64 letters, digits, underscores or hyphens", page);
+      ids.add(host.id);
+      if (!host.name.trim() || host.name !== host.name.trim() || /\p{Cc}/u.test(host.name) || utf8Size(host.name) > 80 || hostNames.has(host.name)) {
+        issue(`${path}.name`, "Use a unique nonblank name of at most 80 UTF-8 bytes, without outer whitespace or controls", page);
+      }
+      hostNames.add(host.name);
+      if (!host.addresses.length || host.addresses.length > 16) issue(`${path}.addresses`, "Use 1..16 host addresses", page);
+      host.addresses.forEach((address, addressIndex) => check(`${path}.addresses.${addressIndex}`, page, () => {
+        policyHostAddress(address);
+        if (addresses.has(address)) throw new Error("Host addresses must be globally unique");
+        addresses.add(address);
+      }));
+      expanded += host.addresses.length;
+    });
+    const validateRules = (rules: NonNullable<Config["firewall"]["policies"]>["hosts"][number]["rules"], path: string, sources: string[]) => {
+      if (rules.length > 64) issue(path, "At most 64 ordered rules per host/interface", page);
+      rules.forEach((rule, index) => check(`${path}.${index}`, page, () => {
+        const protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled !== false);
+        if (rule.destination && rule.destination_host) throw new Error("Choose a destination host or network, not both");
+        if (rule.out_interface && (!validName(rule.out_interface) || !interfaces.has(rule.out_interface))) throw new Error("Select a managed egress interface");
+        const ports = rule.destination_ports ?? [];
+        if (ports.length > 32 || new Set(ports).size !== ports.length || ports.some(port => !Number.isInteger(port) || port < 1 || port > 65535)) throw new Error("Use at most 32 unique destination ports in 1..65535");
+        if (ports.length && !["tcp", "udp"].includes(rule.protocol ?? "")) throw new Error("Destination ports require TCP or UDP");
+        let destinations = [""];
+        if (rule.destination_host) {
+          const target = policies.hosts.find(host => host.id === rule.destination_host);
+          if (!target) throw new Error("Destination host must exist");
+          destinations = target.addresses;
+        } else if (rule.destination) {
+          prefix(rule.destination, true);
+          destinations = [rule.destination.split("/")[0]!];
+        }
+        let matches = 0;
+        for (const source of sources) for (const destination of destinations) {
+          const sourceFamily = source ? numericAddress(source).kind() : undefined;
+          const destinationFamily = destination ? numericAddress(destination).kind() : undefined;
+          if (protocolFamily && (sourceFamily && sourceFamily !== protocolFamily || destinationFamily && destinationFamily !== protocolFamily)) continue;
+          if (!sourceFamily || !destinationFamily || sourceFamily === destinationFamily) matches++;
+        }
+        if (!matches) throw new Error("Host rule needs a compatible source/destination address family for the selected protocol");
+        expanded += matches * Math.max(1, ports.length);
+      }));
+    };
+    policies.hosts.forEach((host, index) => validateRules(host.rules, `firewall.policies.hosts.${index}.rules`, host.addresses));
+    policies.interfaces.forEach((ingress, index) => {
+      const path = `firewall.policies.interfaces.${index}`;
+      if (!validName(ingress.interface) || ingressNames.has(ingress.interface) ||
+        !interfaces.has(ingress.interface) && !parents.some(parent => parent.name === ingress.interface)) issue(`${path}.interface`, "Select a unique managed or adopted ingress interface", page);
+      ingressNames.add(ingress.interface);
+      validateRules(ingress.rules, `${path}.rules`, [""]);
+    });
+    if (expanded > 4096) issue("firewall.policies", "Host policies expand beyond 4096 entries", page);
+    if (utf8Size(JSON.stringify(normalize(config).firewall.policies)) > 65536) issue("firewall.policies", "Host policy metadata exceeds 65536 bytes", page);
   }
   return issues;
 }
@@ -734,7 +843,7 @@ export function importConfig(text: string): Config {
   const parsed = configSchema.parse(decodeJson(text));
   const unknown = Object.keys(parsed).filter(key => !(key in configSchema.shape));
   if (unknown.length) throw new Error(`Unrecognized configuration key(s): ${unknown.join(", ")}`);
-  return parsed;
+  return cloneConfig(parsed);
 }
 export function requiredPermissions(diff: Difference[]): string[] {
   const permissions = new Set(["transactions.write"]);
@@ -745,7 +854,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write", mdns: "mdns.write",
-    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write", udp_broadcast_relay: "udp_broadcast_relay.write",
+    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write", udp_broadcast_relay: "udp_broadcast_relay.write", sando: "sando.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

@@ -45,7 +45,7 @@ describe("navbar configuration status", () => {
     ["fw-1", ""],
     ["", "home.example.test"],
     ["", ""],
-  ])("does not display hostname %j or domain %j below CONFIG", async (hostname, domain) => {
+  ])("does not display hostname %j or domain %j below the revision", async (hostname, domain) => {
     useControllerStore().state.data!.desired.system = { hostname, domain, timezone: "" };
     const wrapper = await render();
     try {

@@ -2,15 +2,15 @@ import {
   interfaceSchema, routeSchema, filterSchema, masqueradeSchema, softflowdSchema, gatewayMonitorSchema, type Config,
 } from "@/types/domain";
 import type { Section } from "@/services/resourceForms";
-import type { Choice } from "@/types/forms";
+import { formatFirewallProtocol } from "@/services/firewallProtocols";
 
-export function interfaceChoice(link: Pick<Config["interfaces"][number], "name" | "metadata">): Choice {
-  return { title: link.metadata?.display_name ? `${link.metadata.display_name} (${link.name})` : link.name, value: link.name };
+export function interfaceChoice(link: Pick<Config["interfaces"][number], "name" | "metadata">): { title: string; value: string } {
+  return { title: link.metadata?.display_name ? `${link.name} (${link.metadata.display_name})` : link.name, value: link.name };
 }
 
 export const resourceTitles: Record<Section, string> = {
   interfaces: "Physical interfaces", routes: "Static Routes",
-  firewall: "Firewall forwarding", nat: "NAT masquerading", softflowd: "NetFlow/IPFIX", gateway_monitors: "Gateway monitors",
+  firewall: "PROTECTED HOSTS", nat: "NAT masquerading", softflowd: "NetFlow/IPFIX", gateway_monitors: "Gateway monitors",
 };
 export const resourceDescriptions: Record<Section, string> = {
   interfaces: "Administrative up is not carrier/readiness. WAN/LAN/Unassigned roles are descriptive metadata, not automatic NAT/firewall/routing. VLAN identity is immutable. All edits stage into one complete shared draft.",
@@ -23,7 +23,7 @@ export const resourceDescriptions: Record<Section, string> = {
 export const resourceColumns: Record<Section, string[]> = {
   interfaces: ["name", "kind", "role", "up", "mtu", "addresses"],
   routes: ["destination", "interface", "metric"],
-  firewall: ["source", "destination", "action"],
+  firewall: ["source", "destination", "protocol", "destination_ports", "action"],
   nat: ["family", "source", "out_interface"],
   softflowd: ["name", "interface", "collector", "export_version"],
   gateway_monitors: ["name", "interface", "target"],
@@ -44,6 +44,8 @@ export function replaceResourceItems(config: Config, section: Section, values: u
   }
 }
 export function displayResourceValue(value: unknown, key: string): string {
+  if (key === "protocol" && (typeof value === "string" || value === undefined)) return formatFirewallProtocol(value);
+  if (key === "destination_ports" && (value === undefined || value === "" || Array.isArray(value) && !value.length)) return "Any";
   if (value === undefined || value === null || value === "") return ["source", "destination"].includes(key) ? "Any" : key === "gateway" ? "Direct" : "—";
   if (key === "up" && typeof value === "boolean") return value ? "Up" : "Down";
   if (typeof value === "boolean") return value ? "Yes" : "No";

@@ -137,17 +137,27 @@ describe("navbar firewall status", () => {
     const wrapper = status();
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("title")).toBeUndefined();
   });
-  it("shows SAVE before the revision only when there are unsaved changes", async () => {
+  it("keeps only the revision visible while highlighting unsaved changes", async () => {
     const store = useControllerStore(), refresh = vi.spyOn(store, "refresh").mockResolvedValue();
-    store.state.data = { ...state(), revision: "74" };
+    store.state.data = { ...state(), revision: "2026.10.29.75" };
     const wrapper = status();
     expect(wrapper.find('[aria-label="Connected"]').exists()).toBe(false);
     expect(wrapper.findAll("button")).toHaveLength(1);
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("data-to")).toBe("/config/changes");
-    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("R74");
+    const button = wrapper.get('[aria-label="Save configuration"]');
+    expect(button.text()).toBe("R2026.10.29.75");
+    expect(button.attributes("color")).toBeUndefined();
+    expect(button.find(".config-pending").exists()).toBe(false);
     stageDraft();
     await flushPromises();
-    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("SAVE R74");
+    expect(button.text()).toBe("R2026.10.29.75");
+    expect(button.attributes("color")).toBe("warning");
+    expect(button.find(".config-pending").exists()).toBe(true);
+    store.draft = null;
+    await flushPromises();
+    expect(button.text()).toBe("R2026.10.29.75");
+    expect(button.attributes("color")).toBeUndefined();
+    expect(button.find(".config-pending").exists()).toBe(false);
     expect(wrapper.find('[aria-label="Refresh firewall state"]').exists()).toBe(false);
     expect(refresh).not.toHaveBeenCalled();
   });
@@ -192,7 +202,7 @@ describe("navbar firewall status", () => {
     stageDraft();
     const apply = vi.spyOn(useControllerStore(), "apply"), wrapper = status();
     expect(wrapper.findAll("button")).toHaveLength(1);
-    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("SAVE R0");
+    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("R2026.10.29.1");
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("color")).toBe("warning");
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("prepend-icon")).toBe("mdi-content-save-outline");
     await wrapper.get('[aria-label="Save configuration"]').trigger("click");
@@ -203,6 +213,20 @@ describe("navbar firewall status", () => {
   it("does not navigate away from unstaged form input through Save", () => {
     stageDraft(); useControllerStore().editorDirty = true;
     expect(status().get('[aria-label="Save configuration"]').attributes("disabled")).toBeDefined();
+  });
+  it("highlights unstaged input without changing the revision label or enabling navigation", async () => {
+    const store = useControllerStore(), wrapper = status();
+    store.editorDirty = true;
+    await flushPromises();
+    const button = wrapper.get('[aria-label="Save configuration"]');
+    expect(button.text()).toBe("R2026.10.29.1");
+    expect(button.attributes("color")).toBe("warning");
+    expect(button.find(".config-pending").exists()).toBe(true);
+    expect(button.attributes("disabled")).toBeDefined();
+    store.editorDirty = false;
+    await flushPromises();
+    expect(button.find(".config-pending").exists()).toBe(false);
+    wrapper.unmount();
   });
 });
 describe("shared save safety", () => {
@@ -295,6 +319,71 @@ describe("shared save safety", () => {
     await wrapper.setProps({ modelValue: false });
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     wrapper.unmount();
+  });
+  it("shows progress rather than a push blocker while the submitted draft is being settled", async () => {
+    stageDraft();
+    const store = useControllerStore(), committed = { ...transaction(), status: "committed" };
+    let finish!: (result: typeof committed) => void;
+    const apply = vi.spyOn(store, "apply").mockImplementation(() => new Promise(resolve => {
+      finish = resolve;
+      store.busy = true;
+      store.state.stale = true;
+    }));
+    const wrapper = saveDialog();
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Push changes")!.trigger("click");
+      expect(wrapper.get('[role="status"]').text()).toBe("Pushing changes...");
+      expect(wrapper.text()).not.toContain("Push blocked:");
+      expect(wrapper.findAll("button")).toHaveLength(0);
+      store.draft = null; store.baseline = null; store.baseRevision = null;
+      store.state.stale = false; store.busy = false;
+      await flushPromises();
+      expect(wrapper.text()).not.toContain("Push blocked:");
+      expect(wrapper.text()).not.toContain("No changes to apply.");
+      finish(committed);
+      await flushPromises();
+      expect(apply).toHaveBeenCalledOnce();
+      expect(wrapper.text()).not.toContain("Push blocked:");
+      expect(wrapper.emitted("update:modelValue")).toContainEqual([false]);
+      expect(push).toHaveBeenCalledWith(`/config/commits/${committed.id}`);
+    } finally { wrapper.unmount(); }
+  });
+  it("treats an empty draft as a neutral state rather than a blocked push", () => {
+    const wrapper = saveDialog();
+    try {
+      expect(wrapper.get('[role="status"]').text()).toBe("No changes to apply.");
+      expect(wrapper.text()).not.toContain("Push blocked:");
+      expect(wrapper.findAll("button").find(button => button.text() === "Push changes")!.attributes("disabled")).toBeDefined();
+    } finally { wrapper.unmount(); }
+  });
+  it("retains actionable push blockers before submission", () => {
+    stageDraft();
+    useControllerStore().state.error = "Backend unavailable";
+    const wrapper = saveDialog();
+    try {
+      expect(wrapper.text()).toContain("Push blocked: Unable to check the current firewall configuration: Backend unavailable");
+    } finally { wrapper.unmount(); }
+  });
+  it("links a frozen accepted push to its transaction without retrying or confirming", async () => {
+    stageDraft();
+    const store = useControllerStore();
+    const apply = vi.spyOn(store, "apply").mockImplementation(async () => {
+      store.submitted = { config: store.draft!, id: "tx-test" };
+      store.uncertain = { operation: "Apply package", id: "tx-test", priorIDs: [], base: state().revision, startedAt: "2026-10-30T16:00:00Z" };
+      store.actionError = "The backend did not preserve the requested rule ownership labels.";
+      return null;
+    });
+    const lifecycle = vi.spyOn(store, "lifecycle"), wrapper = saveDialog();
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Push changes")!.trigger("click"); await flushPromises();
+      const review = wrapper.findAll("button").find(button => button.text() === "Review transaction")!;
+      expect(review.attributes("data-to")).toBe("/config/commits/tx-test");
+      expect(wrapper.findAll("button").find(button => button.text() === "Push changes")!.attributes("disabled")).toBeDefined();
+      await review.trigger("click");
+      expect(wrapper.emitted("update:modelValue")).toContainEqual([false]);
+      expect(store.uncertain?.id).toBe("tx-test");
+      expect(apply).toHaveBeenCalledOnce(); expect(lifecycle).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
   });
   it("opens results when a delayed status read verifies that the push committed", async () => {
     vi.useFakeTimers(); stageDraft();

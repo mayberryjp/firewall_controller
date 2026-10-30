@@ -84,7 +84,7 @@ describe("restart lifecycle", () => {
     await vi.advanceTimersByTimeAsync(30000);
     expect(api.restartProcess).toHaveBeenCalledExactlyOnceWith("mqtt");
     expect(store.restartNotice).toContain("not completed"); expect(JSON.stringify(store.draft)).toBe(draft);
-    expect(store.state.data!.revision).toBe("0");
+    expect(store.state.data!.revision).toBe("2026.10.29.1");
   });
   it("blocks active transactions, upgrades and uncertain configuration writes", async () => {
     const store = useControllerStore(); store.transactions.data = { "tx-test": transaction() };

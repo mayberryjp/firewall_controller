@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import { computed, onUnmounted, ref, watch, toRef } from "vue";
 import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
@@ -9,6 +9,7 @@ import { cloneConfig, stableJson, validateConfig } from "@/services/configuratio
 import FieldInput from "@/components/base/FieldInput.vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const props = defineProps<{ service: ApplianceService }>();
 const store = useControllerStore();
 const service = toRef(props, "service");
@@ -98,7 +99,7 @@ const hasRuntimeErrors = computed(() => statusRows.value.some(row => row.status?
           <td>{{ name }}</td>
           <td>{{ status?.scope ?? "Unknown" }}</td>
           <td><ServiceWorkerStatus :status="status" /></td>
-          <td :title="status?.started_at ? `Started ${formatTimestamp(status.started_at)} UTC` : undefined">
+          <td :title="status?.started_at ? `Started ${formatTimestamp(status.started_at)} ${timeZone}` : undefined">
             {{ status?.pid ?? "—" }}
           </td>
           <td

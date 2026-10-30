@@ -10,7 +10,7 @@ import HistoryView from "@/views/HistoryView.vue";
 import TransactionsView from "@/views/TransactionsView.vue";
 import TransactionDetailView from "@/views/TransactionDetailView.vue";
 import { useControllerStore } from "@/stores/controller";
-import { gatewayStatistics, statistics, transaction } from "../fixtures";
+import { gatewayStatistics, state, statistics, transaction } from "../fixtures";
 
 const timestamp = "2026-01-02T03:04:05.987+02:00";
 const formatted = "2026-01-02 01:04:05";
@@ -24,10 +24,49 @@ beforeEach(() => { setActivePinia(createPinia()); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe("human-facing timestamp displays", () => {
+  it("reactively uses the saved system timezone in diagnostics, not unsaved drafts", async () => {
+    const store = useControllerStore();
+    store.state.data = state();
+    store.state.data.desired.system = { hostname: "", domain: "", timezone: "America/Los_Angeles" };
+    const original = { collected_at: timestamp, readings: [timestamp] };
+    const wrapper = mount(JsonPanel, { props: { value: original } });
+    expect(wrapper.text()).toContain("Collected at (America/Los_Angeles)");
+    expect(wrapper.text()).toContain("2026-01-01 17:04:05");
+    expect(wrapper.text()).toContain("2026-01-01 17:04:05 America/Los_Angeles");
+    store.draft = { ...store.state.data.desired, system: { hostname: "", domain: "", timezone: "Asia/Kolkata" } };
+    await flushPromises();
+    expect(wrapper.text()).toContain("2026-01-01 17:04:05");
+    store.state.data = { ...store.state.data, desired: { ...store.state.data.desired, system: store.draft.system } };
+    await flushPromises();
+    expect(wrapper.text()).toContain("Collected at (Asia/Kolkata)");
+    expect(wrapper.text()).toContain("2026-01-02 06:34:05");
+    expect(wrapper.text()).not.toContain("UTC");
+    expect(original.collected_at).toBe(timestamp);
+  });
+
+  it("uses the system timezone in gateway detail labels, tooltips, and confirmation deadlines", () => {
+    const store = useControllerStore();
+    store.state.data = state();
+    store.state.data.desired.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
+    store.gatewayStatistics.data = { sample: statistics().sample, monitors: [{ ...gatewayStatistics(), collected_at: timestamp }] };
+    const gateway = mount(GatewayStatisticsPanel, { props: { name: gatewayStatistics().name }, global });
+    expect(gateway.text()).toContain("Measured (Asia/Kolkata)");
+    expect(gateway.text()).toContain("2026-01-02 06:34:05");
+    store.state.stale = true; store.state.lastSuccess = Date.parse(timestamp);
+    const stale = mount(DatasetStatus, { props: { query: store.state, label: "State" }, global });
+    expect(stale.get("p").attributes("title")).toBe("Last read 2026-01-02 06:34:05 Asia/Kolkata");
+    const pending = transaction(); pending.confirmation_deadline = timestamp;
+    const actions = mount(TransactionActions, { props: { transaction: pending }, global });
+    expect(actions.get("time").text()).toBe("2026-01-02 06:34:05");
+    expect(actions.get("time").attributes("datetime")).toBe(timestamp);
+    expect(actions.get("time").attributes("title")).toBe("2026-01-02 06:34:05 Asia/Kolkata");
+  });
+
   it("groups commit results and comment with metadata without duplicate actors or redundant navigation", async () => {
     const store = useControllerStore(), committed = {
       ...transaction("committed"), submitted_at: timestamp, committed_at: timestamp,
-      actor: "operator", committed_by: "operator", description: "Update the office route", restored_from_revision: "0",
+      committed_revision: "2026.10.30.1",
+      actor: "operator", committed_by: "operator", description: "Update the office route", restored_from_revision: "2026.10.29.1",
     };
     vi.spyOn(store, "readTransaction").mockResolvedValue(committed);
     const wrapper = mount(TransactionDetailView, { props: { id: committed.id }, global: { stubs: { ...global.stubs, ConfigDiff: true } } });
@@ -35,8 +74,8 @@ describe("human-facing timestamp displays", () => {
       await flushPromises();
       const metadata = Object.fromEntries(wrapper.findAll(".record-metadata dt").map(label => [label.text(), label.element.nextElementSibling?.textContent?.trim()]));
       expect(metadata).toMatchObject({
-        Status: "committed", "Base revision": "0", "Result revision": "1", Actor: "operator",
-        "Submitted (UTC)": formatted, "Committed (UTC)": formatted, Comment: committed.description, "Restored from": "0",
+        Status: "committed", "Base revision": "2026.10.29.1", "Result revision": "2026.10.30.1", Actor: "operator",
+        "Submitted (UTC)": formatted, "Committed (UTC)": formatted, Comment: committed.description, "Restored from": "2026.10.29.1",
       });
       expect(wrapper.text().split("operator")).toHaveLength(2);
       expect(wrapper.text()).not.toContain("Commit details"); expect(wrapper.text()).not.toContain("All commits");
@@ -146,7 +185,7 @@ describe("human-facing timestamp displays", () => {
     const store = useControllerStore();
     vi.spyOn(store, "refreshRevisions").mockResolvedValue();
     store.revisions.data = [{
-      revision: "1", current: true, submitted_at: timestamp, committed_at: null,
+      revision: "2026.10.29.2", current: true, submitted_at: timestamp, committed_at: null,
     }];
     const wrapper = mount(HistoryView, { global });
     expect(wrapper.text()).toContain("Submitted (UTC)");
@@ -154,6 +193,19 @@ describe("human-facing timestamp displays", () => {
     expect(wrapper.get("tbody").text()).toContain(formatted);
     expect(wrapper.get("tbody").text()).toContain("—");
     expect(wrapper.text()).not.toContain(timestamp);
+  });
+
+  it("keeps the full commit hash on one line in push requests", () => {
+    const store = useControllerStore();
+    const hash = "0123456789abcdef0123456789abcdef01234567";
+    vi.spyOn(store, "refreshRevisions").mockResolvedValue();
+    store.revisions.data = [{
+      revision: "2026.10.29.2", transaction_id: hash,
+    }];
+    const wrapper = mount(HistoryView, { global });
+    const link = wrapper.get(`tbody [to="/config/commits/${hash}"]`);
+    expect(link.text()).toBe(hash);
+    expect(link.classes()).toContain("text-no-wrap");
   });
 
   it("formats commit listings without rewriting their API timestamps", () => {

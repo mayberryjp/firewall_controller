@@ -21,8 +21,11 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/gateway-monitors", name: "gateway-monitors", component: () => import("@/views/GatewayMonitorsView.vue") },
     { path: "/routing/bgp", name: "bgp", component: () => import("@/views/BGPView.vue") },
     { path: "/routing/bgp/peers", name: "bgp-peers", component: () => import("@/views/BGPView.vue"), props: { mode: "peers" } },
+    { path: "/routing/bgp/routes", name: "bgp-routes", component: () => import("@/views/BGPRoutesView.vue") },
+    { path: "/diagnostics/bgp-routes", redirect: { name: "bgp-routes" } },
   ],
   "firewall-section": [
+    { path: "/firewall/ingress", name: "firewall-ingress", component: () => import("@/views/FirewallIngressView.vue") },
     { path: "/firewall", name: "firewall", component: () => import("@/views/FirewallView.vue") },
     { path: "/firewall/input", name: "firewall-input", component: () => import("@/views/FirewallInputView.vue") },
     { path: "/connections", name: "connections", component: () => import("@/views/ConnectionsView.vue") },
@@ -47,7 +50,7 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/services/maintenance", name: "service-maintenance", component: () => import("@/views/ServiceMaintenanceView.vue") },
   ],
   "diagnostics-section": [
-    { path: "/diagnostics/bgp-routes", name: "bgp-routes", component: () => import("@/views/BGPRoutesView.vue") },
+    { path: "/diagnostics/firewall-drops", name: "firewall-drops", component: () => import("@/views/FirewallDropsView.vue") },
     { path: "/diagnostics/traffic", name: "real-time-traffic", component: () => import("@/views/RealTimeTrafficView.vue") },
     { path: "/diagnostics/process-health", name: "process-health", component: () => import("@/views/ProcessHealthView.vue") },
     { path: "/diagnostics/interface-drops", name: "interface-drops", component: () => import("@/views/InterfaceDropsView.vue") },
@@ -60,12 +63,17 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "settings-section": [
     { path: "/settings/general", name: "settings-general", component: () => import("@/views/SettingsView.vue") },
+    { path: "/settings/sando", name: "settings-sando", component: () => import("@/views/SandoView.vue") },
+    { path: "/settings/advanced", name: "settings-advanced", component: () => import("@/views/AdvancedSettingsView.vue") },
+    { path: "/settings/upgrade", name: "settings-upgrade", redirect: { name: "config-upgrade" } },
     { path: "/settings/mqtt-streaming", name: "settings-mqtt-streaming", component: () => import("@/views/HomeAssistantView.vue") },
     { path: "/settings/home-assistant", redirect: { name: "settings-mqtt-streaming" } },
     { path: "/settings/dynamic-dns", name: "settings-dynamic-dns", component: () => import("@/views/DynamicDnsView.vue") },
   ],
   "config-section": [
+    { path: "/config/upgrade", name: "config-upgrade", component: () => import("@/views/UpgradeView.vue") },
     { path: "/config/changes", name: "changes", component: () => import("@/views/ChangesView.vue") },
+    { path: "/config/editor", name: "config-editor", component: () => import("@/views/ConfigEditorView.vue") },
     { path: "/config/commits", name: "commits", component: () => import("@/views/TransactionsView.vue") },
     { path: "/config/commits/:id", name: "transaction-detail", component: () => import("@/views/TransactionDetailView.vue"), props: true, meta: { navigationPage: "commits" } },
     { path: "/config/revisions", name: "history", component: () => import("@/views/HistoryView.vue") },

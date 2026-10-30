@@ -4,8 +4,10 @@ import VueApexCharts from "vue3-apexcharts";
 import type { ApexOptions } from "apexcharts";
 import { useControllerStore } from "@/stores/controller";
 import { cpuUsage, formatBytes, formatUptime, usagePercent, type HostHealth } from "@/services/hostHealth";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
+import { isInitialLoad } from "@/services/datasets";
 import OverviewWidget from "./OverviewWidget.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const store = useControllerStore(), cpu = ref<number | null>(null);
 let previous: HostHealth | null = null;
 watch(() => [store.hostHealth.data, store.hostHealth.stale, store.hostHealth.error] as const, ([value, stale, error]) => {
@@ -14,8 +16,8 @@ watch(() => [store.hostHealth.data, store.hostHealth.stale, store.hostHealth.err
 }, { immediate: true });
 onMounted(() => { if (store.connected && document.visibilityState !== "hidden") void store.refreshHostHealth(); });
 const snapshot = computed(() => store.hostHealth.data);
-const note = computed(() => store.hostHealth.error ? (snapshot.value ? "Stale" : "Unavailable") : store.hostHealth.loading && !snapshot.value ? "Loading" : store.hostHealth.stale ? "Stale" : snapshot.value?.sample.status === "simulated" ? "Simulated" : snapshot.value?.sample.status === "partial" ? "Partial" : undefined);
-const detail = computed(() => store.hostHealth.error ?? (snapshot.value ? `${snapshot.value.sample.scope} | Collected (UTC): ${formatTimestamp(snapshot.value.sample.collected_at)}` : undefined));
+const note = computed(() => store.hostHealth.error ? (snapshot.value ? "Stale" : "Unavailable") : isInitialLoad(store.hostHealth) ? undefined : store.hostHealth.stale ? "Stale" : snapshot.value?.sample.status === "simulated" ? "Simulated" : snapshot.value?.sample.status === "partial" ? "Partial" : undefined);
+const detail = computed(() => store.hostHealth.error ?? (snapshot.value ? `${snapshot.value.sample.scope} | Collected (${timeZone.value}): ${formatTimestamp(snapshot.value.sample.collected_at)}` : undefined));
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const rows = computed(() => {
   const sections = snapshot.value?.sections;
@@ -65,12 +67,12 @@ const chartOptions = computed<ApexOptions>(() => ({
   theme: { mode: "dark" }, colors: ["#4a90d9", "#2ec4a0", "#f5a623"],
   stroke: { width: 2, curve: "straight" }, markers: { size: 2 }, grid: { borderColor: "#29313d" },
   xaxis: {
-    type: "datetime", tickAmount: 2, title: { text: "Time (UTC)" },
+    type: "datetime", tickAmount: 2, title: { text: `Time (${timeZone.value})` },
     labels: { datetimeUTC: true, hideOverlappingLabels: true, formatter: (value, timestamp) => formatTimestamp(timestamp ?? Number(value)) },
   },
   yaxis: { title: { text: selectedRow.value?.chart?.unit }, labels: { formatter: value => number.format(value) } },
   tooltip: {
-    x: { formatter: value => `${formatTimestamp(value)} UTC` },
+    x: { formatter: value => `${formatTimestamp(value)} ${timeZone.value}` },
     y: { formatter: value => value === null || value === undefined ? "Unavailable" : `${number.format(value)} ${selectedRow.value?.chart?.unit ?? ""}` },
   },
   noData: { text: "Waiting for resource samples" },
@@ -156,7 +158,7 @@ function color(value: number | null): string {
         />
       </div>
       <p
-        v-if="!series.some(item => item.data.some(point => point.y !== null))"
+        v-if="!isInitialLoad(store.hostHealth) && !series.some(item => item.data.some(point => point.y !== null))"
         role="status"
         class="text-medium-emphasis"
       >

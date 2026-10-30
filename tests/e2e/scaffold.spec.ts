@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { mockBackend } from "./mockBackend";
-import { config, gatewayStatistics, monitor, statistics, connections, healthSnapshot, runtime } from "../fixtures";
+import { config, gatewayStatistics, monitor, statistics, connections, healthSnapshot, runtime, hostPolicyConfig, transaction } from "../fixtures";
 import { navigationSections } from "../../src/constants/navigation";
 
 async function signInToRegistry(page: Page): Promise<void> {
@@ -105,7 +105,7 @@ test("committed downloads exclude staged changes and retain drafts on archive er
     reads++;
     return route.fulfill({ status: unavailable ? 503 : 200, contentType: "application/json", body: JSON.stringify(unavailable
       ? { error: "Archive unavailable", transaction: null }
-      : { revision: "18446744073709551615", current: true, submitted_at: null, committed_at: null, config: committed }) });
+      : { revision: "2026.10.29.4294967295", current: true, submitted_at: null, committed_at: null, config: committed }) });
   });
   await connect(page); await navigate(page, "Static Routes");
   await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
@@ -119,7 +119,7 @@ test("committed downloads exclude staged changes and retain drafts on archive er
   const downloading = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download committed configuration", exact: true }).click();
   const download = await downloading;
-  expect(download.suggestedFilename()).toBe("netcontrol-config-r18446744073709551615.json");
+  expect(download.suggestedFilename()).toBe("netcontrol-config-r2026.10.29.4294967295.json");
   expect(JSON.parse(await readFile((await download.path())!, "utf8"))).toEqual(committed);
   expect(reads).toBe(1);
   unavailable = true;
@@ -165,7 +165,20 @@ test("overview layout supports moving, hiding, restoring and registry persistenc
   const backend = await mockBackend(page);
   await connect(page);
   const customize = page.getByRole("button", { name: "Customize layout", exact: true });
+  await expect(customize).toBeEnabled();
+  const header = await page.locator(".app-header").boundingBox();
+  const dashboard = await page.locator(".overview-dashboard").boundingBox();
+  const pencil = await customize.boundingBox();
+  expect(header).not.toBeNull();
+  expect(dashboard).not.toBeNull();
+  expect(pencil).not.toBeNull();
+  const topGap = dashboard!.y - (header!.y + header!.height);
+  expect(topGap).toBeGreaterThanOrEqual(0);
+  expect(topGap).toBeLessThanOrEqual(16);
+  expect(pencil!.y).toBeGreaterThanOrEqual(dashboard!.y + dashboard!.height);
+  await page.screenshot({ path: testInfo.outputPath("compact-overview.png"), fullPage: true, animations: "disabled" });
   await customize.click();
+  await expect(page.getByRole("button", { name: "Save layout", exact: true })).toBeInViewport();
   await page.getByRole("button", { name: "Move Gateways up", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(page.locator('[data-column="0"] [data-widget]').first()).toHaveAttribute("data-widget", "gateways");
@@ -291,7 +304,7 @@ test("refresh discovery stays off the page and failures retain the fixed-size co
   const healthy = (await bubble.boundingBox())!;
   expect(healthy.width).toBe(healthy.height); expect(healthy.width).toBeLessThanOrEqual(40);
   releaseRead();
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R0");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
   failed = true;
   await page.clock.fastForward(6000);
   await expect(bubble).toHaveAttribute("aria-label", "Read failed");
@@ -455,7 +468,7 @@ test("navbar tooltips appear once with readable contrast on hover and keyboard f
     expect(await control.getAttribute("title")).toBeNull();
     const description = await control.getAttribute("aria-describedby");
     await expect(tooltip).toHaveAttribute("id", description!);
-    await expect(tooltip).toContainText("Committed revision 0");
+    await expect(tooltip).toContainText("Committed revision 2026.10.29.1");
     await expect(tooltip).toContainText("Review and save configuration: 0 changed entities");
     const contrast = await tooltip.locator(".v-overlay__content").evaluate(element => {
       const style = getComputedStyle(element);
@@ -478,7 +491,31 @@ test("navbar tooltips appear once with readable contrast on hover and keyboard f
   await page.keyboard.press("Shift+Tab");
   await expect(controls[0]!).toBeFocused();
   await expect(tooltip).toHaveCount(1);
-  await expect(tooltip).toHaveText("Committed revision 0; Review and save configuration: 0 changed entities");
+  await expect(tooltip).toHaveText("Committed revision 2026.10.29.1; Review and save configuration: 0 changed entities");
+});
+
+test("INTERFACE RULES is the first Firewall/NAT page with selectable ordered rules", async ({ page }) => {
+  const initial = hostPolicyConfig();
+  initial.firewall.policies!.interfaces.push({ interface: "wan0", rules: [
+    { destination_host: "server", protocol: "tcp", destination_ports: [443], action: "accept" },
+  ] });
+  const backend = await mockBackend(page, { initialConfig: initial });
+  await connect(page);
+  await openNavigation(page);
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Firewall/NAT", exact: true }).click();
+  await expect(page).toHaveURL(/\/firewall\/ingress$/);
+  const navigation = page.getByRole("navigation", { name: "Firewall/NAT pages" });
+  await expect(navigation.getByRole("tab").first()).toHaveText("INTERFACE RULES");
+  const region = page.getByRole("region", { name: "INTERFACE RULES", exact: true });
+  await expect(region.locator(".rule-value")).toHaveText(["1", "203.0.113.99/32", "Any", "Any", "Any", "drop"]);
+  await region.locator(".v-select .v-field").click();
+  await page.getByRole("option", { name: "wan0", exact: true }).click();
+  await expect(region.locator(".rule-value")).toHaveText(["1", "Server", "TCP", "443", "Any", "accept"]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await navigation.getByRole("tab", { name: "PROTECTED HOSTS", exact: true }).click();
+  await expect(page).toHaveURL(/\/firewall$/);
+  await expect(page.getByRole("navigation", { name: "Hosts", exact: true })).toBeVisible();
+  expect(backend.writes).toHaveLength(0);
 });
 
 test("top navigation opens routed sections in the black reference theme", async ({ page, isMobile }, testInfo) => {
@@ -515,7 +552,7 @@ test("top navigation opens routed sections in the black reference theme", async 
       if (await expand.isVisible()) await expand.click();
       await pages.getByRole("tab", { name: entry.title, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-      if (entry.name === "connections" && !isMobile) await expect(pages.getByRole("tab")).toHaveCount(0);
+      if (["connections", "firewall"].includes(entry.name) && !isMobile) await expect(pages.getByRole("tab")).toHaveCount(0);
       else await expect(pages.getByRole("tab", { name: entry.title, exact: true })).toHaveAttribute("aria-current", "page");
     }
   }
@@ -735,8 +772,8 @@ test("section pages support direct detail links and browser history", async ({ p
   await page.goto("/services/netflow/capture");
   await expect(page.getByRole("heading", { name: "capture", exact: true })).toBeVisible();
   await navigate(page, "PUSH REQUESTS");
-  await page.locator(".section-content").getByRole("link", { name: "0", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Revision 0", exact: true })).toBeVisible();
+  await page.locator(".section-content").getByRole("link", { name: "2026.10.29.1", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Revision 2026.10.29.1", exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Config pages" }).getByRole("tab", { name: "PUSH REQUESTS", exact: true })).toHaveAttribute("aria-current", "page");
 });
 
@@ -765,40 +802,24 @@ test("connection deletion requires distinct targeted and unfiltered namespace co
   expect(backend.writes[1]).toEqual({ path: "/connections", body: { confirm: true } });
 });
 
-test("signed self-upgrade confirms the canonical version and configured repository", async ({ page }, testInfo) => {
-  await mockBackend(page);
-  const writes: unknown[] = [];
-  const job = { id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
-  await page.route("**/proxy/system/upgrade", route => {
-    if (route.request().method() === "POST") {
-      writes.push(route.request().postDataJSON());
-      return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify(job) });
-    }
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: true, repository: "operator/appliance", job: writes.length ? job : null, last_successful_version: null }) });
-  });
-  await connect(page); await page.goto("/services/maintenance");
-  await page.getByLabel("Version", { exact: true }).fill("v1.2.3");
-  await expect(page.getByRole("button", { name: "Upgrade", exact: true })).toBeDisabled();
-  const longestVersion = `1.2.3-${"a".repeat(74)}`;
-  await page.getByLabel("Version", { exact: true }).fill(longestVersion);
-  await page.getByRole("button", { name: "Upgrade", exact: true }).click();
-  await expect(page.getByRole("dialog").getByText(`Upgrade to ${longestVersion}?`, { exact: true })).toBeVisible();
-  expect(await page.getByRole("dialog").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+test("upgrade discovery stays compact with long versions", async ({ page }, testInfo) => {
+  const longestVersion = "9999.12.31.4294967295";
+  const backend = await mockBackend(page, { initialConfig: { ...config(), software: {
+    version: "2026.10.29.1", repository: "operator/appliance", latest_version: longestVersion,
+    update_available: true, last_checked_at: "2026-10-29T23:00:01.123456789Z", error: null,
+  } } });
+  await connect(page); await page.goto("/config/upgrade");
+  const upgrade = page.getByRole("region", { name: "System upgrade", exact: true });
+  await expect(upgrade.getByRole("status")).toHaveText(`Update available: ${longestVersion}`);
+  await expect(upgrade.getByRole("button")).toHaveCount(1);
+  await expect(upgrade.getByRole("button", { name: "Check for upgrade", exact: true })).toBeEnabled();
+  await expect(upgrade.getByRole("textbox")).toHaveCount(0);
+  await expect(upgrade).toContainText("2026-10-29 23:00:01");
+  await expect(upgrade).not.toContainText("Repository");
   await page.screenshot({ path: testInfo.outputPath("upgrade-long-version.png"), fullPage: true, animations: "disabled" });
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.getByLabel("Version", { exact: true }).fill("1.2.3");
-  await page.getByRole("button", { name: "Upgrade", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("operator/appliance");
-  await expect(page.getByRole("dialog")).toContainText("interrupt management connectivity");
-  expect(writes).toHaveLength(0);
-  await page.screenshot({ path: testInfo.outputPath("upgrade-confirmation.png"), fullPage: true, animations: "disabled" });
-  await page.getByRole("button", { name: "Install upgrade", exact: true }).click();
-  await expect.poll(() => writes.length).toBe(1); expect(writes[0]).toEqual({ version: "1.2.3" });
+  expect(backend.writes).toEqual([]);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "System upgrade", exact: true })).toContainText("upgrade-1: queued");
-  await expect(page.getByRole("button", { name: "Upgrade", exact: true })).toBeDisabled();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("upgrade-status.png"), fullPage: true, animations: "disabled" });
 });
 
 test("connections viewer filters and pages read-only snapshots with exact counters", async ({ page, isMobile }, testInfo) => {
@@ -1378,13 +1399,13 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   const backend = await mockBackend(page);
   await connect(page);
   await expect(page.getByRole("button", { name: "Connected", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R0");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
   await navigate(page, "Static Routes");
   await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
   await page.getByLabel("Metric", { exact: true }).fill("42");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   expect(backend.writes).toHaveLength(0);
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("SAVE R0");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("navbar-status.png"), fullPage: false, animations: "disabled" });
   expect(await page.getByRole("banner").getByRole("link", { name: "Modan モダン", exact: true }).evaluate(element => {
@@ -1410,14 +1431,14 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   await page.screenshot({ path: testInfo.outputPath("confirm-in-push-dialog.png"), fullPage: true, animations: "disabled" });
   expect(backend.writes.filter(write => write.path === "/transactions")).toHaveLength(1);
   expect(backend.writes[0]?.body).toMatchObject({
-    base_revision: "0", description: "Update office route", config: { routes: [{ table: 254, metric: 42 }], interfaces: [{ name: "lab0" }], softflowd: [{ name: "capture" }], kernel: { namespace: { "net.ipv4.tcp_syncookies": "1" } } },
+    base_revision: "2026.10.29.1", description: "Update office route", config: { routes: [{ table: 254, metric: 42 }], interfaces: [{ name: "lab0" }], softflowd: [{ name: "capture" }], kernel: { namespace: { "net.ipv4.tcp_syncookies": "1" } } },
   });
   expect(backend.writes.some(write => write.path.endsWith("/confirm"))).toBe(false);
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
   await expect(page.getByRole("region", { name: "Commit detail", exact: true })).toContainText("committed");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R1");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.2");
   expect(backend.writes.filter(write => write.path.endsWith("/confirm"))).toHaveLength(1);
   expect(await page.evaluate(() => Object.values(localStorage))).toEqual(["11111111-1111-4111-8111-111111111111"]);
   expect(await page.evaluate(() => sessionStorage.length)).toBe(0);
@@ -1443,7 +1464,7 @@ test("unknown write outcomes are frozen and never automatically replayed", async
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test("only overview polls operational data while background health remains independent", async ({ page }) => {
+test("commit details monitor transactions while operational polling stays page scoped", async ({ page }) => {
   await page.clock.install();
   await mockBackend(page, { initialStatus: "pending_confirmation" });
   await connect(page);
@@ -1457,7 +1478,9 @@ test("only overview polls operational data while background health remains indep
       !request.url().includes("/system/upgrade") && !request.url().includes("/platform/status")) reads.push(new URL(request.url()).pathname);
   });
   await page.clock.fastForward(20000);
-  expect(reads).toHaveLength(0);
+  await expect.poll(() => reads.some(path => path.endsWith("/state"))).toBe(true);
+  await expect.poll(() => reads.some(path => path.endsWith("/transactions"))).toBe(true);
+  expect(reads.every(path => path.endsWith("/state") || path.endsWith("/transactions"))).toBe(true);
   await refreshTransaction.click();
   await expect.poll(() => reads.filter(path => path.endsWith("/transactions/tx-test")).length).toBe(1);
   await expect(refreshTransaction).toBeEnabled();
@@ -1521,8 +1544,8 @@ test("ICMP false is staged explicitly and preserved with host/interface policy m
   const initial = config(); initial.firewall.rules = []; initial.firewall.policies = { hosts: [], interfaces: [] };
   const backend = await mockBackend(page, { initialConfig: initial });
   await connect(page);
-  await navigate(page, "Firewall forwarding");
-  await expect(page.getByRole("main")).toContainText("Host/interface policy mode is active");
+  await navigate(page, "PROTECTED HOSTS");
+  await expect(page.getByRole("main")).toContainText("No hosts with policies.");
   await expect(page.getByLabel("Allow all IPv4 ICMP", { exact: true })).toHaveCount(0);
   await navigate(page, "General");
   await page.getByLabel("Allow all IPv4 ICMP", { exact: true }).uncheck();
@@ -1554,23 +1577,25 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   ] };
   const backend = await mockBackend(page, { initialConfig: initial });
   await connect(page);
-  await navigate(page, "Host input");
-  const input = page.getByRole("region", { name: "Host input", exact: true });
-  await expect(input).toContainText("established/related");
-  await expect(input).toContainText("DHCP client");
+  await navigate(page, "Firewall destined");
+  const input = page.getByRole("region", { name: "Firewall destined", exact: true });
+  await expect(input.getByText("Est./related", { exact: true })).toBeVisible();
+  await expect(input.getByText("Loopback", { exact: true })).toBeVisible();
   await expect(input).not.toContainText("IPv4 ICMP is accepted first");
   await navigate(page, "Static Routes");
   await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
   await page.getByLabel("Metric", { exact: true }).fill("42");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await navigate(page, "Host input");
-  await page.getByRole("button", { name: "Edit input policy", exact: true }).click();
-  await page.getByLabel("Destination ports", { exact: true }).first().fill("68\n67");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await navigate(page, "Firewall destined");
+  await input.getByRole("button", { name: "Edit rule 1", exact: true }).click();
+  await input.getByLabel("Destination ports (comma separated)", { exact: true }).fill("68, 67");
+  await input.getByRole("button", { name: "Save rule", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
   await expect(input).toContainText("68, 67");
-  expect((await input.locator("tbody tr").first().boundingBox())!.height).toBeLessThanOrEqual(80);
-  expect(await input.getByRole("cell", { name: "68, 67 · DHCP client", exact: true }).evaluate(element => getComputedStyle(element).whiteSpace)).toBe("nowrap");
+  if (!testInfo.project.name.includes("mobile")) {
+    expect((await input.locator(".host-rule").first().boundingBox())!.height).toBeLessThanOrEqual(44);
+    expect(await input.locator(".host-rule .rule-action .v-chip__content").first().evaluate(element => getComputedStyle(element).whiteSpace)).toBe("nowrap");
+  }
   expect(backend.writes).toHaveLength(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("host-input.png"), fullPage: true, animations: "disabled" });
@@ -1599,16 +1624,16 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R1");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toContainText("R2026.10.29.2");
 });
 
 test("removing host input requires visible protection review and no immediate write", async ({ page }) => {
   const initial = config(); initial.firewall.input = { policy: "drop", interfaces: [] };
   const backend = await mockBackend(page, { initialConfig: initial });
-  await connect(page); await navigate(page, "Host input");
+  await connect(page); await navigate(page, "Firewall destined");
   await page.getByRole("button", { name: "Edit input policy", exact: true }).click();
   await page.getByLabel("Input filtering", { exact: true }).uncheck();
-  await expect(page.getByRole("dialog")).toContainText("Removing input filtering removes host protection, including WAN protection");
+  await expect(page.getByRole("main")).toContainText("Removing input filtering removes host protection, including WAN protection");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("main")).toContainText("No host input filter configured");
   await navigate(page, "SAVE");
@@ -1926,6 +1951,52 @@ test("gateway metric chips show four quality bands without changing monitor heal
   await page.screenshot({ path: testInfo.outputPath("overview-gateway-metric-colors.png"), fullPage: true, animations: "disabled" });
 });
 
+test("commit hashes, statuses, submitted times and base revisions stay on one line without overflowing the page", async ({ page }) => {
+  const backend = await mockBackend(page, { initialStatus: "committed" });
+  const commitId = "0123456789abcdef".repeat(4);
+  await page.route("**/proxy/transactions", route => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ [commitId]: { ...transaction("committed"), id: commitId } }),
+  }));
+  await connect(page);
+  await page.goto("/config/commits");
+  const status = page.getByRole("region", { name: "Commits", exact: true }).getByRole("cell", { name: "committed", exact: true });
+  await expect(status).toBeVisible();
+  await expect(status).toHaveCSS("white-space", "nowrap");
+  expect(await status.evaluate(cell => {
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    return range.getClientRects().length;
+  })).toBe(1);
+  const revision = status.locator("..").locator("td").nth(4);
+  const hash = status.locator("..").getByRole("link", { name: commitId, exact: true });
+  await expect(hash).toHaveCSS("white-space", "nowrap");
+  expect(await hash.evaluate(link => {
+    const range = document.createRange();
+    range.selectNodeContents(link);
+    return range.getClientRects().length;
+  })).toBe(1);
+  await expect(page.getByRole("columnheader", { name: "Base revision", exact: true })).toHaveCSS("white-space", "nowrap");
+  await expect(revision).not.toBeEmpty();
+  await expect(revision).toHaveCSS("white-space", "nowrap");
+  expect(await revision.evaluate(cell => {
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    return range.getClientRects().length;
+  })).toBe(1);
+  const submitted = status.locator("..").locator("td").nth(3);
+  await expect(page.getByRole("columnheader", { name: /^Submitted \(/ })).toHaveCSS("white-space", "nowrap");
+  await expect(submitted).not.toBeEmpty();
+  await expect(submitted).toHaveCSS("white-space", "nowrap");
+  expect(await submitted.evaluate(cell => {
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    return range.getClientRects().length;
+  })).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(backend.writes).toEqual([]);
+});
+
 test("operational pages keep content compact with readable details", async ({ page }, testInfo) => {
   const backend = await mockBackend(page, { initialStatus: "committed" });
   await connect(page);
@@ -1944,8 +2015,8 @@ test("operational pages keep content compact with readable details", async ({ pa
       await page.screenshot({ path: testInfo.outputPath(`${entry.name}-compact.png`), fullPage: true, animations: "disabled" });
     }
   }
-  await page.getByRole("main").getByRole("link", { name: "0", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Revision 0", exact: true })).toBeVisible();
+  await page.getByRole("main").getByRole("link", { name: "2026.10.29.1", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Revision 2026.10.29.1", exact: true })).toBeVisible();
   await expect(page.locator("details").filter({ has: page.getByText("Configuration", { exact: true }) })).not.toHaveAttribute("open");
   await page.screenshot({ path: testInfo.outputPath("revision-compact.png"), fullPage: true, animations: "disabled" });
   await navigate(page, "Commits");
@@ -2048,8 +2119,11 @@ test("VLANs have a dedicated route while Interfaces edits physical behavior only
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
   await expect(page.getByRole("main").getByRole("link", { name: "vlan30", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("main").getByRole("cell", { name: "vlan30", exact: true })).toBeVisible();
-  const created = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "vlan30", exact: true }) });
+  await expect(page.getByRole("main").getByRole("cell", { name: "vlan30 LAN", exact: true })).toBeVisible();
+  const created = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "vlan30 LAN", exact: true }) });
+  await expect(created.locator(".vlan-role")).toHaveText("LAN");
+  expect(await created.locator(".vlan-role").evaluate(element =>
+    parseFloat(getComputedStyle(element).fontSize) < parseFloat(getComputedStyle(element.parentElement!).fontSize))).toBe(true);
   await created.getByRole("button", { name: "Edit / stage", exact: true }).click();
   await page.getByLabel("IPv4 addresses / prefixes", { exact: true }).fill("10.30.0.1/24");
   expect(await page.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);

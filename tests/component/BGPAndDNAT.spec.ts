@@ -10,6 +10,7 @@ import * as api from "@/services/netcontrol";
 import { ApiFailure } from "@/services/api";
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
 import { state } from "../fixtures";
+import { dragRule } from "../dragRule";
 
 const field = {
   props: ["modelValue", "disabled", "label", "items"], emits: ["update:modelValue"],
@@ -225,7 +226,9 @@ describe("focused inline BGP and DNAT management", () => {
     await wrapper.get('[aria-label="Edit DNAT rule 2"]').trigger("click");
     await input("Port").setValue("5353"); await button("Save").trigger("click"); await flushPromises();
     expect(store.draft!.firewall.nat.destination_rewrite![1]!.destination_port).toBe(5353);
-    await wrapper.get('[aria-label="Move DNAT rule 2 up"]').trigger("click"); await flushPromises();
+    expect(wrapper.find('button[aria-label^="Move DNAT rule"]').exists()).toBe(false);
+    await dragRule(wrapper.get('[aria-label="Drag DNAT rule 2"]'), wrapper.get('[data-rule-index="0"]').element, "touch");
+    await flushPromises();
     expect(store.draft!.firewall.nat.destination_rewrite![0]!.destination_port).toBe(5353);
     await wrapper.get('[aria-label="Delete DNAT rule 1"]').trigger("click"); await flushPromises();
     expect(store.draft!.firewall.nat.destination_rewrite).toEqual([{ ...original, destination_port: 54 }]);

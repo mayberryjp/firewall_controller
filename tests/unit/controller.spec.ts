@@ -4,14 +4,14 @@ import { ApiFailure } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
-import { config, state, transaction, runtime, statistics } from "../fixtures";
+import { config, state, transaction, runtime, statistics, software, vnstatReporting } from "../fixtures";
 vi.mock("@/services/netcontrol", () => ({
   getState: vi.fn(), getRuntime: vi.fn(), getTransactions: vi.fn(), getTransaction: vi.fn(),
   getStatistics: vi.fn(), getGatewayStatistics: vi.fn(), getRevisions: vi.fn(), getRevision: vi.fn(),
   submitPackage: vi.fn(), confirmTransaction: vi.fn(), rollbackTransaction: vi.fn(),
   restoreRevision: vi.fn(), reconcileServices: vi.fn(),
-  getSystemUpgrade: vi.fn(), startSystemUpgrade: vi.fn(),
-  getPlatformStatus: vi.fn(),
+  getSystemUpgrade: vi.fn(), startSystemUpgrade: vi.fn(), checkSoftwareRelease: vi.fn(),
+  getPlatformStatus: vi.fn(), getVnStatReporting: vi.fn(),
 }));
 beforeEach(() => {
   setActivePinia(createPinia()); vi.resetAllMocks();
@@ -29,7 +29,113 @@ async function connected() {
   await store.refresh();
   return store;
 }
+describe("manual software release checks", () => {
+  async function ready(repository: string | null = "operator/appliance") {
+    const snapshot = state();
+    snapshot.desired.software = { ...software(), repository, last_checked_at: "2026-10-29T00:00:00Z", update_available: false };
+    vi.mocked(api.getState).mockResolvedValue(snapshot);
+    vi.mocked(api.checkSoftwareRelease).mockResolvedValue({ status: "check_requested" });
+    return connected();
+  }
+  it("checks the backend's default repository even without an installation manager", async () => {
+    const store = await ready("mayberryjp/firewall_backend");
+    expect(store.upgrade.data).toMatchObject({ enabled: false, repository: null });
+    await store.checkSoftwareRelease();
+    expect(api.checkSoftwareRelease).toHaveBeenCalledTimes(1); expect(store.softwareCheckPending).toBe(true);
+    expect(store.softwareCheckError).toBe("");
+    expect(store.state.data!.desired.software!.repository).toBe("mayberryjp/firewall_backend");
+    expect(api.startSystemUpgrade).not.toHaveBeenCalled(); store.$dispose();
+  });
+  it("honors explicitly disabled discovery even when installation is enabled", async () => {
+    const store = await ready(null);
+    store.upgrade.data = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    await store.checkSoftwareRelease();
+    expect(api.checkSoftwareRelease).not.toHaveBeenCalled(); expect(store.softwareCheckPending).toBe(false);
+    expect(store.softwareCheckError).toContain("release checking enabled"); store.$dispose();
+  });
+  it("submits once, waits for a new timestamp even after a stale read, and preserves drafts and revisions", async () => {
+    const store = await ready();
+    const draft = cloneConfig(store.state.data!.desired); draft.routes[0]!.metric = 42; store.stage(draft);
+    const before = cloneConfig(store.draft!);
+    await store.checkSoftwareRelease(); await store.checkSoftwareRelease();
+    expect(api.checkSoftwareRelease).toHaveBeenCalledTimes(1);
+    expect(store.softwareCheckPending).toBe(true);
+    store.state.stale = true;
+    vi.mocked(api.getState).mockResolvedValue({ ...store.state.data!, desired: {
+      ...store.state.data!.desired, software: { ...store.state.data!.desired.software!, last_checked_at: "2026-10-30T00:00:00Z" },
+    } });
+    await store.refreshState();
+    expect(store.softwareCheckPending).toBe(false); expect(store.softwareCheckNotice).toBe("Release check completed.");
+    expect(store.draft).toEqual(before); expect(store.state.data!.revision).toBe(state().revision);
+    expect(api.submitPackage).not.toHaveBeenCalled(); expect(api.startSystemUpgrade).not.toHaveBeenCalled();
+    store.$dispose();
+  });
+  it("surfaces the saved discovery error, not a successful no-update result", async () => {
+    const store = await ready(); await store.checkSoftwareRelease();
+    store.state.data = { ...store.state.data!, desired: { ...store.state.data!.desired,
+      software: { ...store.state.data!.desired.software!, last_checked_at: "2026-10-30T00:00:00Z", error: "GitHub unavailable", latest_version: null, update_available: null },
+    } };
+    expect(store.softwareCheckPending).toBe(false); expect(store.softwareCheckError).toBe("GitHub unavailable");
+    expect(store.softwareCheckNotice).toBe(""); store.$dispose();
+  });
+  it.each([
+    [new ApiFailure("Already running", 409), "already queued"],
+    [new ApiFailure("Request lost", undefined, undefined, true), "uncertain"],
+  ])("waits without resubmitting after %s", async (failure, text) => {
+    const store = await ready(); vi.mocked(api.checkSoftwareRelease).mockRejectedValue(failure);
+    await store.checkSoftwareRelease(); await store.checkSoftwareRelease();
+    expect(store.softwareCheckPending).toBe(true); expect(store.softwareCheckNotice).toContain(text);
+    expect(api.checkSoftwareRelease).toHaveBeenCalledTimes(1); store.$dispose();
+  });
+  it.each([[403, "permission"], [404, "does not support"], [405, "does not support"], [503, "worker is unavailable"], [400, "Bad request"], [401, "Bad request"]])("distinguishes HTTP %i", async (status, text) => {
+    const store = await ready(); vi.mocked(api.checkSoftwareRelease).mockRejectedValue(new ApiFailure("Bad request", status, undefined, status === 503));
+    await store.checkSoftwareRelease();
+    expect(store.softwareCheckPending).toBe(false); expect(store.softwareCheckError).toContain(text);
+    expect(store.softwareCheckDenied).toBe(status === 403);
+    if (status === 403) { await store.checkSoftwareRelease(); expect(api.checkSoftwareRelease).toHaveBeenCalledTimes(1); }
+    store.$dispose();
+  });
+  it("times out uncertain after 60 seconds and only retries explicitly", async () => {
+    const store = await ready(); vi.useFakeTimers();
+    try {
+      await store.checkSoftwareRelease(); await vi.advanceTimersByTimeAsync(60_000);
+      expect(store.softwareCheckPending).toBe(false); expect(store.softwareCheckError).toContain("unknown after 60 seconds");
+      expect(api.checkSoftwareRelease).toHaveBeenCalledTimes(1);
+      await store.checkSoftwareRelease(); expect(api.checkSoftwareRelease).toHaveBeenCalledTimes(2);
+    } finally { store.$dispose(); vi.useRealTimers(); }
+  });
+  it("does not let a timed-out POST overwrite a later explicit attempt", async () => {
+    const store = await ready(); vi.useFakeTimers();
+    try {
+      let finish!: (value: { status: "check_requested" }) => void;
+      vi.mocked(api.checkSoftwareRelease).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const first = store.checkSoftwareRelease(); await vi.advanceTimersByTimeAsync(60_000);
+      await store.checkSoftwareRelease(); const notice = store.softwareCheckNotice;
+      finish({ status: "check_requested" }); await first;
+      expect(store.softwareCheckPending).toBe(true); expect(store.softwareCheckNotice).toBe(notice);
+    } finally { store.$dispose(); vi.useRealTimers(); }
+  });
+  it("stops waiting when the connection changes", async () => {
+    const store = await ready(); await store.checkSoftwareRelease(); store.disconnect();
+    expect(store.softwareCheckPending).toBe(false); expect(store.softwareCheckError).toContain("unknown");
+    store.$dispose();
+  });
+});
 describe("independent reads and complete shared draft", () => {
+  it("loads vnStat reporting independently and preserves editing when reporting becomes unavailable", async () => {
+    const store = await connected();
+    const candidate = config(); candidate.ntp.servers = ["clock.example"]; store.stage(candidate);
+    vi.mocked(api.getVnStatReporting).mockResolvedValue(vnstatReporting());
+    await Promise.all([store.refreshVnStatReporting(), store.refreshVnStatReporting()]);
+    expect(api.getVnStatReporting).toHaveBeenCalledTimes(1);
+    expect(store.vnstatReporting.data).toEqual(vnstatReporting()); expect(store.vnstatReporting.stale).toBe(false);
+    vi.mocked(api.getVnStatReporting).mockRejectedValue(new ApiFailure("Accounting unavailable", 503));
+    await store.refreshVnStatReporting();
+    expect(store.vnstatReporting.stale).toBe(true); expect(store.vnstatReporting.error).toContain("Accounting unavailable");
+    expect(store.vnstatReporting.data).toEqual(vnstatReporting());
+    expect(store.draft!.ntp.servers).toEqual(["clock.example"]); expect(store.readOnlyReason).toBe("");
+    store.disconnect(); expect(store.vnstatReporting.data).toBeNull(); store.$dispose();
+  });
   it("keeps configuration writable while MQTT is reconnecting", async () => {
     const processHealth = {
       status: "unhealthy", healthy: false, collected_at: "2026-10-29T00:00:00Z", stale: false,
@@ -160,12 +266,12 @@ describe("independent reads and complete shared draft", () => {
   });
   it("does not let a status read started before acceptance replace the accepted upgrade job", async () => {
     const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
-    const job = { id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
+    const job = { id: "upgrade-1", version: "2026.10.29.2", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
     vi.mocked(api.getSystemUpgrade).mockResolvedValue(available);
     let finishWrite!: (value: typeof job) => void, finishRead!: (value: typeof available) => void;
     vi.mocked(api.startSystemUpgrade).mockImplementation(() => new Promise(resolve => { finishWrite = resolve; }));
     const store = await connected();
-    const submission = store.startUpgrade("1.2.3", "operator/appliance");
+    const submission = store.startUpgrade("2026.10.29.2", "operator/appliance");
     await vi.waitFor(() => expect(api.startSystemUpgrade).toHaveBeenCalledTimes(1));
     vi.mocked(api.getSystemUpgrade).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
     const read = store.refreshUpgrade();
@@ -177,34 +283,34 @@ describe("independent reads and complete shared draft", () => {
   it("refuses an upgrade if its operator-configured repository changed after confirmation", async () => {
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ enabled: true, repository: "operator/changed", job: null, last_successful_version: null });
     const store = await connected();
-    await expect(store.startUpgrade("1.2.3", "operator/original")).rejects.toThrow("repository changed");
+    await expect(store.startUpgrade("2026.10.29.2", "operator/original")).rejects.toThrow("repository changed");
     expect(api.startSystemUpgrade).not.toHaveBeenCalled(); expect(store.upgradePending).toBe(false);
   });
   it("preserves drafts, blocks active upgrades and refreshes state after a terminal job", async () => {
     const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
-    const job = { id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
+    const job = { id: "upgrade-1", version: "2026.10.29.2", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
     vi.mocked(api.getSystemUpgrade).mockResolvedValue(available);
     vi.mocked(api.startSystemUpgrade).mockResolvedValue(job);
     const store = await connected();
     const candidate = config(); candidate.routes[0]!.metric = 42; store.stage(candidate);
-    await store.startUpgrade("1.2.3", "operator/appliance");
+    await store.startUpgrade("2026.10.29.2", "operator/appliance");
     expect(store.readOnlyReason).toBe(""); expect(store.draft?.routes[0]?.metric).toBe(42);
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "recovery_required" } });
     await expect(store.checkMaintenance()).rejects.toThrow("console recovery");
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "rolled_back" } });
-    const changed = state(); changed.revision = "1"; vi.mocked(api.getState).mockResolvedValue(changed);
+    const changed = state(); changed.revision = "2026.10.29.2"; vi.mocked(api.getState).mockResolvedValue(changed);
     await store.refreshUpgrade();
-    expect(store.upgradeBlockedReason).toBe(""); expect(store.state.data?.revision).toBe("1");
+    expect(store.upgradeBlockedReason).toBe(""); expect(store.state.data?.revision).toBe("2026.10.29.2");
     expect(store.draft?.routes[0]?.metric).toBe(42); expect(store.draftStale).toBe(true);
     expect(api.submitPackage).not.toHaveBeenCalled();
   });
   it("reconciles an uncertain upgrade by job identity without resubmitting and detects supersession", async () => {
     const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
-    const job = { id: "upgrade-1", version: "1.2.3", status: "checking", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
+    const job = { id: "upgrade-1", version: "2026.10.29.2", status: "checking", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
     vi.mocked(api.getSystemUpgrade).mockResolvedValue(available);
     vi.mocked(api.startSystemUpgrade).mockRejectedValue(new ApiFailure("disconnected", undefined, undefined, true));
     const store = await connected();
-    await expect(store.startUpgrade("1.2.3", "operator/appliance")).rejects.toThrow("disconnected");
+    await expect(store.startUpgrade("2026.10.29.2", "operator/appliance")).rejects.toThrow("disconnected");
     expect(store.upgradeUncertain).toBe(true);
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job }); await store.refreshUpgrade();
     expect(store.acceptedUpgradeID).toBe("upgrade-1"); expect(store.upgradeUncertain).toBe(false);
@@ -242,7 +348,7 @@ describe("independent reads and complete shared draft", () => {
     const candidate = cloneConfig(store.state.data!.desired);
     candidate.routes[0]!.metric = 12; store.stage(candidate);
     const next = cloneConfig(store.draft!); next.firewall.policy = "drop"; store.stage(next);
-    expect(store.baseRevision).toBe("0");
+    expect(store.baseRevision).toBe("2026.10.29.1");
     expect(store.draft?.softflowd).toEqual(config().softflowd);
     expect(store.draft?.kernel).toEqual(config().kernel);
     expect(store.diff.some(item => item.area === "routes")).toBe(true);
@@ -251,9 +357,9 @@ describe("independent reads and complete shared draft", () => {
   });
   it("marks stale after an external revision change without rebasing", async () => {
     const store = await connected(); const candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
-    vi.mocked(api.getState).mockResolvedValue({ ...state(), revision: "1" });
+    vi.mocked(api.getState).mockResolvedValue({ ...state(), revision: "2026.10.29.2" });
     await store.refreshState();
-    expect(store.draftStale).toBe(true); expect(store.baseRevision).toBe("0"); expect(store.canApply).toBe(false);
+    expect(store.draftStale).toBe(true); expect(store.baseRevision).toBe("2026.10.29.1"); expect(store.canApply).toBe(false);
   });
   it("does not overlap an in-flight read", async () => {
     const store = await connected();
@@ -283,25 +389,53 @@ describe("independent reads and complete shared draft", () => {
   });
   it("caches immutable revision configs for session comparison and clears caches on disconnect", async () => {
     const store = await connected();
-    const history = { revision: "0", current: true, submitted_at: null, committed_at: null, config: config() };
+    const history = { revision: "2026.10.29.1", current: false, submitted_at: null, committed_at: null, config: config() };
     vi.mocked(api.getRevision).mockResolvedValue(history);
-    await store.loadRevision("0"); await store.compareRevision("0");
+    await store.loadRevision("2026.10.29.1"); await store.compareRevision("2026.10.29.1");
     expect(api.getRevision).toHaveBeenCalledOnce();
     expect(store.comparisonRevision.data?.config).toEqual(history.config);
     store.disconnect();
     expect(store.comparisonRevision.data).toBeNull();
-    await store.connect("11111111-1111-4111-8111-111111111111"); await store.loadRevision("0");
+    await store.connect("11111111-1111-4111-8111-111111111111"); await store.loadRevision("2026.10.29.1");
     expect(api.getRevision).toHaveBeenCalledTimes(2);
   });
   it("ignores older revision detail reads when the selected revision changes", async () => {
     const store = await connected();
     let complete: ((value: { revision: string; current: boolean; submitted_at: null; committed_at: null; config: ReturnType<typeof config> }) => void) | undefined;
     vi.mocked(api.getRevision).mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
-    const first = store.loadRevision("0");
-    vi.mocked(api.getRevision).mockResolvedValueOnce({ revision: "1", current: true, submitted_at: null, committed_at: null, config: config() });
-    await store.loadRevision("1");
-    complete?.({ revision: "0", current: false, submitted_at: null, committed_at: null, config: config() }); await first;
-    expect(store.revisionDetail.data?.revision).toBe("1");
+    const first = store.loadRevision("2026.10.29.1");
+    vi.mocked(api.getRevision).mockResolvedValueOnce({ revision: "2026.10.29.2", current: true, submitted_at: null, committed_at: null, config: config() });
+    await store.loadRevision("2026.10.29.2");
+    complete?.({ revision: "2026.10.29.1", current: false, submitted_at: null, committed_at: null, config: config() }); await first;
+    expect(store.revisionDetail.data?.revision).toBe("2026.10.29.2");
+  });
+  it("keeps daily software changes out of drafts and refreshes current revision metadata", async () => {
+    const store = await connected();
+    const candidate = config(); candidate.routes[0]!.metric = 42;
+    store.stage({ ...candidate, software: state().desired.software });
+    const savedDraft = cloneConfig(store.draft!), savedBase = store.baseRevision, savedDiff = JSON.stringify(store.diff);
+    const updated = state();
+    updated.desired.software = {
+      ...updated.desired.software!, repository: "operator/appliance", latest_version: "2026.10.29.10",
+      update_available: true, last_checked_at: "2026-10-29T23:00:00.123456Z",
+    };
+    vi.mocked(api.getState).mockResolvedValue(updated);
+    await store.refreshState();
+    expect(store.draft).toEqual(savedDraft); expect(store.draft).not.toHaveProperty("software");
+    expect(store.baseRevision).toBe(savedBase); expect(store.draftStale).toBe(false); expect(JSON.stringify(store.diff)).toBe(savedDiff);
+    const history = { revision: updated.revision, current: true, submitted_at: null, committed_at: null, config: updated.desired };
+    vi.mocked(api.getRevision).mockResolvedValue(history);
+    await store.loadRevision(history.revision); await store.compareRevision(history.revision);
+    expect(api.getRevision).toHaveBeenCalledTimes(2);
+    expect(store.comparisonRevision.data?.config.software).toEqual(updated.desired.software);
+  });
+  it.each(["2026.10.29.1", "2026.10.28.99", "2026.10.29.9"])("rejects upgrade %s at or below running or last successful software", async version => {
+    const store = await connected();
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue({
+      enabled: true, repository: "operator/appliance", job: null, last_successful_version: "2026.10.29.9",
+    });
+    await expect(store.startUpgrade(version, "operator/appliance")).rejects.toThrow("newer than both");
+    expect(api.startSystemUpgrade).not.toHaveBeenCalled();
   });
 });
 describe("provisional transaction safety", () => {
@@ -338,7 +472,7 @@ describe("provisional transaction safety", () => {
     // Discovery before submit must have no active transaction.
     vi.mocked(api.getTransactions).mockResolvedValueOnce({});
     await store.apply(120, " route change ");
-    expect(store.state.data?.revision).toBe("0"); expect(store.submitted?.id).toBe(pending.id);
+    expect(store.state.data?.revision).toBe("2026.10.29.1"); expect(store.submitted?.id).toBe(pending.id);
     expect(store.canApply).toBe(false); expect(api.confirmTransaction).not.toHaveBeenCalled();
     expect(api.submitPackage).toHaveBeenCalledWith(expect.objectContaining({ config: candidate, description: "route change" }));
     expect(() => store.stage(config())).toThrow("frozen");
@@ -380,7 +514,7 @@ describe("provisional transaction safety", () => {
     vi.mocked(api.getTransactions).mockResolvedValueOnce({}).mockResolvedValue({ [failure.id]: failure });
     await store.apply(120, "");
     expect(store.transactions.data?.[failure.id]).toMatchObject({ id: failure.id, status: outcome, error: cause });
-    expect(store.actionError).toBe(cause); expect(store.draft).toEqual(candidate); expect(store.baseRevision).toBe("0");
+    expect(store.actionError).toBe(cause); expect(store.draft).toEqual(candidate); expect(store.baseRevision).toBe("2026.10.29.1");
     await store.refresh(); expect(api.submitPackage).toHaveBeenCalledOnce();
   });
   it("a 403 preserves the draft and reports the action instead of claiming success", async () => {
@@ -424,14 +558,14 @@ describe("provisional transaction safety", () => {
     vi.mocked(api.submitPackage).mockResolvedValue(transaction());
     await store.apply(120, ` ${"é".repeat(512)} `); expect(api.submitPackage).toHaveBeenCalledOnce();
   });
-  it("uses historical restore revision 0 and blocks restore with an unsaved draft", async () => {
+  it("uses historical date revisions and blocks restore with an unsaved draft", async () => {
     const store = await connected(); store.stage(config());
-    await expect(store.restore("0", 120, "")).rejects.toThrow("no draft");
+    await expect(store.restore("2026.10.29.1", 120, "")).rejects.toThrow("no draft");
     store.discardDraft();
-    vi.mocked(api.getRevision).mockResolvedValue({ revision: "0", current: true, submitted_at: null, committed_at: null, config: config() });
+    vi.mocked(api.getRevision).mockResolvedValue({ revision: "2026.10.29.1", current: true, submitted_at: null, committed_at: null, config: config() });
     vi.mocked(api.restoreRevision).mockResolvedValue(transaction());
-    await store.restore("0", 120, "");
-    expect(api.restoreRevision).toHaveBeenCalledWith("0", { base_revision: "0", confirm_timeout_seconds: 120, description: "" });
+    await store.restore("2026.10.29.1", 120, "");
+    expect(api.restoreRevision).toHaveBeenCalledWith("2026.10.29.1", { base_revision: "2026.10.29.1", confirm_timeout_seconds: 120, description: "" });
     expect(api.submitPackage).not.toHaveBeenCalled();
   });
   it("reconcile uses stored state and leaves an unsent draft unchanged", async () => {
@@ -439,7 +573,7 @@ describe("provisional transaction safety", () => {
     vi.mocked(api.reconcileServices).mockResolvedValue(runtime());
     await store.reconcile();
     expect(api.reconcileServices).toHaveBeenCalledWith("softflowd");
-    expect(store.draft).toEqual(candidate); expect(store.state.data?.revision).toBe("0");
+    expect(store.draft).toEqual(candidate); expect(store.state.data?.revision).toBe("2026.10.29.1");
   });
   it("clears the submitted draft only after a verified commit and fresh desired state", async () => {
     const store = await connected(), candidate = config(); candidate.routes[0]!.metric = 2; store.stage(candidate);
@@ -453,7 +587,7 @@ describe("provisional transaction safety", () => {
     vi.mocked(api.getState).mockRejectedValueOnce(new ApiFailure("temporarily unavailable", 503));
     await store.refreshTransactions();
     expect(store.draft).not.toBeNull();
-    vi.mocked(api.getState).mockResolvedValue({ ...state(), revision: "1", desired: candidate });
+    vi.mocked(api.getState).mockResolvedValue({ ...state(), revision: "2026.10.29.2", desired: candidate });
     await store.refreshTransactions();
     expect(store.draft).toBeNull(); expect(store.submitted).toBeNull();
     expect(store.notice).toBeNull();
@@ -465,7 +599,7 @@ describe("provisional transaction safety", () => {
     vi.mocked(api.submitPackage).mockResolvedValue(rolledBack);
     vi.mocked(api.getTransactions).mockResolvedValue({ [rolledBack.id]: rolledBack });
     await store.apply(120, "");
-    expect(store.draft).toEqual(candidate); expect(store.submitted).toBeNull(); expect(store.baseRevision).toBe("0");
+    expect(store.draft).toEqual(candidate); expect(store.submitted).toBeNull(); expect(store.baseRevision).toBe("2026.10.29.1");
     expect(store.notice).toContain("Server verified rollback");
   });
   it("a rejected 401 releases an unsubmitted snapshot but preserves the draft", async () => {

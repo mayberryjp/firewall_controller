@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { getOverviewLayout, saveOverviewLayout } from "@/services/registry";
 import { copyOverviewLayout, defaultOverviewLayout, overviewWidgetIds, type OverviewWidgetId } from "@/services/overviewLayout";
@@ -10,6 +10,7 @@ import OverviewGateways from "@/components/feature/OverviewGateways.vue";
 import OverviewWireGuard from "@/components/feature/OverviewWireGuard.vue";
 import OverviewBGP from "@/components/feature/OverviewBGP.vue";
 const store = useControllerStore();
+const overview = ref<HTMLElement | null>(null);
 const widgets = {
   interfaces: { title: "Interfaces", component: OverviewInterfaces },
   gateways: { title: "Gateways", component: OverviewGateways },
@@ -32,9 +33,11 @@ async function loadLayout() {
     layoutError.value = `Could not load the shared overview layout. ${error instanceof Error ? error.message : String(error)}`;
   } finally { loadingLayout.value = false; }
 }
-function customize() {
+async function customize() {
   draft.value = copyOverviewLayout(layout.value);
   editing.value = true; layoutNotice.value = ""; layoutError.value = "";
+  await nextTick();
+  overview.value?.scrollIntoView({ block: "start" });
 }
 function cancel() {
   editing.value = false; dragging.value = null; layoutError.value = "";
@@ -88,37 +91,32 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
 </script>
 
 <template>
-  <section aria-label="Overview">
-    <div class="overview-heading">
+  <section
+    ref="overview"
+    class="overview-page"
+    aria-label="Overview"
+  >
+    <div
+      v-if="editing"
+      class="overview-heading"
+    >
       <v-btn
-        v-if="!editing"
-        icon="mdi-pencil-outline"
+        color="primary"
+        size="small"
+        :loading="saving"
+        :disabled="saving"
+        @click="saveLayout"
+      >
+        Save layout
+      </v-btn>
+      <v-btn
         variant="text"
         size="small"
-        aria-label="Customize layout"
-        title="Customize layout"
-        :disabled="loadingLayout || !layoutLoaded"
-        @click="customize"
-      />
-      <template v-else>
-        <v-btn
-          color="primary"
-          size="small"
-          :loading="saving"
-          :disabled="saving"
-          @click="saveLayout"
-        >
-          Save layout
-        </v-btn>
-        <v-btn
-          variant="text"
-          size="small"
-          :disabled="saving"
-          @click="cancel"
-        >
-          Cancel
-        </v-btn>
-      </template>
+        :disabled="saving"
+        @click="cancel"
+      >
+        Cancel
+      </v-btn>
     </div>
     <v-alert
       v-if="layoutError"
@@ -269,10 +267,26 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
         </p>
       </div>
     </div>
+    <div
+      v-if="!editing"
+      class="overview-footer"
+    >
+      <v-btn
+        icon="mdi-pencil-outline"
+        variant="text"
+        size="small"
+        aria-label="Customize layout"
+        title="Customize layout"
+        :disabled="loadingLayout || !layoutLoaded"
+        @click="customize"
+      />
+    </div>
   </section>
 </template>
 
 <style scoped>
+.overview-page { scroll-margin-top: calc(var(--v-layout-top, 64px) + 16px); }
+.overview-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
 .overview-heading { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 8px; }
 .layout-settings { margin-bottom: 16px; font-size: 13px; color: var(--text-secondary); }
 .layout-restore { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

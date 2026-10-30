@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { config, runtime } from "../fixtures";
+import { bgpConfig, bgpRoutes } from "../bgpFixtures";
 
 test("overview lists WireGuard peer endpoints and metrics without overflowing or changing configuration", async ({ page }, testInfo) => {
   const initialConfig = config();
@@ -40,5 +41,47 @@ test("overview lists WireGuard peer endpoints and metrics without overflowing or
   await widget.screenshot({ path: testInfo.outputPath("overview-wireguard.png"), animations: "disabled" });
   await widget.getByRole("link", { name: "Open WireGuard" }).click();
   await expect(page.getByRole("region", { name: "WireGuard peers", exact: true })).toContainText("1.23 MB");
+  expect(backend.writes).toHaveLength(0);
+});
+
+test("WireGuard details display installed BGP additions read-only and remove withdrawn networks", async ({ page }) => {
+  const initialConfig = bgpConfig(), publicKey = btoa("\x01".repeat(32)), routes = bgpRoutes();
+  initialConfig.interfaces.push({
+    name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: ["10.20.0.1/24"],
+    dhcp_relay: { enabled: false, servers: [] },
+    wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [{
+      public_key: publicKey, allowed_ips: ["10.20.0.0/24"], persistent_keepalive_seconds: 25,
+    }] },
+  });
+  Object.assign(initialConfig.bgp!.neighbors[0]!, {
+    interface: "wg0", wireguard_public_key: publicKey, local_address: "10.20.0.1", address: "10.20.0.2",
+  });
+  const learned = { ...routes.routes[0]!, prefix: "198.51.101.0/24", interface: "wg0", installed: true, reason: null };
+  routes.routes = [learned, { ...learned, prefix: "203.0.113.0/24", installed: false, reason: "wireguard_static_peer_overlap" }];
+  const backend = await mockBackend(page, { initialConfig });
+  let reads = 0;
+  await page.route("**/proxy/routes/bgp", route => {
+    reads++;
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(routes) });
+  });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await page.goto("/wireguard");
+  await page.getByRole("button", { name: /^Details for wg0 peer/ }).click();
+  const details = page.locator(".peer-details");
+  await expect(details.locator(".configured-networks")).toHaveText("10.20.0.0/24 (Configured)");
+  await expect(details.locator(".learned-network")).toHaveText("198.51.101.0/24 BGP learned from remote (read-only)");
+  await expect(details).not.toContainText("203.0.113.0/24");
+  await expect(details.locator(".learned-network").locator("input, textarea, button")).toHaveCount(0);
+  await page.getByRole("button", { name: /^Edit peer/ }).click();
+  await expect(page.getByLabel("Allowed networks (comma separated)")).toHaveValue("10.20.0.0/24");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  routes.routes = [];
+  await expect(details.locator(".learned-network")).toHaveCount(0, { timeout: 10000 });
+  expect(reads).toBeGreaterThanOrEqual(2);
   expect(backend.writes).toHaveLength(0);
 });

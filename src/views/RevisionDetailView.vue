@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import { useControllerStore } from "@/stores/controller";
 import { revisionSchema } from "@/types/domain";
 import { useConfigExport } from "@/composables/useConfigExport";
@@ -9,6 +9,7 @@ import { differences, requiredPermissions } from "@/services/configuration";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const props = defineProps<{ revision: string }>();
 const store = useControllerStore(), router = useRouter();
 const id = computed(() => props.revision);
@@ -70,10 +71,10 @@ async function restore(): Promise<void> {
         </p>
         <dl class="record-metadata">
           <template v-if="detail.submitted_at">
-            <dt>Submitted (UTC)</dt><dd>{{ formatTimestamp(detail.submitted_at) }}<span v-if="detail.submitted_by"> · {{ detail.submitted_by }}</span></dd>
+            <dt>Submitted ({{ timeZone }})</dt><dd>{{ formatTimestamp(detail.submitted_at) }}<span v-if="detail.submitted_by"> · {{ detail.submitted_by }}</span></dd>
           </template>
           <template v-if="detail.committed_at">
-            <dt>Committed (UTC)</dt><dd>{{ formatTimestamp(detail.committed_at) }}<span v-if="detail.committed_by"> · {{ detail.committed_by }}</span></dd>
+            <dt>Committed ({{ timeZone }})</dt><dd>{{ formatTimestamp(detail.committed_at) }}<span v-if="detail.committed_by"> · {{ detail.committed_by }}</span></dd>
           </template>
         </dl>
         <p v-if="detail.restored_from_revision !== undefined">
@@ -156,7 +157,7 @@ async function restore(): Promise<void> {
       <v-card :title="`Restore revision ${id} provisionally`">
         <v-card-text>
           <p class="mb-4">
-            Review the complete replacement/deletion impact. Historical key files may be unavailable and current restrictions still apply. Revision 0 may remove all owned resources.
+            Review the complete replacement/deletion impact. Historical key files may be unavailable and current restrictions still apply. Restoring an early revision may remove owned resources.
             Networking may be disrupted; intermediate states are visible. The clock starts before the response; explicit confirmation and out-of-band access may be necessary.
           </p>
           <ConfigDiff

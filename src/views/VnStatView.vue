@@ -1,19 +1,20 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
-import { isApplianceStatus, vnstatSchema } from "@/types/domain";
+import { vnstatSchema } from "@/types/domain";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
 const settings = computed(() => selected.value?.vnstat);
-const reportError = computed(() => store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === "vnstat")?.last_report_error);
+const reporting = computed(() => store.vnstatReporting.data);
 const hasRow = computed(() => Boolean(settings.value?.enabled || settings.value?.collector));
 const blocked = computed(() => Boolean(store.readOnlyReason) || !selected.value);
 const editing = ref(false), creating = ref(false), collector = ref(""), initial = ref(""), snapshot = ref(""), error = ref("");
 watch(collector, () => { if (editing.value) store.editorDirty = collector.value !== initial.value; }, { flush: "sync" });
 onUnmounted(() => { store.editorDirty = false; });
+onMounted(() => { void store.refreshVnStatReporting(); });
 function open(): void {
   creating.value = !hasRow.value;
   collector.value = settings.value?.collector ?? "";
@@ -74,7 +75,34 @@ function remove(): void {
       {{ error }}
     </p>
     <v-table class="collector-table">
-      <thead><tr><th>Collector</th><th>Enabled</th><th>Actions</th></tr></thead>
+      <thead>
+        <tr>
+          <th scope="col">
+            Collector
+          </th>
+          <th scope="col">
+            Enabled
+          </th>
+          <th
+            scope="col"
+            title="Appliance-local date of the last reporting attempt, including failed sends; not confirmed delivery."
+          >
+            Last report
+          </th>
+          <th
+            scope="col"
+            title="Datagrams accepted by the local socket; UDP delivery is not confirmed."
+          >
+            Sent
+          </th>
+          <th scope="col">
+            Failed
+          </th>
+          <th scope="col">
+            Actions
+          </th>
+        </tr>
+      </thead>
       <tbody>
         <tr
           v-if="editing"
@@ -92,6 +120,10 @@ function remove(): void {
             />
           </td>
           <td />
+          <td
+            colspan="3"
+            class="reporting-placeholder"
+          />
           <td class="actions">
             <v-btn
               size="small"
@@ -113,6 +145,7 @@ function remove(): void {
         <tr v-else-if="hasRow">
           <td>{{ settings?.collector ?? "Accounting only" }}</td>
           <td>
+            <span class="compact-cell-label">Enabled</span>
             <v-switch
               :model-value="settings?.enabled"
               aria-label="Enable vnStat"
@@ -122,6 +155,18 @@ function remove(): void {
               :disabled="blocked"
               @update:model-value="toggle(Boolean($event))"
             />
+          </td>
+          <td title="Appliance-local attempt date, including failed sends; not confirmed delivery.">
+            <span class="compact-cell-label">Last report</span>
+            <span class="report-value">{{ reporting ? reporting.last_report_date ?? 'No attempt recorded' : 'Unavailable' }}</span>
+          </td>
+          <td title="Datagrams accepted by the local socket; UDP delivery is not confirmed.">
+            <span class="compact-cell-label">Sent</span>
+            <span class="report-value">{{ reporting?.sent_datagrams ?? 'Unavailable' }}</span>
+          </td>
+          <td :title="reporting?.last_report_error ?? undefined">
+            <span class="compact-cell-label">Failed</span>
+            <span class="report-value">{{ reporting?.failed_datagrams ?? 'Unavailable' }}</span>
           </td>
           <td class="actions">
             <v-btn
@@ -146,18 +191,22 @@ function remove(): void {
           </td>
         </tr>
         <tr v-else>
-          <td colspan="3">
+          <td colspan="6">
             No collectors.
           </td>
         </tr>
       </tbody>
     </v-table>
+    <DatasetStatus
+      :query="store.vnstatReporting"
+      label="Daily reporting"
+    />
     <p
-      v-if="reportError"
+      v-if="reporting?.last_report_error"
       role="status"
       class="text-warning mt-3"
     >
-      {{ reportError }}
+      {{ reporting.last_report_error }}
     </p>
   </section>
 </template>
@@ -165,12 +214,17 @@ function remove(): void {
 <style scoped>
 .collector-table :deep(th), .collector-table :deep(td) { padding: 2px 6px; }
 .collector-table :deep(.v-text-field) { min-width: 180px; }
-.collector-table :deep(td) { vertical-align: middle; }
+.collector-table :deep(td) { vertical-align: middle; overflow-wrap: anywhere; }
 .actions { white-space: nowrap; }
+.compact-cell-label { display: none; }
 @media (max-width: 600px) {
+  .compact-cell-label { display: block; margin-bottom: 2px; color: rgba(var(--v-theme-on-surface), 0.6); font-size: 12px; }
   .collector-table :deep(thead) { display: none; }
   .collector-table :deep(tbody tr) { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 8px 0; }
+  .collector-table :deep(.v-table__wrapper td) { height: auto; }
   .collector-table :deep(td:first-child) { grid-column: 1 / -1; overflow-wrap: anywhere; }
   .collector-table :deep(.v-text-field) { min-width: 0; }
+  .collector-table :deep(.reporting-placeholder) { display: none; }
+  .collector-table :deep(.actions) { grid-column: 1 / -1; text-align: right; }
 }
 </style>

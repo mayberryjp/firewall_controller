@@ -97,7 +97,7 @@ test("BGP peers and DNAT stage inline, preserve the complete package, and surviv
   await expect(dialog).not.toBeVisible();
   const submitted = backend.writes.find(write => write.path === "/transactions")!.body as PackageRequest;
   expect(submitted.config.bgp!.neighbors).toHaveLength(2);
-  expect(submitted.config.firewall.nat.destination_rewrite).toEqual([{ out_interface: "wan0", protocol: "udp", destination_port: 53, target_interface: "lab0", target_address: "192.0.2.53" }]);
+  expect(submitted.config.firewall.nat.destination_rewrite).toEqual([{ origin: "manual", import_source: null, out_interface: "wan0", protocol: "udp", destination_port: 53, target_interface: "lab0", target_address: "192.0.2.53" }]);
   expect(submitted.config.firewall.nat.masquerade).toEqual(initialConfig.firewall.nat.masquerade);
   expect(submitted.config.routes).toEqual(initialConfig.routes);
   expect(submitted.config.interfaces).toEqual(initialConfig.interfaces);

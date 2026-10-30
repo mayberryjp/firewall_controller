@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from "vue";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import { useControllerStore } from "@/stores/controller";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const store = useControllerStore();
 const search = ref(""), status = ref("All"), page = ref(1);
 const filtered = computed(() => store.sortedTransactions.filter(item =>
@@ -32,7 +33,18 @@ onMounted(() => { void store.refreshTransactions(); });
       />
     </div>
     <v-table>
-      <thead><tr><th>Commit</th><th>Status</th><th>Description</th><th>Submitted (UTC)</th><th>Base revision</th><th>Deadline (UTC)</th></tr></thead>
+      <thead>
+        <tr>
+          <th>Commit</th><th>Status</th><th>Description</th>
+          <th class="text-no-wrap">
+            Submitted ({{ timeZone }})
+          </th>
+          <th class="text-no-wrap">
+            Base revision
+          </th>
+          <th>Deadline ({{ timeZone }})</th>
+        </tr>
+      </thead>
       <tbody>
         <tr
           v-for="item in filtered.slice((page - 1) * 20, page * 20)"
@@ -40,17 +52,22 @@ onMounted(() => { void store.refreshTransactions(); });
         >
           <td>
             <router-link
-              class="mono"
+              class="mono text-no-wrap"
               :to="`/config/commits/${encodeURIComponent(item.id)}`"
             >
               {{ item.id }}
             </router-link>
           </td>
-          <td>{{ item.status.replaceAll("_", " ") }}</td>
+          <td class="text-no-wrap">
+            {{ item.status.replaceAll("_", " ") }}
+          </td>
           <td :title="item.actor">
             {{ item.description || "—" }}
           </td>
-          <td>{{ formatTimestamp(item.submitted_at, "—") }}</td><td class="mono">
+          <td class="text-no-wrap">
+            {{ formatTimestamp(item.submitted_at, "—") }}
+          </td>
+          <td class="mono text-no-wrap">
             {{ item.base_revision }}
           </td>
           <td>{{ item.status === "pending_confirmation" ? formatTimestamp(item.confirmation_deadline) : "—" }}</td>

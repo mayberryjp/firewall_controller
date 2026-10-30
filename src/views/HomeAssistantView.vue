@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
+import { isInitialLoad } from "@/services/datasets";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import { uploadMqttPassword } from "@/services/netcontrol";
 import { mqttSchema } from "@/types/domain";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.desired);
@@ -79,6 +81,7 @@ async function stage(): Promise<void> {
         </div>
         <div class="setting-control">
           <v-chip
+            v-if="!isInitialLoad(store.mqttStatus)"
             :color="publisherColor"
             size="small"
             variant="tonal"
@@ -95,7 +98,7 @@ async function stage(): Promise<void> {
             v-if="publisher?.last_published_at_unix != null"
             class="setting-desc"
           >
-            Last broker acknowledgment (UTC): {{ formatTimestamp(publisher.last_published_at_unix * 1000) }}
+            Last broker acknowledgment ({{ timeZone }}): {{ formatTimestamp(publisher.last_published_at_unix * 1000) }}
           </p>
         </div>
       </div>

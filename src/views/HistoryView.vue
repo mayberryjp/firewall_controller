@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import { useControllerStore } from "@/stores/controller";
 import { useConfigExport } from "@/composables/useConfigExport";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const store = useControllerStore();
 const { exportError, downloading, downloadCommittedConfig } = useConfigExport();
 onMounted(() => { void store.refreshRevisions(); });
@@ -32,7 +33,7 @@ onMounted(() => { void store.refreshRevisions(); });
       label="Revision history"
     />
     <v-table>
-      <thead><tr><th>Revision</th><th>Description</th><th>Submitted (UTC)</th><th>Committed (UTC)</th><th>Commit</th></tr></thead>
+      <thead><tr><th>Revision</th><th>Description</th><th>Submitted ({{ timeZone }})</th><th>Committed ({{ timeZone }})</th><th>Commit</th></tr></thead>
       <tbody>
         <tr
           v-for="item in store.revisions.data"
@@ -56,6 +57,7 @@ onMounted(() => { void store.refreshRevisions(); });
           <td>
             <router-link
               v-if="item.transaction_id"
+              class="text-no-wrap"
               :to="`/config/commits/${encodeURIComponent(item.transaction_id)}`"
             >
               {{ item.transaction_id }}

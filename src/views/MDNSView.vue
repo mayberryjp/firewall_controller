@@ -102,6 +102,7 @@ function stage(): void {
         />
         <v-btn
           icon="mdi-delete"
+          color="error"
           :aria-label="`Delete service ${index + 1}`"
           :title="`Delete service ${index + 1}`"
           variant="text"

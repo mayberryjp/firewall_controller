@@ -6,11 +6,13 @@ import * as net from "@/services/netcontrol";
 import { useConfigExport } from "@/composables/useConfigExport";
 import { z } from "zod";
 import { decodeJson, encodeJson } from "@/services/json";
-import { differences, requiredPermissions } from "@/services/configuration";
+import { differences, normalize, requiredPermissions } from "@/services/configuration";
+import { ruleOwnershipEntries } from "@/services/ruleOwnership";
 import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema } from "@/types/domain";
-import { config, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus } from "../fixtures";
+import { config, hostPolicyConfig, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus, vnstatReporting } from "../fixtures";
 import { dnsResponse, linkDiagnostics } from "../diagnosticsFixtures";
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
+import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -23,6 +25,117 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it("accepts preserved ownership when the backend canonicalizes host group order", async () => {
+    const candidate = hostPolicyConfig(), pending = transaction();
+    for (const rule of ruleOwnershipEntries(candidate).values()) Object.assign(rule, { origin: "import", import_source: "sando" });
+    pending.candidate = normalize(candidate);
+    status = 202; body = encodeJson(pending);
+    const result = await net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 });
+    expect(result.id).toBe(pending.id);
+    expect(result.candidate.firewall.policies!.hosts.map(host => host.id)).toEqual(["desk", "phone", "server"]);
+    expect(candidate.firewall.policies!.hosts.map(host => host.id)).toEqual(["desk", "server", "phone"]);
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it("preserves returned ownership and freezes an accepted write if the backend prunes requested labels", async () => {
+    const pending = transaction(), candidate = config();
+    Object.assign(candidate.firewall.rules[0]!, { origin: "import", import_source: "sando" });
+    pending.candidate = candidate;
+    status = 202; body = encodeJson(pending);
+    const payload = { base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 };
+    expect((await net.submitPackage(payload)).candidate.firewall.rules[0]).toMatchObject({ origin: "import", import_source: "sando" });
+    const pruned = transaction(); pruned.candidate = config(); body = encodeJson(pruned);
+    await expect(net.submitPackage(payload)).rejects.toMatchObject({ uncertain: true, incompatible: true, transaction: { id: pruned.id } });
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("reads exact firewall totals without query or body", async () => {
+    body = JSON.stringify(firewallCounters());
+    const controller = new AbortController();
+    expect(await net.getFirewallCounters(controller.signal)).toEqual(firewallCounters());
+    expect(captured?.method).toBe("get"); expect(captured?.url).toBe("/statistics/firewall");
+    expect(captured?.data).toBeUndefined(); expect(captured?.params).toBeUndefined();
+    expect(captured?.signal).toBe(controller.signal);
+  });
+  it("reads historical drops using the exact exclusive cursor and AND filters", async () => {
+    body = JSON.stringify(firewallDenyPage());
+    expect(await net.getFirewallDenyLog({ limit: 100, before_id: "18446744073709551614", address: "2001:db8::1", protocol: 0, chain: "input", since_ms: 0, until_ms: 1 })).toEqual(firewallDenyPage());
+    expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
+    const url = new URL(captured!.url!, "https://test.invalid");
+    expect(url.pathname).toBe("/firewall/deny-log");
+    expect(Object.fromEntries(url.searchParams)).toEqual({ limit: "100", before_id: "18446744073709551614", address: "2001:db8::1", protocol: "0", chain: "input", since_ms: "0", until_ms: "1" });
+    expect(() => net.getFirewallDenyLog({ protocol: 256 })).toThrow();
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it.each([403, 503])("surfaces telemetry HTTP %s instead of returning measured zeros or empty history", async code => {
+    status = code; body = '{"error":"Telemetry unavailable"}';
+    await expect(net.getFirewallCounters()).rejects.toMatchObject({ status: code });
+    await expect(net.getFirewallDenyLog()).rejects.toMatchObject({ status: code });
+  });
+  it("deletes only the combined firewall scope with a canonical revision and explicit confirmation", async () => {
+    const pending = transaction();
+    status = 202; body = encodeJson(pending);
+    const request = { base_revision: "2026.10.29.1", confirm_timeout_seconds: 120, confirm: true as const, description: "Clear reviewed firewall hosts and forwarding rules" };
+    expect(await net.deleteFirewallHostsAndRules(request)).toEqual(pending);
+    expect(captured?.method).toBe("delete");
+    expect(captured?.url).toBe("/firewall/hosts-and-rules");
+    expect(captured?.params).toBeUndefined();
+    expect(decodeJson(String(captured?.data))).toEqual(request);
+    expect(adapter).toHaveBeenCalledTimes(1);
+    expect(() => net.deleteFirewallHostsAndRules({ ...request, base_revision: "79" })).toThrow();
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it("never retries an uncertain bulk firewall deletion", async () => {
+    adapter.mockRejectedValueOnce(new AxiosError("timeout", "ETIMEDOUT"));
+    await expect(net.deleteFirewallHostsAndRules({
+      base_revision: "2026.10.29.1", confirm_timeout_seconds: 120, confirm: true,
+    })).rejects.toMatchObject({ uncertain: true });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it("reads vnStat reporting metadata from the host-wide database without rounding counters or converting dates", async () => {
+    body = JSON.stringify({ ...vnstatReporting(), interfaces: {}, history: [] });
+    const controller = new AbortController();
+    expect(await net.getVnStatReporting(controller.signal)).toEqual(vnstatReporting());
+    expect(captured?.method).toBe("get"); expect(captured?.url).toBe("/statistics/vnstat");
+    expect(captured?.params).toBeUndefined(); expect(captured?.data).toBeUndefined();
+    expect(captured?.signal).toBe(controller.signal);
+  });
+  it.each(["2026-02-30", "2026-10-29T23:59:00Z", "2026-1-2"])("rejects incompatible vnStat calendar date %s", async date => {
+    body = JSON.stringify({ ...vnstatReporting(), last_report_date: date });
+    await expect(net.getVnStatReporting()).rejects.toMatchObject({ incompatible: true });
+  });
+  it("does not turn unavailable vnStat reporting into empty measured data", async () => {
+    status = 503; body = '{"error":"Native accounting unavailable"}';
+    await expect(net.getVnStatReporting()).rejects.toMatchObject({ status: 503 });
+  });
+  it("requests a software check with an entirely empty POST and no overrides", async () => {
+    status = 202; body = '{"status":"check_requested"}';
+    const controller = new AbortController();
+    expect(await net.checkSoftwareRelease(controller.signal)).toEqual({ status: "check_requested" });
+    expect(captured?.method).toBe("post"); expect(captured?.url).toBe("/system/upgrade/check");
+    expect(captured?.data).toBeUndefined(); expect(captured?.params).toBeUndefined();
+    expect(captured?.signal).toBe(controller.signal);
+  });
+  it("reads a deployed numeric-revision backend and preserves its transaction wire format", async () => {
+    body = JSON.stringify({ ...state(), revision: 79, desired: config() });
+    const saved = await net.getState();
+    expect(saved.revision).toBe("79");
+    expect(saved.desired.software).toBeUndefined();
+    const legacy = { ...transaction(), base_revision: "79", committed_revision: undefined };
+    body = encodeJson(legacy);
+    const pending = await net.submitPackage({ base_revision: saved.revision, config: saved.desired, confirm_timeout_seconds: 120 });
+    expect(pending.base_revision).toBe("79"); expect(pending.committed_revision).toBeNull();
+    expect(JSON.parse(String(captured?.data))).toEqual({ base_revision: 79, config: config(), confirm_timeout_seconds: 120 });
+    body = encodeJson({ revision: "79", current: true, submitted_at: null, committed_at: null, config: config() });
+    expect((await net.getRevision("79")).revision).toBe("79");
+    expect(captured?.url).toBe("/revisions/79");
+    body = encodeJson({ revisions: [], next_before_revision: "78" });
+    expect((await net.getRevisions("79")).next_before_revision).toBe("78");
+    expect(captured?.url).toBe("/revisions?limit=50&before_revision=79");
+  });
+  it("explains decoding errors without dumping the saved configuration", async () => {
+    body = JSON.stringify({ ...state(), revision: "invalid-revision", desired: { ...config(), operator_note: "do-not-dump-config" } });
+    await expect(net.getState()).rejects.toThrow("HTTP 200: non-JSON or incompatible response.");
+    await expect(net.getState()).rejects.not.toThrow("do-not-dump-config");
+  });
   it("inspects appliance GET responses without schema pruning or loss of precision", async () => {
     body = '{"counter":18446744073709551615,"future_field":true}';
     expect(await inspectApiPath(" /api/v1/services/vnstat/status ")).toEqual({ status: 200, body });
@@ -37,6 +150,10 @@ describe("controller-proxied API boundary", () => {
   });
   it.each(["https://example.com/api/v1/state", "//example.com/api/v1/state", "/api/v1/../session", "/api/v1/%2e%2e/session", "/api/v1/state#fragment", "/api/v1/\\state", "/api/v1//state", "/state", ""])("rejects unsafe API explorer path %s before sending credentials", async path => {
     await expect(inspectApiPath(path)).rejects.toThrow("Enter an appliance path");
+    expect(adapter).not.toHaveBeenCalled();
+  });
+  it.each([...Array.from({ length: 32 }, (_, code) => code), 127])("rejects API explorer query control character %i before sending credentials", async code => {
+    await expect(inspectApiPath(`/api/v1/state?filter=a${String.fromCharCode(code)}b`)).rejects.toThrow("Enter an appliance path");
     expect(adapter).not.toHaveBeenCalled();
   });
   it("preserves DNAT and BGP in actual API reads and reads BGP status/routes separately", async () => {
@@ -70,7 +187,7 @@ describe("controller-proxied API boundary", () => {
     const lookup = await net.lookupDNS({ interface: "lab0", hostname: "Example.TEST." });
     expect(captured?.method).toBe("post"); expect(captured?.url).toBe("/diagnostics/dns-lookup");
     expect(decodeJson(String(captured?.data))).toEqual({ interface: "lab0", hostname: "example.test", record_type: "A", timeout_ms: 2000 });
-    expect(lookup.revision).toBe("9007199254740993"); expect(lookup.rtt_ms).toBe(12.5);
+    expect(lookup.revision).toBe("2026.10.29.4294967294"); expect(lookup.rtt_ms).toBe(12.5);
     status = 202; body = encodeJson({ target: "mqtt", status: "restart_requested", generation: 1 });
     expect((await net.restartProcess("mqtt")).status).toBe("restart_requested");
     expect(captured?.url).toBe("/processes/restart"); expect(decodeJson(String(captured?.data))).toEqual({ target: "mqtt" });
@@ -132,10 +249,10 @@ describe("controller-proxied API boundary", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const committed = config();
-      body = encodeJson({ revision: "18446744073709551615", current: true, submitted_at: null, committed_at: null, config: committed });
+      body = encodeJson({ revision: "2026.10.29.4294967295", current: true, submitted_at: null, committed_at: null, config: committed });
       const download = useConfigExport();
       await download.downloadCommittedConfig();
-      expect(filenames).toEqual(["netcontrol-config-r18446744073709551615.json"]);
+      expect(filenames).toEqual(["netcontrol-config-r2026.10.29.4294967295.json"]);
       expect(confirm).not.toHaveBeenCalled();
       const blob = createObjectURL.mock.calls[0]![0] as unknown as Blob;
       const text = await new Promise<string>((resolve, reject) => {
@@ -153,10 +270,10 @@ describe("controller-proxied API boundary", () => {
       click.mockRestore(); confirm.mockRestore(); vi.unstubAllGlobals();
     }
   });
-  it("reads the latest committed revision in one request without losing uint64 precision", async () => {
-    body = encodeJson({ revision: "18446744073709551615", current: true, submitted_at: null, committed_at: null, config: config() });
+  it("reads the latest committed date revision in one request", async () => {
+    body = encodeJson({ revision: "2026.10.29.4294967295", current: true, submitted_at: null, committed_at: null, config: config() });
     const revision = await net.getLatestRevision();
-    expect(revision.revision).toBe("18446744073709551615");
+    expect(revision.revision).toBe("2026.10.29.4294967295");
     expect(revision.config).toEqual(config());
     expect(captured?.url).toBe("/revisions/latest");
     expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
@@ -187,7 +304,7 @@ describe("controller-proxied API boundary", () => {
     const candidate = config();
     candidate.mdns = mdnsSchema.parse({ enabled: false, interfaces: ["lan0"], metadata: { display_name: "Discovery", description: "Disabled preferences" } });
     body = encodeJson({ ...transaction(), candidate, ignored_fields: ["/config/mdns/future_option"] }); status = 202;
-    const result = await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 });
+    const result = await net.submitPackage({ base_revision: "2026.10.29.1", config: candidate, confirm_timeout_seconds: 120 });
     expect(result.candidate.mdns).toEqual(candidate.mdns);
     expect(result.ignored_fields).toEqual(["/config/mdns/future_option"]);
     expect(decodeJson(String(captured?.data))).toMatchObject({ config: { mdns: candidate.mdns } });
@@ -208,7 +325,7 @@ describe("controller-proxied API boundary", () => {
     candidate.dynamic_dns = [{ name: "azure-wan", enabled: true, source_interface: "lab0", address_source: "public_ip", tenant_id: "11111111-1111-4111-8111-111111111111",
       client_id: "22222222-2222-4222-8222-222222222222", secret_ref: "a".repeat(32), zone_resource_id: "/subscriptions/x/dnszones/example.com", record_name: "home", ttl_seconds: 300, interval_seconds: 60 }];
     status = 202; body = encodeJson({ ...transaction(), candidate, ignored_fields: ["/config/future_option"] });
-    const result = await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 });
+    const result = await net.submitPackage({ base_revision: "2026.10.29.1", config: candidate, confirm_timeout_seconds: 120 });
     expect(result.ignored_fields).toEqual(["/config/future_option"]); expect(result.candidate.dynamic_dns).toEqual(candidate.dynamic_dns);
     expect(requiredPermissions(differences(config(), candidate))).toEqual(["transactions.write", "dynamic_dns.write"]);
   });
@@ -240,7 +357,7 @@ describe("controller-proxied API boundary", () => {
     body = encodeJson({ [pending.id]: pending });
     expect((await net.getTransactions())[pending.id]?.previous.gateway_monitors).toEqual(candidate.gateway_monitors);
     body = encodeJson(pending);
-    expect((await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 })).candidate).toEqual(candidate);
+    expect((await net.submitPackage({ base_revision: "2026.10.29.1", config: candidate, confirm_timeout_seconds: 120 })).candidate).toEqual(candidate);
     const sent = decodeJson(String(captured?.data)) as { config: { gateway_monitors: unknown[] } };
     expect(sent.config.gateway_monitors).toEqual(candidate.gateway_monitors);
     for (const key of ["source_address", "gateway", "routing_table"]) expect(sent.config.gateway_monitors[0]).not.toHaveProperty(key);
@@ -269,13 +386,14 @@ describe("controller-proxied API boundary", () => {
     body = encodeJson({ enabled: false, repository: null, job: null, last_successful_version: null });
     expect((await net.getSystemUpgrade()).enabled).toBe(false);
     status = 202;
-    body = encodeJson({ id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null });
-    const accepted = await net.startSystemUpgrade("1.2.3"); expect(accepted.id).toBe("upgrade-1");
-    expect(captured?.url).toBe("/system/upgrade"); expect(decodeJson(String(captured?.data))).toEqual({ version: "1.2.3" });
+    body = encodeJson({ id: "upgrade-1", version: "2026.10.29.2", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null });
+    const accepted = await net.startSystemUpgrade("2026.10.29.2"); expect(accepted.id).toBe("upgrade-1");
+    expect(captured?.url).toBe("/system/upgrade"); expect(decodeJson(String(captured?.data))).toEqual({ version: "2026.10.29.2" });
     for (const version of ["v1.2.3", "01.2.3", "1.2.3+build", "1.2.3-01", "https://example.test"]) expect(upgradeVersionSchema.safeParse(version).success).toBe(false);
-    expect(upgradeVersionSchema.safeParse("1.2.3-rc.1").success).toBe(true);
+    expect(upgradeVersionSchema.safeParse("1.2.3-rc.1").success).toBe(false);
+    expect(upgradeVersionSchema.safeParse("2026.10.29.10").success).toBe(true);
     body = encodeJson({ ...accepted, version: "2.0.0" });
-    await expect(net.startSystemUpgrade("1.2.3")).rejects.toMatchObject({ uncertain: true, incompatible: true });
+    await expect(net.startSystemUpgrade("2026.10.29.2")).rejects.toMatchObject({ uncertain: true, incompatible: true });
   });
   it("reads filtered connection snapshots with exact nullable counters and strict schema", async () => {
     body = encodeJson(connections());
@@ -310,7 +428,7 @@ describe("controller-proxied API boundary", () => {
     candidate.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ protocol: "udp", destination_ports: [68], action: "accept" }] }] };
     candidate.firewall.policies = { hosts: [], interfaces: [{ interface: "lab0", rules: [{ out_interface: "lab0", action: "accept" }] }] };
     const pending = transaction(); pending.candidate = candidate; body = encodeJson(pending);
-    const result = await net.submitPackage({ base_revision: "0", config: candidate, confirm_timeout_seconds: 120 });
+    const result = await net.submitPackage({ base_revision: "2026.10.29.1", config: candidate, confirm_timeout_seconds: 120 });
     expect(decodeJson(String(captured?.data))).toMatchObject({ config: { firewall: candidate.firewall } });
     expect(result.candidate.firewall).toEqual(candidate.firewall);
   });
@@ -357,15 +475,23 @@ describe("controller-proxied API boundary", () => {
     body = encodeJson(data[key]); await actions[key]();
     expect(captured?.url).toBe(path); expect(captured?.method).toBe("get");
   });
-  it("serializes exact uint64 base as a numeric token and preserves whole config", async () => {
+  it("serializes the exact base revision as a JSON string and preserves editable config", async () => {
     body = encodeJson(transaction());
     const configValue = config();
-    await net.submitPackage({ base_revision: "18446744073709551615", confirm_timeout_seconds: 120, config: configValue });
+    await net.submitPackage({ base_revision: "2026.10.29.4294967295", confirm_timeout_seconds: 120, config: configValue });
     expect(captured?.url).toBe("/transactions"); expect(captured?.method).toBe("post");
     expect(captured?.timeout).toBe(90_000);
-    expect(captured?.data).toContain('"base_revision":18446744073709551615');
+    expect(captured?.data).toContain('"base_revision":"2026.10.29.4294967295"');
     expect(captured?.data).toContain('"kernel"');
     expect(captured?.headers["Content-Type"]).toBe("application/json");
+  });
+  it("omits daemon-managed software from a submitted configuration", async () => {
+    body = encodeJson(transaction());
+    await net.submitPackage({ base_revision: state().revision, config: state().desired, confirm_timeout_seconds: 120 });
+    expect(decodeJson(String(captured?.data))).toEqual({
+      base_revision: state().revision, config: config(), confirm_timeout_seconds: 120,
+    });
+    expect(state().desired).toHaveProperty("software");
   });
   it.each(["confirm", "rollback"] as const)("uses a bodyless encoded %s POST", async action => {
     body = encodeJson(transaction());
@@ -373,10 +499,10 @@ describe("controller-proxied API boundary", () => {
     expect(captured?.url).toBe(`/transactions/tx%20%2F1/${action}`);
     expect(captured?.data).toBeUndefined();
   });
-  it("uses restore endpoint including revision zero, not a package submit", async () => {
+  it("uses the date revision restore endpoint, not a package submit", async () => {
     body = encodeJson(transaction());
-    await net.restoreRevision("0", { base_revision: "0", confirm_timeout_seconds: 120 });
-    expect(captured?.url).toBe("/revisions/0/restore"); expect(captured?.data).not.toContain('"config"');
+    await net.restoreRevision("2026.10.29.1", { base_revision: "2026.10.29.1", confirm_timeout_seconds: 120 });
+    expect(captured?.url).toBe("/revisions/2026.10.29.1/restore"); expect(captured?.data).not.toContain('"config"');
   });
   it("reconciles services bodylessly", async () => {
     body = encodeJson(runtime()); await net.reconcileServices();
@@ -398,15 +524,15 @@ describe("controller-proxied API boundary", () => {
   });
   it.each([400, 403, 422])("surfaces HTTP %s without replay or uncertain-success fallback", async code => {
     status = code; body = '{"error":"role or relay rejected","transaction":null}';
-    await expect(net.submitPackage({ base_revision: "0", config: config(), confirm_timeout_seconds: 120 }))
+    await expect(net.submitPackage({ base_revision: "2026.10.29.1", config: config(), confirm_timeout_seconds: 120 }))
       .rejects.toMatchObject({ status: code, uncertain: false });
     expect(adapter).toHaveBeenCalledOnce();
   });
   it("uses the supplied exact history cursor", async () => {
-    body = '{"revisions":[],"next_before_revision":9007199254740993}';
-    const page = await net.getRevisions("18446744073709551615");
-    expect(captured?.url).toBe("/revisions?limit=50&before_revision=18446744073709551615");
-    expect(page.next_before_revision).toBe("9007199254740993");
+    body = '{"revisions":[],"next_before_revision":"2026.10.29.4294967294"}';
+    const page = await net.getRevisions("2026.10.29.4294967295");
+    expect(captured?.url).toBe("/revisions?limit=50&before_revision=2026.10.29.4294967295");
+    expect(page.next_before_revision).toBe("2026.10.29.4294967294");
   });
   it("reads independent fractional gateway measurements with no query", async () => {
     body = encodeJson({ sample: statistics().sample, monitors: [gatewayStatistics()] });
@@ -450,7 +576,7 @@ describe("controller-proxied API boundary", () => {
   });
   it("retains a transaction on operational failure", async () => {
     status = 500; body = encodeJson({ error: "recovery detail", transaction: transaction("recovery_failed") });
-    await expect(net.submitPackage({ base_revision: "0", config: config(), confirm_timeout_seconds: 120 }))
+    await expect(net.submitPackage({ base_revision: "2026.10.29.1", config: config(), confirm_timeout_seconds: 120 }))
       .rejects.toMatchObject({ status: 500, uncertain: true, transaction: { status: "recovery_failed" } });
   });
   it.each(["rolled_back", "recovery_failed"])("preserves long structured apply causes and %s outcome without exposing the session credential", async outcome => {
@@ -458,7 +584,7 @@ describe("controller-proxied API boundary", () => {
     const failed = { ...transaction(outcome), error: cause };
     status = 500; body = encodeJson({ error: cause, transaction: failed });
     try {
-      await net.submitPackage({ base_revision: "0", config: config(), confirm_timeout_seconds: 120 });
+      await net.submitPackage({ base_revision: "2026.10.29.1", config: config(), confirm_timeout_seconds: 120 });
       expect.fail("Expected the backend apply error");
     } catch (failure) {
       expect(failure).toBeInstanceOf(ApiFailure);
@@ -507,10 +633,10 @@ describe("controller-proxied API boundary", () => {
     expect((await net.getMDNSStatus()).instances[0]).toMatchObject({ retrying: true, restart_count: 1, last_error: "Link down" });
   });
   it("reads valid configuration without requiring healthy or compatible observation diagnostics", async () => {
-    body = encodeJson({ revision: "0", desired: config(), active_transaction: { error: "observation unavailable" }, service_health: "failed" });
+    body = encodeJson({ revision: "2026.10.29.1", desired: config(), active_transaction: { error: "observation unavailable" }, service_health: "failed" });
     const result = await net.getState();
     expect(result.desired).toEqual(config());
-    expect(result.revision).toBe("0");
+    expect(result.revision).toBe("2026.10.29.1");
     expect(result.active_transaction).toBeUndefined();
   });
   it("rejects malformed successful response visibly rather than inventing empty state", async () => {

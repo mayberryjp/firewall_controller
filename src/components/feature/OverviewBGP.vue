@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { bgpPeerStatus } from "@/services/bgp";
+import { isInitialLoad } from "@/services/datasets";
 import OverviewWidget from "./OverviewWidget.vue";
 const store = useControllerStore();
 const config = computed(() => (store.state.data?.active_transaction?.candidate ?? store.state.data?.desired)?.bgp);
@@ -37,7 +38,7 @@ onUnmounted(() => { store.bgpMonitoring = false; });
             </v-chip>
           </td>
         </tr>
-        <tr v-if="!rows.length">
+        <tr v-if="!rows.length && !isInitialLoad(store.state)">
           <td colspan="3">
             {{ store.state.data ? 'No BGP peers.' : 'BGP status unavailable.' }}
           </td>

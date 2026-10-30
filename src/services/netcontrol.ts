@@ -1,15 +1,18 @@
 import { ApiFailure, request } from "@/services/api";
 import { z } from "zod";
-import { numericAddress } from "@/services/configuration";
+import { cloneConfig, numericAddress } from "@/services/configuration";
 import { hostHealthSchema } from "@/services/hostHealth";
 import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
+import { dateVersionSchema } from "@/services/versions";
+import { ruleOwnershipPreserved } from "@/services/ruleOwnership";
+import { firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, type FirewallDenyQuery } from "@/services/firewallTelemetry";
 import { dnsLookupRequestSchema, dnsLookupSchema, restartResponseSchema, restartTargetSchema, type DNSLookupRequest } from "@/services/operations";
 import {
   mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema, timezonesSchema,
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
-  revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
+  revisionSchema, revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
-  applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, mdnsSchema, mdnsStatusPageSchema,
+  applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, vnstatReportingSchema, mdnsSchema, mdnsStatusPageSchema,
   gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
   connectionDeletionSchema, upgradeVersionSchema, upgradeJobSchema, upgradeStatusSchema, type Connection,
   platformStatusSchema, bgpSchema, bgpStatusSchema, bgpRoutesSchema, bgpAdvertisedRoutesSchema, udpBroadcastRelaySchema, udpRelayStatusPageSchema,
@@ -71,6 +74,12 @@ export const getTransactions = (signal?: AbortSignal) => request("GET", "/transa
   transactionsSchema, undefined, signal);
 export const getTransaction = (value: string) => request("GET", `/transactions/${id(value)}`, transactionSchema);
 export const getStatistics = (signal?: AbortSignal) => request("GET", "/statistics", statisticsSchema, undefined, signal);
+export const getFirewallCounters = (signal?: AbortSignal) => request("GET", "/statistics/firewall", firewallCountersSchema, undefined, signal);
+export function getFirewallDenyLog(query: FirewallDenyQuery = {}, signal?: AbortSignal) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(firewallDenyQuerySchema.parse(query))) if (value !== undefined) params.set(key, String(value));
+  return request("GET", `/firewall/deny-log${params.size ? `?${params}` : ""}`, firewallDenyPageSchema, undefined, signal);
+}
 export interface ConnectionsQuery { family?: "ipv4" | "ipv6"; protocol?: string; address?: string; port?: number; zone?: number; limit?: number; offset?: number }
 export function getConnections(query: ConnectionsQuery = {}, signal?: AbortSignal) {
   const params = new URLSearchParams();
@@ -98,15 +107,29 @@ export function deleteConnection(row: Connection) {
 }
 export const deleteAllConnections = () => request("DELETE", "/connections", connectionDeletionSchema.extend({ status: connectionDeletionSchema.shape.status.extract(["flushed"]) }), { confirm: true });
 export const getSystemUpgrade = (signal?: AbortSignal) => request("GET", "/system/upgrade", upgradeStatusSchema, undefined, signal);
+export const checkSoftwareRelease = (signal?: AbortSignal) =>
+  request("POST", "/system/upgrade/check", z.object({ status: z.literal("check_requested") }).strict(), undefined, signal);
 export function startSystemUpgrade(version: string) {
   const canonical = upgradeVersionSchema.parse(version);
   return request("POST", "/system/upgrade", upgradeJobSchema.refine(job => job.version === canonical, "Upgrade response version does not match the requested version"), { version: canonical });
 }
 export const getRevisions = (before?: string) => request("GET",
-  `/revisions?limit=50${before === undefined ? "" : `&before_revision=${id(before)}`}`, revisionPageSchema);
-export const getRevision = (revision: string) => request("GET", `/revisions/${id(revision)}`, revisionDetailSchema);
+  `/revisions?limit=50${before === undefined ? "" : `&before_revision=${id(revisionSchema.parse(before))}`}`, revisionPageSchema);
+export const getRevision = (revision: string) => request("GET", `/revisions/${id(revisionSchema.parse(revision))}`, revisionDetailSchema);
 export const getLatestRevision = () => request("GET", "/revisions/latest", revisionDetailSchema);
-export const submitPackage = (body: PackageRequest) => request("POST", "/transactions", submittedTransactionSchema, body);
+export async function submitPackage(body: PackageRequest) {
+  const payload = { ...body, base_revision: revisionSchema.parse(body.base_revision), config: cloneConfig(body.config) };
+  const result = await request("POST", "/transactions", submittedTransactionSchema, payload);
+  if (!ruleOwnershipPreserved(payload.config, result.candidate)) {
+    throw new ApiFailure("The backend did not preserve the requested rule ownership labels. A provisional transaction may be active; review it and roll back rather than confirming. Deploy a label-capable backend before retrying.", 202, result, true, true);
+  }
+  return result;
+}
+export const deleteFirewallHostsAndRules = (body: Omit<PackageRequest, "config"> & { confirm: true }) =>
+  request("DELETE", "/firewall/hosts-and-rules", transactionSchema, {
+    base_revision: dateVersionSchema.parse(body.base_revision),
+    confirm_timeout_seconds: body.confirm_timeout_seconds, confirm: body.confirm, description: body.description,
+  });
 export const confirmTransaction = (value: string) => request("POST", `/transactions/${id(value)}/confirm`, transactionSchema);
 export const rollbackTransaction = (value: string) => request("POST", `/transactions/${id(value)}/rollback`, transactionSchema);
 export const getDHCPRelayStatus = (signal?: AbortSignal) =>
@@ -121,6 +144,8 @@ export const getGatewayStatus = (signal?: AbortSignal) =>
   request("GET", "/services/gateway-monitoring/status", gatewayStatusPageSchema, undefined, signal);
 export const getApplianceStatus = (service: ApplianceService, signal?: AbortSignal) =>
   request("GET", `/services/${service}/status`, applianceStatusPageSchema, undefined, signal);
+export const getVnStatReporting = (signal?: AbortSignal) =>
+  request("GET", "/statistics/vnstat", vnstatReportingSchema, undefined, signal);
 export const getApplianceConfig = (service: ApplianceService, signal?: AbortSignal) =>
   service === "ntp" ? request("GET", "/services/ntp", ntpSchema, undefined, signal) :
     service === "syslog" ? request("GET", "/services/syslog", syslogSchema, undefined, signal) :
@@ -128,4 +153,5 @@ export const getApplianceConfig = (service: ApplianceService, signal?: AbortSign
 export const reconcileServices = (service: RepairService = "softflowd") =>
   request("POST", `/services/${service}/reconcile`, runtimeSchema);
 export const restoreRevision = (revision: string, body: Omit<PackageRequest, "config">) =>
-  request("POST", `/revisions/${id(revision)}/restore`, transactionSchema, body);
+  request("POST", `/revisions/${id(revisionSchema.parse(revision))}/restore`, transactionSchema,
+    { ...body, base_revision: revisionSchema.parse(body.base_revision) });

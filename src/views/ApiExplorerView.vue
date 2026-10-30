@@ -50,7 +50,10 @@ async function send(): Promise<void> {
 
 <template>
   <section aria-label="API explorer">
-    <form class="api-request" @submit.prevent="send">
+    <form
+      class="api-request"
+      @submit.prevent="send"
+    >
       <v-combobox
         v-model="path"
         label="Appliance API path"
@@ -63,16 +66,45 @@ async function send(): Promise<void> {
         :clearable="false"
         class="api-path"
       />
-      <v-btn type="submit" prepend-icon="mdi-play" :loading="loading" :disabled="!store.connected || loading || !path">GET</v-btn>
-      <v-btn v-if="loading" icon="mdi-stop" title="Cancel request" aria-label="Cancel request" variant="text" @click="reset" />
+      <v-btn
+        type="submit"
+        prepend-icon="mdi-play"
+        :loading="loading"
+        :disabled="!store.connected || loading || !path"
+      >
+        GET
+      </v-btn>
+      <v-btn
+        v-if="loading"
+        icon="mdi-stop"
+        title="Cancel request"
+        aria-label="Cancel request"
+        variant="text"
+        @click="reset"
+      />
     </form>
-    <v-alert v-if="error" type="error" class="mt-4" role="alert">{{ error }}</v-alert>
-    <section v-if="response" class="mt-4" aria-label="API response">
+    <v-alert
+      v-if="error"
+      type="error"
+      class="mt-4"
+      role="alert"
+    >
+      {{ error }}
+    </v-alert>
+    <section
+      v-if="response"
+      class="mt-4"
+      aria-label="API response"
+    >
       <div class="api-response-heading">
         <strong :class="response.status >= 400 ? 'text-error' : 'text-success'">HTTP {{ response.status }}</strong>
         <code>{{ response.path }}</code>
       </div>
-      <pre class="api-response" tabindex="0" aria-label="Response body">{{ formattedBody || '(empty response)' }}</pre>
+      <pre
+        class="api-response"
+        tabindex="0"
+        aria-label="Response body"
+      >{{ formattedBody || '(empty response)' }}</pre>
     </section>
   </section>
 </template>

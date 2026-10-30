@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const store = useControllerStore();
 const reconciliation = ref(false), error = ref("");
 const visible = computed(() => store.incompatible || store.uncertain ||
@@ -35,7 +36,7 @@ function resolve(): void {
     >
       <strong>Outcome unknown: {{ store.uncertain.operation }}.</strong>
       Do not replay the write. A browser disconnect or timeout does not cancel durable intent.
-      <p>Started {{ formatTimestamp(store.uncertain.startedAt) }} UTC · base {{ store.uncertain.base ?? "Unknown" }}</p>
+      <p>Started {{ formatTimestamp(store.uncertain.startedAt) }} {{ timeZone }} · base {{ store.uncertain.base ?? "Unknown" }}</p>
       <p>New transaction records are correlation hints, not proof of ownership.</p>
       <v-btn
         v-if="store.uncertain.id"

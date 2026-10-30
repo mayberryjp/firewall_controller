@@ -18,6 +18,7 @@ const hostname = ref("");
 const domain = ref("");
 const timezone = ref<string | null>(null);
 const knownTimezones = ref<string[]>([]);
+const timezonesLoading = ref(true), timezoneError = ref("");
 const timezoneItems = computed(() => timezone.value && !knownTimezones.value.includes(timezone.value) ? [timezone.value, ...knownTimezones.value] : knownTimezones.value);
 const error = ref("");
 const blocked = computed(() => Boolean(store.readOnlyReason) || !selectedConfig.value);
@@ -34,7 +35,10 @@ watch(() => selectedConfig.value?.system, value => {
 }, { immediate: true });
 const timezoneRequest = new AbortController();
 onMounted(async () => {
-  try { knownTimezones.value = (await getTimezones(timezoneRequest.signal)).timezones; } catch { knownTimezones.value = []; }
+  try { knownTimezones.value = (await getTimezones(timezoneRequest.signal)).timezones; }
+  catch (failure) {
+    if (!timezoneRequest.signal.aborted) timezoneError.value = failure instanceof Error ? failure.message : "Unable to load time zones.";
+  } finally { timezonesLoading.value = false; }
 });
 onUnmounted(() => timezoneRequest.abort());
 
@@ -166,7 +170,7 @@ function stage(): void {
           <v-autocomplete
             id="general-timezone"
             v-model="timezone"
-            aria-describedby="general-timezone-description"
+            :aria-describedby="!timezonesLoading || timezoneItems.length ? 'general-timezone-description' : undefined"
             :items="timezoneItems"
             placeholder="Unmanaged"
             :disabled="blocked || !timezoneItems.length"
@@ -176,10 +180,11 @@ function stage(): void {
             class="setting-field"
           />
           <p
+            v-if="!timezonesLoading || timezoneItems.length"
             id="general-timezone-description"
             class="setting-desc"
           >
-            {{ timezoneItems.length ? 'Clear to stop managing the time zone; the current zone is kept. Running processes may keep the previous zone.' : 'The time zone list is unavailable.' }}
+            {{ timezoneError ? `The time zone list could not be loaded: ${timezoneError}` : timezoneItems.length ? 'Clear to stop managing the time zone; the current zone is kept. Running processes may keep the previous zone.' : 'The time zone list is unavailable.' }}
           </p>
         </div>
       </div>

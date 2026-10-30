@@ -24,7 +24,26 @@ const changesLabel = computed(() => store.editorDirty ? "Unstaged form input; st
       variant="text"
       :disabled="!store.state.data || store.busy || store.editorDirty"
     >
-      {{ hasChanges ? "SAVE " : "" }}R{{ store.state.data?.revision ?? "?" }}
+      <span :class="{ 'config-pending': hasChanges }">
+        R{{ store.state.data?.revision ?? "?" }}
+      </span>
     </v-btn>
   </div>
 </template>
+
+<style scoped>
+.config-pending {
+  animation: config-pending-pulse 4s ease-in-out infinite;
+}
+
+@keyframes config-pending-pulse {
+  0%, 100% { color: rgb(var(--v-theme-warning)); }
+  50% { color: #ffeb3b; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-pending {
+    animation: none;
+  }
+}
+</style>

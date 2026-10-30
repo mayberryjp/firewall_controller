@@ -3,25 +3,52 @@ import { computed, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, validateConfig } from "@/services/configuration";
 import { formatBytes } from "@/services/hostHealth";
-import { handshakeChip as describeHandshake } from "@/services/wireguard";
+import { handshakeChip as describeHandshake, isWireGuardDnsEndpoint, learnedAllowedNetworks } from "@/services/wireguard";
+import { formatTimestamp } from "@/services/timestamps";
+import { isInitialLoad } from "@/services/datasets";
+import { useTimestamps } from "@/composables/useTimestamps";
 import type { ManagedInterface } from "@/types/domain";
 
 type Tunnel = Extract<ManagedInterface, { kind: "wireguard" }>;
 const props = defineProps<{ name?: string }>();
 const store = useControllerStore();
+const { timeZone } = useTimestamps();
 const selected = computed(() => store.draft ?? store.state.data?.desired);
+const applied = computed(() => store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
+const learnedCurrent = computed(() => store.bgpRoutesCurrent && !store.state.stale && !store.state.error);
+const learnedNotice = computed(() => {
+  if (store.bgpRoutes.error) return `BGP-learned networks unavailable: ${store.bgpRoutes.error}`;
+  if (store.bgpRoutes.data?.error) return `BGP-learned networks unavailable: ${store.bgpRoutes.data.error}`;
+  if (isInitialLoad(store.bgpRoutes)) return "";
+  if (!learnedCurrent.value) return "BGP-learned networks unavailable: current route or applied configuration data is unavailable.";
+  return "";
+});
+watch([() => store.connected, () => store.sessionVersion, () => applied.value?.bgp?.enabled], () => {
+  if (store.connected && applied.value?.bgp?.enabled && document.visibilityState !== "hidden") void store.refreshBGPRoutes();
+}, { immediate: true });
 const tunnels = computed(() => (selected.value?.interfaces ?? []).filter((link): link is Tunnel => link.kind === "wireguard"));
 const filter = ref(props.name ?? "");
 const live = computed(() => new Map((store.runtime.data?.wireguard ?? []).map(item => [item.interface, item])));
+const dns = computed(() => store.state.data?.runtime?.wireguard_dns ?? store.runtime.data?.wireguard_dns);
+const dnsNotice = computed(() => {
+  const query = store.state.data?.runtime?.wireguard_dns ? store.state : store.runtime;
+  return query.error ? `DNS data unavailable: ${query.error}` : query.stale ? "DNS data stale" : "";
+});
 const peers = computed(() => tunnels.value.filter(tunnel => !filter.value || tunnel.name === filter.value)
   .flatMap(tunnel => tunnel.wireguard.peers.map((peer, index) => ({
     tunnel: tunnel.name, peer, index,
     stats: peer.enabled === false ? undefined : live.value.get(tunnel.name)?.peers.find(item => item.public_key === peer.public_key),
+    dnsEndpoint: isWireGuardDnsEndpoint(peer.endpoint),
+    dns: peer.enabled === false ? undefined : dns.value?.peers.find(item =>
+      item.interface === tunnel.name && item.public_key === peer.public_key && item.endpoint === peer.endpoint),
+    bgpNeighbor: applied.value?.bgp?.enabled && applied.value.bgp.neighbors.some(neighbor =>
+      neighbor.interface === tunnel.name && neighbor.wireguard_public_key === peer.public_key),
+    learned: learnedCurrent.value ? learnedAllowedNetworks(applied.value, store.bgpRoutes.data, tunnel.name, peer.public_key) : [],
   }))));
 const expanded = ref<string | null>(null);
 const identity = (tunnel: string, key: string) => `${tunnel}/${key}`;
 const handshakeChip = (seconds: number | null | undefined, keepalive: number) =>
-  describeHandshake(seconds, keepalive, store.runtime.lastSuccess ?? Date.now());
+  describeHandshake(seconds, keepalive, store.runtime.lastSuccess ?? Date.now(), timeZone.value);
 const previous = new Map<string, { rx: bigint; tx: bigint }>();
 const changes = ref(new Map<string, { rx: bigint; tx: bigint } | null>());
 watch(() => store.runtime.data?.wireguard, value => {
@@ -134,12 +161,19 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
       {{ error }}
     </v-alert>
     <p
-      v-if="!tunnels.length"
+      v-if="selected && !tunnels.length"
       class="mb-4"
     >
       Peers belong to a tunnel interface. <router-link to="/tunnels">
         Add a tunnel interface
       </router-link> first.
+    </p>
+    <p
+      v-if="dns?.error"
+      role="status"
+      class="text-error mb-4"
+    >
+      DNS refresh: {{ dns.error }}
     </p>
     <v-table class="peer-table">
       <thead>
@@ -203,7 +237,16 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
             >
               {{ short(item.peer.public_key) }}
             </td>
-            <td>{{ item.peer.endpoint || item.stats?.endpoint || '—' }}</td>
+            <td>
+              {{ item.peer.endpoint || item.stats?.endpoint || '—' }}
+              <span
+                v-if="item.dns?.error"
+                role="status"
+                class="d-block text-caption text-error"
+              >
+                DNS: {{ item.dns.error }}
+              </span>
+            </td>
             <td>{{ item.peer.persistent_keepalive_seconds ? `${item.peer.persistent_keepalive_seconds}s` : 'Off' }}</td>
             <td>
               <template v-if="item.stats">
@@ -287,9 +330,52 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
           >
             <td colspan="9">
               <dl class="detail-list">
+                <template v-if="item.dnsEndpoint && item.peer.enabled !== false">
+                  <div>
+                    <dt>DNS selection</dt>
+                    <dd>
+                      {{ item.dns?.resolved_endpoint || 'Unavailable' }}
+                      <span
+                        v-if="dns && dnsNotice"
+                        role="status"
+                        class="text-caption text-medium-emphasis"
+                      >
+                        ({{ dnsNotice }})
+                      </span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Actual endpoint</dt>
+                    <dd>{{ item.stats?.endpoint || 'Unavailable' }}</dd>
+                  </div>
+                  <div>
+                    <dt>DNS last success (UTC)</dt>
+                    <dd>{{ item.dns ? formatTimestamp(item.dns.last_success_unix_ms || undefined, "Never") : 'Unavailable' }}</dd>
+                  </div>
+                </template>
                 <div>
                   <dt>Allowed networks</dt>
-                  <dd>{{ item.peer.allowed_ips.join(', ') || 'None' }}</dd>
+                  <dd>
+                    <div class="configured-networks">
+                      {{ item.peer.allowed_ips.join(', ') || 'None' }}
+                      <span class="text-caption text-medium-emphasis">(Configured)</span>
+                    </div>
+                    <div
+                      v-for="network in item.learned"
+                      :key="network.prefix"
+                      class="learned-network"
+                    >
+                      {{ network.prefix }}
+                      <span class="text-caption text-medium-emphasis">BGP learned from {{ network.neighbor }} (read-only)</span>
+                    </div>
+                    <p
+                      v-if="item.bgpNeighbor && learnedNotice"
+                      role="status"
+                      class="text-caption text-medium-emphasis"
+                    >
+                      {{ learnedNotice }}
+                    </p>
+                  </dd>
                 </div>
                 <div>
                   <dt>Tunnel public key</dt>
@@ -342,7 +428,9 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
         />
         <v-text-field
           v-model="form.endpoint"
-          label="Endpoint (optional, IP:port)"
+          label="Endpoint (optional, hostname or IP:port)"
+          placeholder="vpn.example.test:51820"
+          title="Lowercase hostname:port, IPv4:port or [IPv6]:port."
           :disabled="blocked"
           density="compact"
           hide-details="auto"

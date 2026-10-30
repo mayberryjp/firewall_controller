@@ -1,14 +1,17 @@
 import type { Page } from "@playwright/test";
-import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot, mdnsStatus, udpRelayStatus } from "../fixtures";
+import { z } from "zod";
+import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot, mdnsStatus, udpRelayStatus, software } from "../fixtures";
 import { bgpSchema, mdnsSchema } from "../../src/types/domain";
 import { bgpStatus, bgpRoutes, bgpAdvertisedRoutes } from "../bgpFixtures";
 import { mdnsInterfaces } from "../../src/services/mdns";
-import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics, RuntimeState } from "../../src/types/domain";
+import type { Config, Transaction, GatewayStatistics, DiscoveredInterface, Statistics, RuntimeState, StateView } from "../../src/types/domain";
 import { decodeJson, encodeJson } from "../../src/services/json";
 import { defaultOverviewLayout, overviewLayoutSchema } from "../../src/services/overviewLayout";
+import { firewallCounters } from "../firewallTelemetryFixtures";
+import { normalize } from "../../src/services/configuration";
 
-export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; applyError?: { message: string; outcome: "rolled_back" | "recovery_failed" }; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics } = {}) {
-  let committed = options.initialConfig ?? config(), revision = "0";
+export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; normalizeCandidate?: boolean; applyError?: { message: string; outcome: "rolled_back" | "recovery_failed" }; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics; stateRuntime?: StateView["runtime"] } = {}) {
+  let committed = { ...options.initialConfig ?? config(), software: options.initialConfig?.software ?? software() }, revision = "2026.10.29.1";
   let overviewLayout = defaultOverviewLayout();
   const transactions: Record<string, Transaction> = {};
   if (options.initialStatus) transactions["tx-test"] = transaction(options.initialStatus);
@@ -116,7 +119,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     if (request.method() === "GET") {
       if (path === "/state") {
         if (options.observationFailed) return reply({ error: "Observation unavailable", transaction: null }, 503);
-        return reply({ revision, desired: committed, observed: committed, drift: false,
+        return reply({ revision, desired: committed, observed: committed, drift: false, runtime: options.stateRuntime,
           active_transaction: Object.values(transactions).find(item => !["committed", "rolled_back"].includes(item.status)) });
       }
       if (path === "/runtime") return reply(runtimeState());
@@ -136,6 +139,12 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       if (path === "/services/mdns") return reply(committed.mdns ?? mdnsSchema.parse({}));
       if (path === "/services/mdns/status") return reply({ instances: [discoveryStatus()], error: "" });
       if (path === "/statistics") return reply(options.statistics ?? statistics());
+      if (path === "/statistics/firewall") {
+        const counters = firewallCounters(activeConfig());
+        return reply({ ...counters, config_revision: revision, sample: { ...counters.sample, status: "simulated" }, rules: [], generation: null, ruleset_id: null });
+      }
+      if (path === "/firewall/deny-log") return reply({ error: "Deny capture unavailable in simulator" }, 503);
+      if (path === "/statistics/vnstat") return reply({ error: "Native accounting unavailable in simulator" }, 503);
       if (path === "/statistics/host") {
         const sample = healthSnapshot(); sample.sample.status = "simulated"; sample.sample.scope = "simulator"; sample.sample.boot_id = null;
         for (const section of Object.values(sample.sections)) { section.status = "simulated"; section.data = null; section.error = "No physical host measurements in simulator"; }
@@ -156,6 +165,34 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     if (request.method() === "DELETE") {
       writes.push({ path, body: request.postData() ? decodeJson(request.postData()!) : undefined });
       if (path === "/connections" || /^\/connections\/\d+$/.test(path)) return reply({ status: path === "/connections" ? "flushed" : "deleted", scope: connections().sample.scope });
+      if (path === "/firewall/hosts-and-rules") {
+        const body = z.object({
+          base_revision: z.string(), confirm_timeout_seconds: z.number().int().min(10).max(300),
+          confirm: z.literal(true), description: z.string().optional(),
+        }).strict().parse(request.postDataJSON());
+        if (body.base_revision !== revision || Object.values(transactions).some(item => !["committed", "rolled_back"].includes(item.status))) {
+          return reply({ error: "Stale revision or active transaction", transaction: null }, 409);
+        }
+        if (body.confirm !== true) return reply({ error: "Explicit confirmation required", transaction: null }, 400);
+        const pending = transaction();
+        pending.previous = committed;
+        pending.base_revision = revision;
+        pending.candidate = structuredClone(committed);
+        pending.candidate.firewall.rules = [];
+        if (pending.candidate.firewall.policies) {
+          pending.candidate.firewall.policies.hosts = [];
+          for (const policy of pending.candidate.firewall.policies.interfaces) policy.rules = [];
+        }
+        pending.description = body.description;
+        pending.confirmation_deadline = new Date(Date.now() + body.confirm_timeout_seconds * 1000).toISOString();
+        transactions[pending.id] = pending;
+        if (options.applyError) {
+          pending.status = options.applyError.outcome; pending.error = options.applyError.message;
+          return reply({ error: options.applyError.message, transaction: pending }, 500);
+        }
+        if (options.lostSubmit) return route.abort("failed");
+        return reply(pending, 202);
+      }
     }
     if (request.method() === "POST") {
       const body: unknown = request.postData() ? decodeJson(request.postData()!) : undefined;
@@ -165,7 +202,9 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         const parsed = body && typeof body === "object" ? body : {};
         const pending = transaction();
         pending.previous = committed;
+        pending.base_revision = revision;
         pending.candidate = "config" in parsed ? parsed.config as Config : config();
+        if (options.normalizeCandidate) pending.candidate = normalize(pending.candidate);
         if ("description" in parsed && typeof parsed.description === "string") pending.description = parsed.description;
         if (path.endsWith("/restore")) pending.restored_from_revision = path.split("/")[2];
         transactions[pending.id] = pending;
@@ -181,7 +220,9 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         if (!pending) return reply({ error: "Not found", transaction: null }, 404);
         if (path.endsWith("/confirm")) {
           pending.status = "committed"; pending.committed_at = new Date().toISOString();
-          revision = String(BigInt(revision) + 1n); committed = pending.candidate;
+          revision = `2026.10.29.${Number(revision.split(".")[3]) + 1}`;
+          pending.committed_revision = revision;
+          committed = { ...pending.candidate, software: committed.software };
         } else pending.status = "rolled_back";
         return reply(pending);
       }
@@ -192,5 +233,15 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     }
     return reply({ error: "Unexpected mocked endpoint", transaction: null }, 404);
   });
-  return { writes };
+  return {
+    writes,
+    expireTransactions() {
+      for (const pending of Object.values(transactions)) {
+        if (pending.status === "pending_confirmation") {
+          pending.status = "rolled_back";
+          pending.confirmation_deadline = new Date(Date.now() - 1).toISOString();
+        }
+      }
+    },
+  };
 }

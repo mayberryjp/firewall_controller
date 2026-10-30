@@ -112,8 +112,9 @@ export async function request<T>(
   if (response.status === 401 && registryAuthError === "true") unauthorized();
   let data: unknown;
   try { data = decodeJson(raw); }
-  catch {
-    throw new ApiFailure(`HTTP ${response.status}: non-JSON or incompatible response. ${diagnostic(raw, requestCredential)}`,
+  catch (error) {
+    const reason = error instanceof Error ? diagnostic(error.message, requestCredential) : "Unable to decode response";
+    throw new ApiFailure(`HTTP ${response.status}: non-JSON or incompatible response. ${reason}`,
       response.status, undefined, writing, response.status < 400);
   }
   if (response.status >= 400) {
@@ -139,7 +140,8 @@ export async function inspectApiPath(input: string, signal?: AbortSignal): Promi
   const pathname = path.split("?")[0]!;
   if (!/^\/api\/v1\/[A-Za-z0-9_~:@/.-]+$/.test(pathname) ||
       pathname.slice(8).split("/").some(segment => !segment || segment === "." || segment === "..") ||
-      /[\s\\#\u0000-\u001f\u007f]/.test(path)) {
+      /[\s\\#]/.test(path) ||
+      [...path].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
     throw new ApiFailure("Enter an appliance path beginning with /api/v1/ without URLs, fragments or traversal segments.");
   }
   try {

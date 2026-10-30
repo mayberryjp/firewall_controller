@@ -7,6 +7,7 @@ import { record, type Field } from "@/types/forms";
 import { preset, resourceFields, type Section } from "@/services/resourceForms";
 import { cloneConfig, numericAddress, prefix, stableJson, validateConfig } from "@/services/configuration";
 import { interfaceChoice, resourceItems, replaceResourceItems } from "@/services/resourceCollections";
+import { supportsFirewallPorts, parseFirewallPorts } from "@/services/firewallProtocols";
 
 export function useResourceEditor(section: Section, wireguard = false, vlan = false, loopbacks = false) {
   const store = useControllerStore();
@@ -35,7 +36,8 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     const result: Field[] = resourceFields(section, section === "interfaces" ? parentOptions.value : interfaceOptions.value,
       adopted.value, immutable.value, form.value.kind, form.value.family, familyInterfaces.value, wireguard, editingIndex.value < 0, vlan)
       .map(field => loopbacks && field.key === "kind" ? { ...field, disabled: true, choices: [{ title: "Loopback", value: "dummy" }] } :
-        field.key === "family" && !store.ipv6Enabled ? { ...field, choices: field.choices?.filter(choice => choice.value !== "ipv6") } : field);
+        field.key === "family" && !store.ipv6Enabled ? { ...field, choices: field.choices?.filter(choice => choice.value !== "ipv6") } :
+          section === "firewall" && field.key === "destination_ports" ? { ...field, disabled: !supportsFirewallPorts(form.value.protocol) } : field);
     return result;
   });
   function dependencies(name: unknown): string[] {
@@ -154,6 +156,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       form.value.resolver_enabled = Boolean(editingConfig.value.dns?.[name]);
       form.value.resolver = dnsConfigSchema.parse(editingConfig.value.dns?.[name] ?? {});
     }
+    if (section === "firewall") form.value.destination_ports = Array.isArray(form.value.destination_ports) ? form.value.destination_ports.join(", ") : "";
     formStart.value = stableJson(form.value); errors.value = {}; formError.value = ""; dialog.value = true;
     renameAcknowledged.value = false;
   }
@@ -165,6 +168,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
   }
   function change(key: string, value: unknown): void {
     let next = { ...form.value, [key]: value };
+    if (section === "firewall" && key === "protocol" && !supportsFirewallPorts(value)) next.destination_ports = "";
     if (section === "gateway_monitors" && ["interface", "target"].includes(key)) {
       next = inferMonitor(next);
       errors.value = {}; formError.value = "";
@@ -188,6 +192,11 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     try {
       if (renaming.value && !renameAcknowledged.value) throw new Error("Review and acknowledge interface rename dependency impacts first");
       let value = JSON.parse(JSON.stringify(form.value)) as Record<string, unknown>;
+      if (section === "firewall") {
+        const ports = parseFirewallPorts(value.destination_ports);
+        if (ports.length) value.destination_ports = ports; else delete value.destination_ports;
+        if (value.protocol === "") delete value.protocol;
+      }
       if (section === "routes") {
         value.table = 254;
         if (record(original.value).interface !== value.interface) delete value.gateway;
@@ -259,6 +268,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       const basePath = section === "firewall" ? `firewall.rules.${index}` : section === "nat" ? `firewall.nat.masquerade.${index}` : `${section}.${index}`;
       const ownIssues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.state.data?.desired).filter(issue =>
         issue.path === basePath || issue.path.startsWith(`${basePath}.`) ||
+        (section === "firewall" && issue.path === "firewall.rules") ||
         (section === "interfaces" && ["dhcp_clients", "dns"].some(area => issue.path === `${area}.${String(value.name)}` || issue.path.startsWith(`${area}.${String(value.name)}.`))));
       for (const issue of ownIssues) {
         const key = issue.path.replace(basePath, "editor").replace(/\.(addresses|allowed_ips|servers)\.\d+$/, ".$1")
@@ -292,10 +302,13 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     } catch (error) { formError.value = error instanceof Error ? error.message : "Unable to stage deletion"; }
   }
   function move(index: number, delta: number): void {
-    if (!editingConfig.value) return;
+    formError.value = "";
     try {
+      if (editingBlocked.value || !editingConfig.value) throw new Error(store.readOnlyReason || "Configuration is unavailable for editing");
       const candidate = cloneConfig(editingConfig.value), values = [...resourceItems(candidate, section)];
-      [values[index], values[index + delta]] = [values[index + delta], values[index]];
+      if (index < 0 || index >= values.length || index + delta < 0 || index + delta >= values.length) throw new Error("Rule is no longer available");
+      const rule = values.splice(index, 1)[0]!;
+      values.splice(index + delta, 0, rule);
       replaceResourceItems(candidate, section, values); store.stage(candidate);
     } catch (error) { formError.value = error instanceof Error ? error.message : "Unable to reorder"; }
   }

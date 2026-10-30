@@ -2,9 +2,10 @@
 import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, validateConfig } from "@/services/configuration";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import { isApplianceStatus, type Config } from "@/types/domain";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 interface Row { host: string; port?: number; transport?: string }
 const props = defineProps<{ service: "ntp" | "syslog" }>();
@@ -53,8 +54,8 @@ const statusTitle = computed(() => {
   if (!current) return "";
   const parts = [`State: ${current.state}`, `Sample: ${(current.sample_status ?? "unavailable").replace("_", " ")}`];
   if (current.discipline) parts.push(`Discipline: ${current.discipline.replace("_", " ")}`);
-  if (current.collected_at) parts.push(`Last sample (UTC): ${formatTimestamp(current.collected_at)}`);
-  if (current.started_at) parts.push(`Started (UTC): ${formatTimestamp(current.started_at)}`);
+  if (current.collected_at) parts.push(`Last sample (${timeZone.value}): ${formatTimestamp(current.collected_at)}`);
+  if (current.started_at) parts.push(`Started (${timeZone.value}): ${formatTimestamp(current.started_at)}`);
   return parts.join("\n");
 });
 const editIndex = ref<number | null>(null), form = ref<Row>({ host: "" }), error = ref("");

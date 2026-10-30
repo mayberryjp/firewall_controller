@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useControllerStore } from "@/stores/controller";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import SafetyBanner from "@/components/layout/SafetyBanner.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const store = useControllerStore();
 defineEmits<{ disconnect: [] }>();
 const deployment = import.meta.env.VITE_DEPLOYMENT_LABEL || "Unknown";
@@ -92,7 +93,7 @@ const connectionIcon = computed(() => !store.connected ? "mdi-lan-disconnect" : 
           <span v-if="health?.stale">Stale last-known data</span>
         </div>
         <p class="text-caption text-medium-emphasis mb-3">
-          Collected (UTC): {{ formatTimestamp(health?.process_health.collected_at) }}
+          Collected ({{ timeZone }}): {{ formatTimestamp(health?.process_health.collected_at) }}
         </p>
         <p
           v-if="store.platform.error && !store.platformUnsupported"
@@ -123,10 +124,10 @@ const connectionIcon = computed(() => !store.connected ? "mdi-lan-disconnect" : 
                 <span v-if="alert.retrying"> · Recovering</span>
                 <p>{{ alert.message }}</p>
                 <p class="text-caption text-medium-emphasis">
-                  First seen (UTC): {{ formatTimestamp(alert.first_seen_at) }}
+                  First seen ({{ timeZone }}): {{ formatTimestamp(alert.first_seen_at) }}
                 </p>
                 <p class="text-caption text-medium-emphasis">
-                  Last seen (UTC): {{ formatTimestamp(alert.last_seen_at) }}
+                  Last seen ({{ timeZone }}): {{ formatTimestamp(alert.last_seen_at) }}
                 </p>
               </div>
             </div>
@@ -164,7 +165,7 @@ const connectionIcon = computed(() => !store.connected ? "mdi-lan-disconnect" : 
             >
               <dt>{{ component.resource ?? component.component }}: {{ component.state }}{{ component.retrying ? ' · Recovering' : '' }}</dt>
               <dd class="text-caption text-medium-emphasis">
-                {{ health.stale || component.healthy === null ? 'Unknown' : component.healthy ? 'Healthy' : 'Unhealthy' }} · Collected (UTC): {{ formatTimestamp(component.collected_at) }}
+                {{ health.stale || component.healthy === null ? 'Unknown' : component.healthy ? 'Healthy' : 'Unhealthy' }} · Collected ({{ timeZone }}): {{ formatTimestamp(component.collected_at) }}
               </dd>
             </div>
           </dl>

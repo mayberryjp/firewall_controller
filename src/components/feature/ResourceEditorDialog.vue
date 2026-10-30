@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import type { Field } from "@/types/forms";
 import type { Section } from "@/services/resourceForms";
 import FieldInput from "@/components/base/FieldInput.vue";
+import { useControllerStore } from "@/stores/controller";
+import { firewallProtocolNotice } from "@/services/firewallProtocols";
 
 const props = defineProps<{
   open: boolean;
@@ -20,6 +22,10 @@ const props = defineProps<{
 const acknowledged = defineModel<boolean>("acknowledged", { required: true });
 defineEmits<{ change: [key: string, value: unknown]; cancel: []; stage: [] }>();
 const summary = ref<HTMLElement | null>(null);
+const store = useControllerStore();
+const protocolNotice = computed(() => props.section === "firewall" ? firewallProtocolNotice(
+  props.form.protocol, props.form.action, (store.draft ?? store.state.data?.desired)?.firewall.allow_all_icmp ?? false,
+) : "");
 watch(() => props.error, async value => {
   if (value) { await nextTick(); summary.value?.focus(); }
 });
@@ -79,6 +85,12 @@ watch(() => props.error, async value => {
             </li>
           </ul>
         </div>
+        <p
+          v-if="protocolNotice"
+          class="text-warning text-caption mb-3"
+        >
+          {{ protocolNotice }}
+        </p>
         <FieldInput
           v-for="field in fields"
           :key="field.key"

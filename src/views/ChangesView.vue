@@ -53,13 +53,12 @@ function discard(): void {
       <v-btn
         v-if="store.draft"
         color="error"
-        icon="mdi-delete-outline"
-        variant="text"
-        aria-label="Discard draft"
-        title="Discard draft"
+        variant="flat"
         :disabled="Boolean(store.submitted || store.uncertain || store.busy || checking)"
         @click="destructive = 'discard'"
-      />
+      >
+        Discard changes
+      </v-btn>
       <v-btn
         v-if="store.draft && store.draftStale"
         :disabled="Boolean(store.submitted || store.uncertain || store.busy || checking)"
@@ -153,7 +152,7 @@ function discard(): void {
             color="error"
             @click="discard"
           >
-            {{ destructive === "restart" ? "Discard and restart" : "Discard shared draft" }}
+            {{ destructive === "restart" ? "Discard and restart" : "Discard staged changes" }}
           </v-btn>
         </v-card-actions>
       </v-card>

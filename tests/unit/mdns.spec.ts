@@ -36,7 +36,7 @@ describe("mDNS configuration and runtime contracts", () => {
     expect(configSchema.parse(decodeJson(encodeJson(roundtrip)))).toEqual(value);
     const pending = transactionSchema.parse({ ...transaction(), candidate: value, previous: value });
     expect(pending.previous.mdns).toEqual(value.mdns); expect(pending.candidate.mdns).toEqual(value.mdns);
-    expect(revisionDetailSchema.parse({ revision: "0", current: true, submitted_at: null, committed_at: null, config: value }).config.mdns).toEqual(value.mdns);
+    expect(revisionDetailSchema.parse({ revision: "2026.10.29.1", current: true, submitted_at: null, committed_at: null, config: value }).config.mdns).toEqual(value.mdns);
     expect(issues(value)).toEqual([]);
   });
   it.each(["_udp._govee-lan._udp.local.", "living-room._googlecast._tcp.local.", "printer_1._ipp._tcp.office.local."])("accepts exact instance filter %s without changing its identity", filter => {

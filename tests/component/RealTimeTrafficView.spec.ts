@@ -6,7 +6,7 @@ import type { ApexOptions } from "apexcharts";
 import RealTimeTrafficView from "@/views/RealTimeTrafficView.vue";
 import { useControllerStore } from "@/stores/controller";
 import { trafficHistoryLimit } from "@/services/traffic";
-import { statistics, trafficStatistics } from "../fixtures";
+import { state, statistics, trafficStatistics } from "../fixtures";
 
 vi.mock("vue3-apexcharts", () => ({ default: {
   name: "TrafficChart", props: ["options", "series", "height"], template: '<div class="apex-chart-stub" />',
@@ -193,6 +193,19 @@ describe("Real Time Traffic", () => {
     expect(options.xaxis?.labels?.formatter?.("ignored", timestamp)).toBe("2026-01-02 01:04:05");
     expect(options.xaxis?.labels?.formatter?.("invalid")).toBe("Invalid timestamp");
     expect(options.tooltip?.x?.formatter?.(timestamp)).toBe("2026-01-02 01:04:05 UTC");
+    expect(charts()[0]!.props("series")[0].data[0].x).toBe(Date.parse("2026-10-27T12:00:00.123Z"));
+  });
+  it("reactively displays the saved timezone without changing traffic sample instants", async () => {
+    wrapper = render(); await sample(0);
+    const store = useControllerStore();
+    store.state.data = state();
+    store.state.data.desired.system = { hostname: "", domain: "", timezone: "America/Los_Angeles" };
+    await flushPromises();
+    const options: ApexOptions = charts()[0]!.props("options");
+    const timestamp = Date.parse("2026-01-02T03:04:05.987+02:00");
+    expect(options.xaxis?.title?.text).toBe("Time (America/Los_Angeles)");
+    expect(options.xaxis?.labels?.formatter?.("", timestamp)).toBe("2026-01-01 17:04:05");
+    expect(options.tooltip?.x?.formatter?.(timestamp)).toBe("2026-01-01 17:04:05 America/Los_Angeles");
     expect(charts()[0]!.props("series")[0].data[0].x).toBe(Date.parse("2026-10-27T12:00:00.123Z"));
   });
 });

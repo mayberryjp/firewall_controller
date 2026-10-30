@@ -7,9 +7,11 @@ import type { NavigationSection } from "@/constants/navigation";
 const props = defineProps<{ section: NavigationSection }>();
 const showNavigation = computed(() => props.section.pages.length > 1 || ["settings-section", "diagnostics-section"].includes(props.section.name));
 const route = useRoute();
+const selectedPage = computed(() => route.meta.navigationPage ?? route.name);
 const { lgAndUp } = useDisplay();
-const collapsed = ref(route.name === "connections");
-watch(() => route.name, name => { collapsed.value = name === "connections"; });
+const collapsible = computed(() => ["connections", "firewall", "firewall-drops"].some(name => name === route.name));
+const collapsed = ref(collapsible.value);
+watch(() => route.name, () => { collapsed.value = collapsible.value; });
 </script>
 
 <template>
@@ -24,7 +26,7 @@ watch(() => route.name, name => { collapsed.value = name === "connections"; });
       :aria-label="`${section.title} pages`"
     >
       <v-btn
-        v-if="lgAndUp && route.name === 'connections'"
+        v-if="lgAndUp && collapsible"
         :icon="collapsed ? 'mdi-menu-open' : 'mdi-menu'"
         :aria-label="`${collapsed ? 'Expand' : 'Collapse'} ${section.title} navigation`"
         :title="`${collapsed ? 'Expand' : 'Collapse'} ${section.title} navigation`"
@@ -36,7 +38,7 @@ watch(() => route.name, name => { collapsed.value = name === "connections"; });
       />
       <v-tabs
         v-if="!lgAndUp || !collapsed"
-        :model-value="route.meta.navigationPage ?? route.name"
+        :model-value="selectedPage"
         :direction="lgAndUp ? 'vertical' : 'horizontal'"
         :aria-orientation="lgAndUp ? 'vertical' : 'horizontal'"
         :aria-label="`${section.title} pages`"
@@ -48,8 +50,9 @@ watch(() => route.name, name => { collapsed.value = name === "connections"; });
           :key="page.name"
           :value="page.name"
           :to="{ name: page.name }"
+          :exact="page.name !== selectedPage"
           :aria-label="page.title"
-          :aria-current="(route.meta.navigationPage ?? route.name) === page.name ? 'page' : undefined"
+          :aria-current="selectedPage === page.name ? 'page' : undefined"
         >
           {{ page.title }}
         </v-tab>

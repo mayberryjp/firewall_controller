@@ -36,19 +36,26 @@ export function usePolling(): void {
     schedule(store.refreshBGPStatus, () => 3000, () => Boolean(store.bgpStatus.error),
       () => route.path === "/overview" && store.bgpMonitoring || ["/routing/bgp", "/routing/bgp/peers"].includes(route.path), true, 5000);
     schedule(store.refreshBGPRoutes, () => 3000, () => Boolean(store.bgpRoutes.error),
-      () => route.path === "/diagnostics/bgp-routes" && store.bgpRouteDirection === "received", true, 5000);
+      () => route.name === "bgp-routes" && store.bgpRouteDirection === "received" ||
+        route.path.startsWith("/wireguard") && Boolean((store.state.data?.active_transaction?.candidate ?? store.state.data?.desired)?.bgp?.enabled), true, 5000);
     schedule(store.refreshBGPAdvertisedRoutes, () => 3000, () => Boolean(store.bgpAdvertisedRoutes.error),
-      () => route.path === "/diagnostics/bgp-routes" && store.bgpRouteDirection === "advertised", true, 5000);
-    schedule(store.refreshState, () => store.activeTransactions.length || store.uncertain ? 1000 : 5000, () => Boolean(store.state.error));
+      () => route.name === "bgp-routes" && store.bgpRouteDirection === "advertised", true, 5000);
+    schedule(store.refreshState, () => store.activeTransactions.length || store.uncertain ? 1000 : store.softwareCheckPending ? 2000 : 5000,
+      () => Boolean(store.state.error),
+      () => route.path === "/overview" || route.path === "/config/upgrade" || route.name === "settings-advanced" ||
+        route.name === "transaction-detail" || store.softwareCheckPending, true);
     schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error), () =>
       route.path === "/overview" || route.path.startsWith("/wireguard") || route.path === "/routes" ||
       route.path.startsWith("/services/"), true, 5000);
-    schedule(store.refreshTransactions, () => store.activeTransactions.length || store.uncertain ? 1000 : 10000, () => Boolean(store.transactions.error));
+    schedule(store.refreshTransactions, () => store.activeTransactions.length || store.uncertain ? 1000 : 10000,
+      () => Boolean(store.transactions.error),
+      () => route.path === "/overview" || route.name === "settings-advanced" || route.name === "transaction-detail", true);
     schedule(store.refreshStatistics, () => 3000, () => Boolean(store.statistics.error),
       () => (route.path === "/overview" && store.monitoring) || ["/diagnostics/traffic", "/diagnostics/interface-drops"].includes(route.path), true);
     schedule(store.refreshGatewayStatistics, () => 3000, () => Boolean(store.gatewayStatistics.error), () => store.gatewayMonitoring && ["/overview", "/gateway-monitors"].includes(route.path), true, 5000);
     schedule(store.refreshHostHealth, () => 3000, () => Boolean(store.hostHealth.error));
     schedule(store.refreshMqttStatus, () => 7500, () => Boolean(store.mqttStatus.error), () => route.path === "/settings/mqtt-streaming", true);
+    schedule(store.refreshVnStatReporting, () => 15000, () => Boolean(store.vnstatReporting.error), () => route.path === "/services/vnstat", true);
     schedule(store.refreshDynamicDnsStatus, () => 7500, () => Boolean(store.dynamicDnsStatus.error), () => route.path === "/settings/dynamic-dns", true);
     schedule(store.refreshMDNSStatus, () => 3000, () => Boolean(store.mdnsStatus.error), () => route.path === "/services/mdns", true, 5000);
     schedule(store.refreshUDPRelayStatus, () => 3000, () => Boolean(store.udpRelayStatus.error), () => route.path === "/services/udp-broadcast-relay", true, 5000);

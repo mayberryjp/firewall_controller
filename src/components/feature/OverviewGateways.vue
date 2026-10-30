@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { formatMetric, gatewayHealth, gatewayMetricIndicator, gatewaySampleState } from "@/services/gatewayHealth";
 import { stableJson } from "@/services/configuration";
+import { isInitialLoad } from "@/services/datasets";
 import OverviewWidget from "./OverviewWidget.vue";
 const store = useControllerStore(), now = ref(Date.now());
 let clock: ReturnType<typeof setInterval> | undefined;
@@ -58,7 +59,7 @@ const rows = computed(() => observations.value.map(row => {
   <OverviewWidget
     title="Gateways"
     to="/gateway-monitors"
-    :note="store.gatewayStatistics.error ? 'Unavailable' : store.gatewayStatistics.stale ? 'Stale' : undefined"
+    :note="store.gatewayStatistics.error ? 'Unavailable' : !isInitialLoad(store.gatewayStatistics) && store.gatewayStatistics.stale ? 'Stale' : undefined"
     :detail="store.gatewayStatistics.error ?? undefined"
   >
     <v-table density="compact">
@@ -98,7 +99,7 @@ const rows = computed(() => observations.value.map(row => {
             </v-chip>
           </td>
         </tr>
-        <tr v-if="!rows.length">
+        <tr v-if="!rows.length && !isInitialLoad(store.state)">
           <td colspan="5">
             {{ stored ? "No gateway monitors." : "Gateway status unavailable." }}
           </td>

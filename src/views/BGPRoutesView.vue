@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
+import { isInitialLoad } from "@/services/datasets";
 
 const store = useControllerStore();
 const direction = ref<"received" | "advertised">("received"), neighbor = ref<string | null>(null);
@@ -19,7 +20,7 @@ const received = computed(() => (store.bgpRoutes.data?.routes ?? []).filter(rout
 const advertised = computed(() => store.bgpAdvertisedRoutesCurrent
   ? (store.bgpAdvertisedRoutes.data?.routes ?? []).filter(route => !neighbor.value || route.neighbor === neighbor.value) : []);
 const advertisedEmpty = computed(() => {
-  if (query.value.loading && !query.value.data) return "Loading advertised BGP routes...";
+  if (isInitialLoad(query.value)) return "";
   if (!query.value.data || query.value.stale || query.value.error || query.value.data.error ||
     (query.value.data.state === "running" && !store.bgpAdvertisedRoutesCurrent)) return "Advertised BGP routes unavailable.";
   return neighbor.value ? "No advertised BGP routes for this neighbor." : "No advertised BGP routes.";
@@ -129,7 +130,7 @@ const advertisedEmpty = computed(() => {
           </tr>
           <tr v-if="!received.length">
             <td colspan="7">
-              {{ store.bgpRoutes.loading && !store.bgpRoutes.data ? 'Loading received BGP routes...' : store.bgpRoutes.data ? neighbor ? 'No learned BGP routes for this neighbor.' : 'No learned BGP routes.' : 'BGP routes unavailable.' }}
+              {{ isInitialLoad(store.bgpRoutes) ? '' : store.bgpRoutes.data ? neighbor ? 'No learned BGP routes for this neighbor.' : 'No learned BGP routes.' : 'BGP routes unavailable.' }}
             </td>
           </tr>
         </tbody>

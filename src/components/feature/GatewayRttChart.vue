@@ -4,7 +4,8 @@ import VueApexCharts from "vue3-apexcharts";
 import type { ApexOptions } from "apexcharts";
 import { useControllerStore } from "@/stores/controller";
 import { gatewaySampleState } from "@/services/gatewayHealth";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
@@ -36,7 +37,7 @@ watch(() => [store.gatewayStatistics.data, store.gatewayStatistics.stale, store.
 const series = computed(() => names.value.map(name => ({ name, data: history.value.get(name) ?? [] })));
 const hasMeasurements = computed(() => series.value.some(item => item.data.some(point => point.y !== null)));
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, useGrouping: false });
-const options: ApexOptions = {
+const options = computed<ApexOptions>(() => ({
   chart: {
     type: "line", background: "transparent", foreColor: "#f0f3f7", fontFamily: "inherit",
     animations: { enabled: false }, toolbar: { show: false }, zoom: { enabled: false },
@@ -47,16 +48,16 @@ const options: ApexOptions = {
   grid: { borderColor: "#29313d" },
   legend: { position: "top", showForSingleSeries: true },
   xaxis: {
-    type: "datetime", tickAmount: 3, title: { text: "Time (UTC)" },
+    type: "datetime", tickAmount: 3, title: { text: `Time (${timeZone.value})` },
     labels: { datetimeUTC: true, hideOverlappingLabels: true, formatter: (value, timestamp) => formatTimestamp(timestamp ?? Number(value)) },
   },
   yaxis: { min: 0, title: { text: "Mean RTT (ms)" }, labels: { formatter: value => number.format(value) } },
   tooltip: {
-    x: { formatter: value => `${formatTimestamp(value)} UTC` },
+    x: { formatter: value => `${formatTimestamp(value)} ${timeZone.value}` },
     y: { formatter: value => value === null || value === undefined ? "Unavailable" : `${number.format(value)} ms` },
   },
   responsive: [{ breakpoint: 640, options: { xaxis: { labels: { show: false } } } }],
-};
+}));
 </script>
 
 <template>

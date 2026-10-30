@@ -30,6 +30,7 @@ const {
   open, manage, change, cancel, stageForm, stageDelete, move,
 } = useResourceEditor(props.section, props.wireguard, props.vlan, props.loopbacks);
 const { filters, selectedConfig, rows } = useResourceCollection(props.section, props.wireguard, props.name, props.vlan);
+const hostPolicies = computed(() => props.section === "firewall" && Boolean(selectedConfig.value?.firewall.policies));
 const showFilters = computed(() => !props.name && ((selectedConfig.value && resourceItems(selectedConfig.value, props.section).length > 20) ||
   Object.values(filters).some(value => value !== "" && value !== "All")));
 const showInventory = computed(() => props.section === "interfaces" && !props.wireguard && !props.vlan && !props.name);
@@ -71,14 +72,13 @@ function deleteResource(row: { index: number; value: unknown }): void {
   if (dialog.value && (form.value.kind === "ethernet" || inlineEditor.value)) { cancel(); if (dialog.value) return; }
   deletion.value = row;
 }
-function moveResource(index: number, delta: number): void {
-  if (props.section === "nat" && dialog.value) cancel();
-  move(index, delta);
-}
 </script>
 
 <template>
-  <section :aria-label="`${loopbacks ? 'Loopbacks' : vlan ? 'VLANs' : wireguard ? 'WireGuard' : resourceTitles[section]}${name ? ` · ${name}` : ''}`">
+  <section
+    :class="{ 'host-policy-page': hostPolicies }"
+    :aria-label="`${loopbacks ? 'Loopbacks' : vlan ? 'VLANs' : wireguard ? 'WireGuard' : resourceTitles[section]}${name ? ` · ${name}` : ''}`"
+  >
     <h1
       v-if="name"
       class="text-h6 mb-4"
@@ -105,7 +105,7 @@ function moveResource(index: number, delta: number): void {
       {{ formError }}
     </v-alert>
     <div
-      v-if="section !== 'interfaces' || wireguard || vlan || loopbacks"
+      v-if="!hostPolicies && (section !== 'interfaces' || wireguard || vlan || loopbacks)"
       class="d-flex flex-wrap align-center ga-3 mb-5"
     >
       <v-btn
@@ -118,7 +118,7 @@ function moveResource(index: number, delta: number): void {
       </v-btn>
     </div>
     <ResourceFilters
-      v-if="section !== 'interfaces' && showFilters"
+      v-if="!hostPolicies && section !== 'interfaces' && showFilters"
       :model-value="filters"
       :section="section"
       :interfaces="interfaceOptions"
@@ -173,6 +173,7 @@ function moveResource(index: number, delta: number): void {
           @stage="stageForm"
         />
       </template>
+
       <template #additional-rows="{ columns }">
         <InterfaceRowEditor
           v-if="loopbacks && dialog && editingIndex < 0"
@@ -193,7 +194,7 @@ function moveResource(index: number, delta: number): void {
       </template>
     </InterfaceInventory>
     <ResourceTable
-      v-else-if="selectedConfig"
+      v-else-if="selectedConfig && !hostPolicies"
       :section="section"
       :rows="rows"
       :total="resourceItems(selectedConfig, section).length"
@@ -205,7 +206,7 @@ function moveResource(index: number, delta: number): void {
       :expanded-name="dialog && form.kind === 'ethernet' ? String(form.name) : undefined"
       @edit="editInterface"
       @delete="deleteResource"
-      @move="moveResource"
+      @move="move"
       @toggle="toggleMonitor"
     >
       <template #editing-row="{ row, columns, keys }">
@@ -316,3 +317,10 @@ function moveResource(index: number, delta: number): void {
     />
   </section>
 </template>
+
+<style scoped>
+@media (min-width: 900px) {
+  .host-policy-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .host-policy-page > :not(.host-policy-layout) { flex: 0 0 auto; }
+}
+</style>

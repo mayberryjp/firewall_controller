@@ -2,10 +2,11 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { formatMetric, gatewayHealth, gatewayMetricIndicator, gatewaySampleState } from "@/services/gatewayHealth";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const props = defineProps<{ name?: string; statusOnly?: boolean; summary?: boolean }>();
 const store = useControllerStore();
 const now = ref(Date.now());
@@ -48,10 +49,10 @@ const measurements = computed<Record<string, string | number | undefined>>(() =>
     Received: row.data.received,
     Lost: row.data.lost,
     Pending: row.data.pending,
-    "Measured (UTC)": formatTimestamp(row.data.collected_at),
-    "Started (UTC)": formatTimestamp(row.data.started_at),
-    "Health changed (UTC)": formatTimestamp(row.data.health_changed_at),
-    "Last success (UTC)": formatTimestamp(row.data.last_success_at),
+    [`Measured (${timeZone.value})`]: formatTimestamp(row.data.collected_at),
+    [`Started (${timeZone.value})`]: formatTimestamp(row.data.started_at),
+    [`Health changed (${timeZone.value})`]: formatTimestamp(row.data.health_changed_at),
+    [`Last success (${timeZone.value})`]: formatTimestamp(row.data.last_success_at),
   };
 });
 const healthColor = computed(() => measurements.value.Health === "up" ? "success" : measurements.value.Health === "degraded" ? "warning" : measurements.value.Health === "down" ? "error" : "default");

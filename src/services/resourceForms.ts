@@ -1,6 +1,8 @@
 import type { Choice, Field } from "@/types/forms";
 import { timeoutNames } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
+import { manualRuleOwnership } from "@/services/ruleOwnership";
+import { firewallProtocolChoices } from "@/services/firewallProtocols";
 
 export type Section = "interfaces" | "routes" | "firewall" | "nat" | "softflowd" | "gateway_monitors";
 const text = (key: string, label: string, hint?: string): Field => ({ key, label, kind: "text", hint });
@@ -76,7 +78,7 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
             create: () => ({ public_key: "", allowed_ips: [], persistent_keepalive_seconds: 0 }),
             fields: [
               text("public_key", "Public key", "Unique nonzero base64 32-byte key. No private-key upload/generation."),
-              text("endpoint", "Optional endpoint", "IP:port, IPv6 bracketed. No DNS or zones."),
+              text("endpoint", "Optional endpoint", "vpn.example.test:51820, 192.0.2.1:51820 or [2001:db8::1]:51820. Lowercase DNS; no URLs or zones."),
               { key: "allowed_ips", label: "Allowed networks", kind: "lines" as const },
               number("persistent_keepalive_seconds", "Keepalive seconds", "0..65535; 0 disables keepalive."),
             ],
@@ -90,7 +92,11 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
       select("interface", "Gateway interface", managed),
       number("metric", "Metric", "1..2147483647"),
     ];
-    case "firewall": return [text("source", "Source network (blank = Any)"), text("destination", "Destination network (blank = Any)"), select("action", "Action", ["accept", "drop"])];
+    case "firewall": return [
+      text("source", "Source network (blank = Any)"), text("destination", "Destination network (blank = Any)"),
+      select("protocol", "Protocol", firewallProtocolChoices), text("destination_ports", "Destination ports (comma separated)"),
+      select("action", "Action", ["accept", "drop"]),
+    ];
     case "nat": return [
       select("family", "Family", ["ipv4", "ipv6"]), text("source", "Source network (blank = Any)", `Must match ${String(family)}.`),
       select("out_interface", "Managed egress with family address", familyInterfaces, "IPv4 supports a static address or DHCP client; IPv6 requires a static address."),
@@ -117,8 +123,8 @@ export function preset(section: Section, wireguard = false): unknown {
       ? { name: "", kind: "wireguard", mtu: 1420, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "", listen_port: 51820, peers: [] } }
       : { name: "", kind: "dummy", mtu: 1500, up: false, addresses: [], dhcp_relay: { enabled: false, servers: [] } };
     case "routes": return { enabled: true, destination: "", interface: "", table: 254, metric: 1 };
-    case "firewall": return { action: "accept" };
-    case "nat": return { family: "ipv4", out_interface: "" };
+    case "firewall": return { ...manualRuleOwnership, action: "accept" };
+    case "nat": return { ...manualRuleOwnership, family: "ipv4", out_interface: "" };
     case "softflowd": return {
       name: "", enabled: true, interface: "", collector: "", export_version: 5, sampling_rate: 1,
       max_flows: 8192, snaplen: 128, promiscuous: true, timeouts: {},

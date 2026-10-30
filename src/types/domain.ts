@@ -1,12 +1,23 @@
 import { z } from "zod";
 import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
+import { dateVersionSchema } from "@/services/versions";
+import { sandoSchema } from "@/services/sandoState";
+import { ruleOwnershipShape, validateRuleOwnership } from "@/services/ruleOwnership";
+import { firewallProtocolSchema } from "@/services/firewallProtocols";
 
 const list = <T extends z.ZodTypeAny>(schema: T) =>
   z.array(schema).nullable().transform((value) => value ?? []);
 const integer = z.number().int().safe();
-export const revisionSchema = z.string().regex(/^(0|[1-9]\d*)$/)
-  .refine((value) => /^(0|[1-9]\d*)$/.test(value) && BigInt(value) <= 18446744073709551615n, "Revision exceeds uint64");
+export const legacyRevisionSchema = z.string().regex(/^(0|[1-9]\d*)$/)
+  .refine(value => /^(0|[1-9]\d*)$/.test(value) && BigInt(value) <= 18446744073709551615n, "Revision exceeds uint64");
+export const revisionSchema = z.union([dateVersionSchema, legacyRevisionSchema]);
 const timestamp = z.string().datetime({ offset: true });
+export const softwareMetadataSchema = z.object({
+  version: dateVersionSchema, repository: z.string().nullable(),
+  latest_version: dateVersionSchema.nullable(), update_available: z.boolean().nullable(),
+  last_checked_at: timestamp.nullable(), error: z.string().nullable(),
+}).strict();
+export type SoftwareMetadata = z.infer<typeof softwareMetadataSchema>;
 const optionalText = z.string().optional();
 const stringMap = z.record(z.string()).nullable().transform((value) => value ?? {});
 export const objectMetadataSchema = z.object({
@@ -15,10 +26,10 @@ export const objectMetadataSchema = z.object({
 }).strict().transform(value => value.display_name || value.description ? value : undefined);
 const annotation = { metadata: objectMetadataSchema.optional() };
 export const destinationRewriteSchema = z.object({
-  ...annotation,
+  ...annotation, ...ruleOwnershipShape,
   out_interface: z.string(), protocol: z.enum(["tcp", "udp"]), destination_port: integer.min(1).max(65535),
   target_interface: z.string(), target_address: z.string(),
-}).strict();
+}).strict().superRefine(validateRuleOwnership);
 export type DestinationRewrite = z.infer<typeof destinationRewriteSchema>;
 export const bgpNeighborSchema = z.object({
   ...annotation,
@@ -102,13 +113,14 @@ export const routeSchema = z.object({
   destination: z.string(), gateway: optionalText, interface: z.string(), table: integer, metric: integer,
 }).strict();
 export const filterSchema = z.object({
-  ...annotation,
+  ...annotation, ...ruleOwnershipShape,
   source: optionalText, destination: optionalText, action: z.enum(["accept", "drop"]),
-}).strict();
+  protocol: firewallProtocolSchema.optional(), destination_ports: z.array(integer).optional(),
+}).strict().superRefine(validateRuleOwnership);
 export const masqueradeSchema = z.object({
-  ...annotation,
+  ...annotation, ...ruleOwnershipShape,
   family: z.enum(["ipv4", "ipv6"]), source: optionalText, out_interface: z.string(),
-}).strict();
+}).strict().superRefine(validateRuleOwnership);
 export const timeoutNames = ["general", "tcp", "tcp.rst", "tcp.fin", "udp", "icmp", "maxlife", "expint"] as const;
 export const softflowdSchema = z.object({
   ...annotation,
@@ -119,22 +131,22 @@ export const softflowdSchema = z.object({
   timeouts: z.record(z.enum(timeoutNames), integer).nullable().transform((value) => value ?? {}),
 }).strict();
 const hostPolicyRuleSchema = z.object({
-  ...annotation,
+  ...annotation, ...ruleOwnershipShape,
   out_interface: optionalText,
-  destination_host: optionalText, destination: optionalText, protocol: z.enum(["", "tcp", "udp"]).optional(),
+  destination_host: optionalText, destination: optionalText, protocol: firewallProtocolSchema.optional(),
   destination_ports: list(integer).optional(), action: z.enum(["accept", "drop"]),
-}).strict();
+}).strict().superRefine(validateRuleOwnership);
 export const inputFirewallSchema = z.object({
   policy: z.enum(["accept", "drop"]),
   interfaces: z.array(z.object({
     ...annotation,
     interface: z.string(),
     rules: z.array(z.object({
-      ...annotation,
-      destination: z.string().optional(), protocol: z.enum(["", "tcp", "udp"]).optional(),
+      ...annotation, ...ruleOwnershipShape,
+      destination: z.string().optional(), protocol: firewallProtocolSchema.optional(),
       destination_ports: z.array(integer).optional(), action: z.enum(["accept", "drop"]),
       out_interface: z.literal("").optional(), destination_host: z.literal("").optional(),
-    }).strict()).default([]),
+    }).strict().superRefine(validateRuleOwnership)).default([]),
   }).strict()).default([]),
 }).strict();
 export const firewallPoliciesSchema = z.object({
@@ -259,6 +271,8 @@ export const dynamicDnsStatusSchema = z.object({
   }).strict()),
 }).strict();
 export const configSchema = z.object({
+  sando: sandoSchema.optional(),
+  software: softwareMetadataSchema.optional(),
   ipv6_enabled: z.boolean().optional(),
   interfaces: list(interfaceSchema), routes: list(routeSchema),
   firewall: z.object({
@@ -286,7 +300,7 @@ export const configSchema = z.object({
 }).passthrough(); // Unknown top-level sections pass through drafts unchanged so a newer backend keeps them.
 export const transactionSchema = z.object({
   id: z.string(), actor: z.string(), status: z.string(),
-  base_revision: revisionSchema, candidate: configSchema, previous: configSchema,
+  base_revision: revisionSchema, committed_revision: revisionSchema.nullable().default(null), candidate: configSchema, previous: configSchema,
   confirmation_deadline: timestamp, error: optionalText, description: optionalText,
   submitted_at: timestamp.nullable(), committed_at: timestamp.nullable(),
   committed_by: optionalText, restored_from_revision: revisionSchema.optional(),
@@ -320,10 +334,20 @@ const platformFields = {
   process_health: processHealthSchema.optional().catch(undefined),
   active_alerts: z.array(activeAlertSchema).optional().catch(undefined),
 };
+export const wireguardDnsSchema = z.object({
+  running: z.boolean(), refresh_interval_seconds: z.literal(60), error: z.string().nullable(),
+  peers: z.array(z.object({
+    interface: z.string(), public_key: z.string(), endpoint: z.string(), ipv6_enabled: z.boolean(),
+    resolved_endpoint: z.string(), last_attempt_unix_ms: integer.nonnegative(), last_success_unix_ms: integer.nonnegative(),
+    error: z.string().nullable(),
+  }).strict()),
+}).strict();
+export type WireGuardDNS = z.infer<typeof wireguardDnsSchema>;
 export const stateSchema: z.ZodType<StateView, z.ZodTypeDef, unknown> = z.object({
   ...platformFields,
   revision: revisionSchema, desired: configSchema, observed: z.unknown(),
   drift: z.boolean().catch(false), active_transaction: transactionSchema.optional().catch(undefined),
+  runtime: z.object({ wireguard_dns: wireguardDnsSchema.optional() }).passthrough().nullable().optional(),
 }).passthrough();
 export const parentSchema = z.object({
   name: z.string(), kind: optionalText, index: integer.optional(), mac: optionalText,
@@ -399,6 +423,14 @@ export const mdnsCounterNames = [
   "queue_drops", "oversize_drops", "unsupported_record_drops", "send_errors",
 ] as const;
 const decimalCounter = z.string().regex(/^(0|[1-9]\d*)$/);
+export const vnstatReportingSchema = z.object({
+  scope: z.literal("host"),
+  last_report_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine(value => dateVersionSchema.safeParse(`${value.replaceAll("-", ".")}.1`).success, "Invalid reporting date").nullable(),
+  last_report_error: z.string().nullable(),
+  sent_datagrams: decimalCounter, failed_datagrams: decimalCounter,
+});
+export type VnStatReporting = z.infer<typeof vnstatReportingSchema>;
 export const udpRelayCounterNames = [
   "received_packets", "transmitted_packets", "received_bytes", "transmitted_bytes",
   "policy_drops", "loop_drops", "rate_limit_drops", "send_errors",
@@ -466,6 +498,7 @@ export const runtimeSchema = z.preprocess(value => {
       last_handshake_unix_seconds: integer.nonnegative().nullable(),
     }).strict()),
   }).strict()).optional(),
+  wireguard_dns: wireguardDnsSchema.optional(),
   ipv6: z.object({
     enabled: z.boolean(), status: z.enum(["measured", "simulated"]),
     disable_ipv6: z.record(z.enum(["0", "1"])).nullable(), drift: z.boolean().nullable(),
@@ -516,6 +549,7 @@ export type SoftflowdConfig = z.infer<typeof softflowdSchema>;
 export type Peer = z.infer<typeof peerSchema>;
 export type Transaction = z.infer<typeof transactionSchema>;
 export interface StateView {
+  runtime?: { wireguard_dns?: WireGuardDNS } | null;
   process_health?: PlatformStatus["process_health"];
   active_alerts?: PlatformStatus["active_alerts"];
   revision: string;
@@ -558,13 +592,13 @@ export const connectionsPageSchema = z.object({
 export type ConnectionsPage = z.infer<typeof connectionsPageSchema>;
 export type Connection = ConnectionsPage["connections"][number];
 export const connectionDeletionSchema = z.object({ status: z.enum(["deleted", "flushed"]), scope: z.string() }).strict();
-export const upgradeVersionSchema = z.string().max(80).regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/, "Use a version such as 1.2.3 or 1.2.3-rc.1, without v or build metadata");
+export const upgradeVersionSchema = dateVersionSchema;
 export const upgradeJobSchema = z.object({
-  id: z.string(), version: z.string(), status: z.string(), created_at: timestamp, updated_at: timestamp,
-  error: z.string().nullable(), last_successful_version: z.string().nullable(),
+  id: z.string(), version: upgradeVersionSchema, status: z.string(), created_at: timestamp, updated_at: timestamp,
+  error: z.string().nullable(), last_successful_version: upgradeVersionSchema.nullable(),
 }).strict();
 export const upgradeStatusSchema = z.object({
-  enabled: z.boolean(), repository: z.string().nullable(), job: upgradeJobSchema.nullable(), last_successful_version: z.string().nullable(),
+  enabled: z.boolean(), repository: z.string().nullable(), job: upgradeJobSchema.nullable(), last_successful_version: upgradeVersionSchema.nullable(),
 }).strict();
 export type UpgradeJob = z.infer<typeof upgradeJobSchema>;
 export type UpgradeStatus = z.infer<typeof upgradeStatusSchema>;

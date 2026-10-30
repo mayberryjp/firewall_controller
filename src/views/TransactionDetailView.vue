@@ -2,15 +2,16 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import type { Transaction } from "@/types/domain";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const props = defineProps<{ id: string }>();
 const store = useControllerStore();
 const detail = ref<Transaction | null>(null), loading = ref(false), error = ref("");
 const current = computed(() => store.transactions.data?.[props.id] || detail.value);
-const resultRevision = computed(() => current.value?.status === "committed" ? String(BigInt(current.value.base_revision) + 1n) : null);
+const resultRevision = computed(() => current.value?.status === "committed" ? current.value.committed_revision : null);
 let generation = 0, disposed = false;
 async function read(): Promise<void> {
   const version = ++generation, target = props.id;
@@ -79,10 +80,10 @@ onUnmounted(() => { disposed = true; generation++; });
             <dt>Actor</dt><dd>{{ current.actor }}</dd>
           </template>
           <template v-if="current.submitted_at">
-            <dt>Submitted (UTC)</dt><dd>{{ formatTimestamp(current.submitted_at) }}</dd>
+            <dt>Submitted ({{ timeZone }})</dt><dd>{{ formatTimestamp(current.submitted_at) }}</dd>
           </template>
           <template v-if="current.committed_at">
-            <dt>Committed (UTC)</dt><dd>{{ formatTimestamp(current.committed_at) }}</dd>
+            <dt>Committed ({{ timeZone }})</dt><dd>{{ formatTimestamp(current.committed_at) }}</dd>
           </template>
           <template v-if="current.description">
             <dt>Comment</dt><dd class="wrap-text">

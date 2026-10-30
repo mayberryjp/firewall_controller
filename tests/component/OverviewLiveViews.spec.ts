@@ -6,7 +6,7 @@ import type { ApexOptions } from "apexcharts";
 import OverviewSystem from "@/components/feature/OverviewSystem.vue";
 import OverviewCounters from "@/components/feature/OverviewCounters.vue";
 import { useControllerStore } from "@/stores/controller";
-import { healthSnapshot, statistics } from "../fixtures";
+import { healthSnapshot, state, statistics } from "../fixtures";
 
 vi.mock("vue3-apexcharts", () => ({ default: {
   name: "ResourceChart", props: ["options", "series"], template: '<div class="apex-chart-stub" />',
@@ -72,6 +72,18 @@ describe("Overview live views", () => {
     const time = Date.parse(healthSnapshot().sample.collected_at);
     expect(options.xaxis!.labels!.formatter!("", time)).toBe("2026-10-24 12:01:40");
     expect(options.tooltip!.x!.formatter!(time)).toBe("2026-10-24 12:01:40 UTC");
+  });
+  it("uses the saved system timezone in live chart headings, axes, tooltips and collection details", async () => {
+    const store = useControllerStore();
+    store.state.data = state();
+    store.state.data.desired.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
+    system(); await select("Memory");
+    const options = chart().props("options") as ApexOptions;
+    const time = Date.parse(healthSnapshot().sample.collected_at);
+    expect(options.xaxis!.title!.text).toBe("Time (Asia/Kolkata)");
+    expect(options.xaxis!.labels!.formatter!("", time)).toBe("2026-10-24 17:31:40");
+    expect(options.tooltip!.x!.formatter!(time)).toBe("2026-10-24 17:31:40 Asia/Kolkata");
+    expect(wrapper.get(".widget-note").attributes("title")).toContain("Collected (Asia/Kolkata): 2026-10-24 17:31:40");
   });
   it("bounds history, ignores duplicate samples and clears it on a host reboot", async () => {
     system(); await select("Memory");

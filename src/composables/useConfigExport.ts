@@ -8,7 +8,7 @@ export function useConfigExport() {
     try {
       url = URL.createObjectURL(new Blob([JSON.stringify(config, null, 2)], { type: "application/json" }));
       const link = document.createElement("a");
-      link.href = url; link.download = `${name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
+      link.href = url; link.download = `${name.replace(/[^a-zA-Z0-9_.-]/g, "_")}.json`;
       link.click(); exportError.value = "";
     } catch (error) { exportError.value = error instanceof Error ? error.message : "Unable to export configuration; select and save the read-only JSON instead."; }
     finally { if (url) setTimeout(() => URL.revokeObjectURL(url!), 1000); }

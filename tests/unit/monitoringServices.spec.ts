@@ -99,9 +99,9 @@ describe("gateway numeric and configuration contracts", () => {
     expect(runtimeSchema.safeParse({ ...runtime(), ipv6: { ...measured, disable_ipv6: { all: "true" } } }).success).toBe(false);
   });
   it("preserves fractional metrics, exact revisions and quoted counters together", () => {
-    const decoded = decodeJson('{"revision":18446744073709551615,"loss_percent":33.333333333333336,"rtt_avg_ms":0.125,"rx_bytes":"18446744073709551615"}');
-    expect(decoded).toEqual({ revision: "18446744073709551615", loss_percent: 100 / 3, rtt_avg_ms: 0.125, rx_bytes: "18446744073709551615" });
-    expect(encodeJson(decoded)).toContain('"revision":18446744073709551615');
+    const decoded = decodeJson('{"revision":"2026.10.29.4294967295","loss_percent":33.333333333333336,"rtt_avg_ms":0.125,"rx_bytes":"18446744073709551615"}');
+    expect(decoded).toEqual({ revision: "2026.10.29.4294967295", loss_percent: 100 / 3, rtt_avg_ms: 0.125, rx_bytes: "18446744073709551615" });
+    expect(encodeJson(decoded)).toContain('"revision":"2026.10.29.4294967295"');
     expect(() => decodeJson('{"count":9007199254740993}')).toThrow("Unsafe");
     expect(() => decodeJson('{"rtt":1e999}')).toThrow("Unsafe");
   });

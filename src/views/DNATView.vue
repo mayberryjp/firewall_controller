@@ -5,14 +5,26 @@ import { useControllerStore } from "@/stores/controller";
 import { destinationRewriteSchema, type DestinationRewrite } from "@/types/domain";
 import { cloneConfig, numericAddress, stableJson, validateConfig } from "@/services/configuration";
 import { interfaceChoice } from "@/services/resourceCollections";
+import { useFirewallCounters } from "@/composables/useFirewallCounters";
+import FirewallCounterCells from "@/components/feature/FirewallCounterCells.vue";
+import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
+import { manualRuleOwnership } from "@/services/ruleOwnership";
+import { useRuleDrag } from "@/composables/useRuleDrag";
 
 const store = useControllerStore();
-const selected = computed(() => store.draft ?? store.state.data?.desired);
+const selected = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
+const counters = useFirewallCounters(selected);
 const rows = computed(() => selected.value?.firewall.nat.destination_rewrite ?? []);
 const editing = ref<number | null>(null), error = ref(""), initial = ref(""), snapshot = ref("");
-const form = ref<DestinationRewrite>({ out_interface: "", protocol: "tcp", destination_port: 53, target_interface: "", target_address: "" });
+const form = ref<DestinationRewrite>({ ...manualRuleOwnership, out_interface: "", protocol: "tcp", destination_port: 53, target_interface: "", target_address: "" });
 const supported = computed(() => store.state.data?.desired.firewall.nat.destination_rewrite !== undefined);
 const blocked = computed(() => Boolean(store.readOnlyReason) || !selected.value || !supported.value);
+const { dropTarget, pointerStart, pointerMove, drop, cancel: cancelDrag } = useRuleDrag({
+  blocked: () => blocked.value || editing.value !== null,
+  snapshot: () => rows.value,
+  move: (from, to) => move(from, to - from),
+  error: message => { error.value = message; },
+});
 const family = computed(() => { try { return numericAddress(form.value.target_address).kind(); } catch { return undefined; } });
 const wanChoices = computed(() => selected.value?.interfaces.filter(link => link.up && link.role === "wan" &&
   (!family.value || family.value === "ipv4" && selected.value?.dhcp_clients?.[link.name] ||
@@ -25,7 +37,7 @@ onUnmounted(() => { store.editorDirty = false; });
 function open(index: number): void {
   error.value = ""; editing.value = index;
   const row = rows.value[index];
-  form.value = row ? { ...row } : { out_interface: "", protocol: "tcp", destination_port: 53, target_interface: "", target_address: "" };
+  form.value = row ? { ...row } : { ...manualRuleOwnership, out_interface: "", protocol: "tcp", destination_port: 53, target_interface: "", target_address: "" };
   initial.value = input(); snapshot.value = stableJson(rows.value); store.editorDirty = false;
 }
 function close(): void { editing.value = null; store.editorDirty = false; }
@@ -90,7 +102,7 @@ function move(index: number, offset: number): void {
       {{ error }}
     </p>
     <v-table class="inline-table">
-      <thead><tr><th>WAN</th><th>Protocol</th><th>Port</th><th>Target interface</th><th>Target address</th><th>Actions</th></tr></thead>
+      <thead><tr><th>WAN</th><th>Protocol</th><th>Port</th><th>Target interface</th><th>Target address</th><th>Actions</th><th>Origin</th><th>Packets</th><th>Bytes</th></tr></thead>
       <tbody>
         <template
           v-for="(row, index) in [...rows, ...(editing === -1 ? [null] : [])]"
@@ -166,7 +178,11 @@ function move(index: number, offset: number): void {
               </v-btn>
             </td>
           </tr>
-          <tr v-else-if="row">
+          <tr
+            v-else-if="row"
+            :data-rule-index="index"
+            :class="{ 'rule-drop-target': dropTarget === index }"
+          >
             <td>
               <v-chip
                 size="small"
@@ -206,32 +222,33 @@ function move(index: number, offset: number): void {
                 :disabled="blocked || editing !== null"
                 @click="remove(index)"
               />
-              <v-btn
-                icon="mdi-arrow-up"
-                size="x-small"
-                variant="text"
-                :aria-label="`Move DNAT rule ${index + 1} up`"
-                :disabled="blocked || editing !== null || index === 0"
-                @click="move(index, -1)"
-              />
-              <v-btn
-                icon="mdi-arrow-down"
-                size="x-small"
-                variant="text"
-                :aria-label="`Move DNAT rule ${index + 1} down`"
-                :disabled="blocked || editing !== null || index === rows.length - 1"
-                @click="move(index, 1)"
-              />
+              <button
+                type="button"
+                class="drag-handle"
+                :aria-label="`Drag DNAT rule ${index + 1}`"
+                :disabled="blocked || editing !== null"
+                @pointerdown="pointerStart($event, index)"
+                @pointermove="pointerMove"
+                @pointerup="drop"
+                @pointercancel="cancelDrag"
+              >
+                <v-icon icon="mdi-drag" />
+              </button>
             </td>
+            <td><RuleOriginLabel :rule="row" /></td>
+            <FirewallCounterCells :counts="counters.counts(`/firewall/nat/destination_rewrite/${index}`, 'destination_rewrite')" />
           </tr>
         </template>
         <tr v-if="!rows.length && editing === null">
-          <td colspan="6">
+          <td colspan="9">
             No DNAT rules.
           </td>
         </tr>
       </tbody>
     </v-table>
+    <p class="text-caption text-medium-emphasis mt-2">
+      {{ counters.notice.value }} NAT counts initial connection-mapping evaluations, not all established packets.
+    </p>
   </section>
 </template>
 

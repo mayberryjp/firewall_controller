@@ -65,6 +65,19 @@ describe("Gateway Mean RTT chart", () => {
     expect(tooltip.y.formatter(1.25)).toBe("1.25 ms");
     expect(tooltip.y.formatter(null)).toBe("Unavailable");
   });
+  it("updates chart titles, axes and tooltips when the saved timezone changes without shifting sample instants", async () => {
+    await sample(); render();
+    const store = useControllerStore();
+    store.state.data = { ...store.state.data!, desired: {
+      ...store.state.data!.desired, system: { hostname: "", domain: "", timezone: "America/Los_Angeles" },
+    } };
+    await flushPromises();
+    const options = chart().props("options") as ApexOptions;
+    expect(options.xaxis!.title!.text).toBe("Time (America/Los_Angeles)");
+    expect(options.xaxis!.labels!.formatter!("", start)).toBe("2026-10-27 21:49:23");
+    expect(options.tooltip!.x!.formatter!(start)).toBe("2026-10-27 21:49:23 America/Los_Angeles");
+    expect(chart().props("series")[0].data[0].x).toBe(start);
+  });
   it("deduplicates independently cached monitors and bounds each series to 120 samples", async () => {
     await sample(); render();
     await sample(1, { collected_at: new Date(start).toISOString() });

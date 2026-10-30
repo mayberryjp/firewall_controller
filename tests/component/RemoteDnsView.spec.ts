@@ -113,7 +113,7 @@ describe("Remote DNS", () => {
     expect(store.draft!.dns!.lab0!.domains).toEqual(before.dns!.lab0!.domains);
     expect(store.draft!.dns!.spare0).toEqual(before.dns!.spare0);
     expect(store.draft!.ntp.servers).toEqual(["time.example.com"]);
-    expect(store.state.data!.desired).toEqual(before);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(before);
     expect(store.editorDirty).toBe(false);
     expect(wrapper.find("input").exists()).toBe(false);
     wrapper.unmount();

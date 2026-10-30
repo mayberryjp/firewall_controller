@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { getDiscoveredInterfaces } from "@/services/netcontrol";
+import { isInitialLoad } from "@/services/datasets";
 import type { DiscoveredInterface } from "@/types/domain";
 import OverviewWidget from "./OverviewWidget.vue";
 import OverviewInterfaceStatus from "./OverviewInterfaceStatus.vue";
@@ -28,7 +29,7 @@ const rows = computed(() => [...new Set([
   addresses: discovered.value.find(item => item.name === name)?.addresses.filter(address => store.ipv6Enabled || !address.includes(":")),
   mode: store.state.data?.desired.dhcp_clients?.[name] ? "DHCP" : store.state.data?.desired.interfaces.some(item => item.name === name) ? "Static" : "-",
 })));
-const note = computed(() => store.statistics.error ? "Unavailable" : store.statistics.loading && !store.statistics.data ? "Loading" : store.statistics.stale ? "Stale" : store.statistics.data?.sample.status === "simulated" ? "Simulated" : "");
+const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLoad(store.statistics) ? "" : store.statistics.stale ? "Stale" : store.statistics.data?.sample.status === "simulated" ? "Simulated" : "");
 </script>
 
 <template>
@@ -70,12 +71,12 @@ const note = computed(() => store.statistics.error ? "Unavailable" : store.stati
               </div>
             </template>
             <template v-else>
-              {{ row.addresses ? "None" : "Unavailable" }}
+              {{ row.addresses ? "None" : addressError ? "Unavailable" : "—" }}
             </template>
           </td>
           <td>{{ row.mode }}</td>
         </tr>
-        <tr v-if="!rows.length">
+        <tr v-if="!rows.length && !isInitialLoad(store.statistics) && !isInitialLoad(store.state)">
           <td colspan="5">
             {{ store.statistics.data ? "No interfaces." : "Interface status unavailable." }}
           </td>

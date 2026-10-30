@@ -43,8 +43,10 @@ import { useControllerStore } from "@/stores/controller";
 import { configSchema, runtimeSchema } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
 import { cloneConfig, differences, requiredPermissions, validateConfig } from "@/services/configuration";
-import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections } from "../fixtures";
+import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns } from "../fixtures";
 import type { Component } from "vue";
+import { bgpConfig, bgpRoutes } from "../bgpFixtures";
+import { dragRule } from "../dragRule";
 
 const box = { template: "<div><slot /></div>" };
 const stubs = {
@@ -63,6 +65,7 @@ beforeEach(() => {
   store.connected = true; store.state.data = state(); store.runtime.data = runtime();
   vi.spyOn(api, "getMqttStatus").mockResolvedValue({ device_id: "a".repeat(32), enabled: false, state: "disabled", error: null, last_published_at_unix: null });
   vi.spyOn(api, "getGatewayStatistics").mockResolvedValue({ sample: statistics().sample, monitors: [] });
+  vi.spyOn(api, "getVnStatReporting").mockResolvedValue(vnstatReporting());
   vi.spyOn(api, "getSystemUpgrade").mockResolvedValue({ enabled: false, repository: null, job: null, last_successful_version: null });
   vi.spyOn(api, "getDiscoveredInterfaces").mockImplementation(async () => (store.state.data?.desired.interfaces ?? []).map((link, index) => ({ name: link.name, kind: link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: [...link.addresses], ownership: "managed" as const })));
 });
@@ -90,7 +93,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).toBe("Running");
     expect(wrapper.attributes("title")).toContain("Last failure: Link down");
     expect(wrapper.attributes("title")).not.toContain("Current error");
-    expect(store.draft).toBeNull(); expect(store.state.data!.desired).toEqual(desired);
+    expect(store.draft).toBeNull(); expect(cloneConfig(store.state.data!.desired)).toEqual(desired);
     wrapper.unmount();
   });
   it("keeps syslog delivery failures out of page banners and leaves the editor usable", async () => {
@@ -175,7 +178,7 @@ describe("October 17 frontend workflows", () => {
       expect(store.draft!.ntp.servers).toEqual(["time.example.test"]);
       expect(requiredPermissions(differences(before, store.draft!))).toContain("interfaces.write");
       expect(wrapper.text()).toContain("Interfaces without configured DNS servers still use DHCP DNS");
-      expect(store.state.data!.desired).toEqual(before);
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before);
       expect(submit).not.toHaveBeenCalled();
     } finally { wrapper.unmount(); }
   });
@@ -251,7 +254,7 @@ describe("October 17 frontend workflows", () => {
       const enabled = before.softflowd[0]!.enabled;
       await toggle().setValue(!enabled); await flushPromises();
       expect(store.draft?.softflowd).toEqual([{ ...before.softflowd[0], enabled: !enabled }]);
-      expect(store.state.data!.desired).toEqual(before); expect(submit).not.toHaveBeenCalled();
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before); expect(submit).not.toHaveBeenCalled();
       await toggle().setValue(enabled); await flushPromises();
       expect(store.draft?.softflowd[0]).toEqual(before.softflowd[0]);
     } finally { wrapper.unmount(); }
@@ -572,19 +575,19 @@ describe("October 17 frontend workflows", () => {
       expect(wrapper.find('[role="dialog"]').exists()).toBe(false); expect(store.draft).toBeNull();
     } finally { wrapper.unmount(); }
   });
-  it("confirms the exact signed-upgrade version and configured repository before submitting", async () => {
+  it("keeps upgrade discovery separate from installation controls", async () => {
+    const store = useControllerStore();
+    store.state.stale = false;
+    vi.spyOn(api, "getState").mockResolvedValue(state());
     const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
     vi.mocked(api.getSystemUpgrade).mockResolvedValue(available); vi.spyOn(api, "getTransactions").mockResolvedValue({});
-    const install = vi.spyOn(api, "startSystemUpgrade").mockResolvedValue({ id: "upgrade-1", version: "1.2.3", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null });
+    const install = vi.spyOn(api, "startSystemUpgrade").mockResolvedValue({ id: "upgrade-1", version: "2026.10.29.2", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null });
     const wrapper = await render(SystemUpgrade, "/services/maintenance");
     try {
-      wrapper.getComponent({ name: "VTextField" }).vm.$emit("update:modelValue", "1.2.3"); await flushPromises();
-      await wrapper.findAll("button").find(button => button.text() === "Upgrade")!.trigger("click"); await flushPromises();
-      expect(install).not.toHaveBeenCalled(); expect(wrapper.get('[role="dialog"]').text()).toContain("operator/appliance");
-      expect(wrapper.get('[role="dialog"]').text()).toContain("interrupt management connectivity");
-      await wrapper.findAll("button").find(button => button.text() === "Install upgrade")!.trigger("click"); await flushPromises();
-      expect(install).toHaveBeenCalledWith("1.2.3"); expect(install).toHaveBeenCalledTimes(1);
-      expect(useControllerStore().upgrade.data?.job?.id).toBe("upgrade-1");
+      expect(wrapper.findAll("button").map(button => button.text())).toEqual(["Check for upgrade"]);
+      expect(wrapper.find("input").exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("operator/appliance");
+      expect(install).not.toHaveBeenCalled();
       expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     } finally { wrapper.unmount(); }
   });
@@ -635,7 +638,6 @@ describe("October 17 frontend workflows", () => {
     { component: SoftflowdView, path: "/softflowd", key: "interface" },
     { component: GatewayMonitorsView, path: "/gateway-monitors", key: "interface" },
     { component: VLANsView, path: "/vlans", key: "parent" },
-    { component: FirewallInputView, path: "/firewall/input", key: "interface" },
   ])("shows reactive display names and interface identities in $path choices", async ({ component, path, key }) => {
     const store = useControllerStore();
     store.state.data!.desired.interfaces[0] = {
@@ -643,16 +645,16 @@ describe("October 17 frontend workflows", () => {
     };
     store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [] }] };
     const wrapper = await render(component, path);
-    await wrapper.findAll("button").find(button => button.text().startsWith(path === "/firewall/input" ? "Edit input policy" : "Add "))!.trigger("click");
+    await wrapper.findAll("button").find(button => button.text().startsWith("Add "))!.trigger("click");
     const choiceField = () => wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === key)!;
-    expect(choiceField().props("field").choices).toContainEqual({ title: "WAN (lab0)", value: "lab0" });
+    expect(choiceField().props("field").choices).toContainEqual({ title: "lab0 (WAN)", value: "lab0" });
     await choiceField().get("select").setValue("lab0");
     expect(choiceField().props("modelValue")).toBe("lab0");
 
     store.draft = cloneConfig(store.state.data!.desired);
     store.draft.interfaces[0]!.metadata = { display_name: "Office", description: "" };
     await flushPromises();
-    expect(choiceField().props("field").choices).toContainEqual({ title: "Office (lab0)", value: "lab0" });
+    expect(choiceField().props("field").choices).toContainEqual({ title: "lab0 (Office)", value: "lab0" });
     wrapper.unmount();
   });
   it("rejects unsupported DHCP monitor paths without changing DHCP configuration", async () => {
@@ -673,7 +675,7 @@ describe("October 17 frontend workflows", () => {
     await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(wrapper.get('[role="alert"]').text()).toContain("does not advertise DHCP monitor support");
     expect(store.draft).toBeNull();
-    expect(store.state.data!.desired).toEqual(before);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(before);
     expect(submit).not.toHaveBeenCalled();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     await editor.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
@@ -692,7 +694,7 @@ describe("October 17 frontend workflows", () => {
       await toggle().setValue(false);
       expect(store.draft).toEqual({ ...before, routes: [{ ...before.routes[0], enabled: false }] });
       expect(store.draft!.routes[0]!.table).toBe(10000);
-      expect(store.state.data!.desired).toEqual(before); expect(submit).not.toHaveBeenCalled();
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before); expect(submit).not.toHaveBeenCalled();
       expect(toggle().element.checked).toBe(false);
       await toggle().setValue(true);
       expect(store.draft?.routes[0]).toEqual(before.routes[0]);
@@ -728,7 +730,7 @@ describe("October 17 frontend workflows", () => {
     store.state.data!.desired.routes = Array.from({ length: 21 }, () => ({ ...config().routes[0]! }));
     const wrapper = await render(RoutesView, "/routes");
     const filters = wrapper.getComponent(ResourceFilters);
-    const select = filters.findAll("select").find(select => select.text().includes("WAN (lab0)"))!;
+    const select = filters.findAll("select").find(select => select.text().includes("lab0 (WAN)"))!;
     expect(select.find('option[value="All"]').exists()).toBe(true);
     await select.setValue("lab0");
     expect(filters.props("modelValue").interface).toBe("lab0");
@@ -865,6 +867,7 @@ describe("October 17 frontend workflows", () => {
   it("adds and edits masquerading inline with local validation and draft-only saves", async () => {
     const store = useControllerStore();
     store.state.data!.desired.firewall.nat.masquerade[0]!.metadata = { display_name: "Existing", description: "Keep this" };
+    Object.assign(store.state.data!.desired.firewall.nat.masquerade[0]!, { origin: "import", import_source: "other_provider" });
     const before = cloneConfig(store.state.data!.desired), submit = vi.spyOn(api, "submitPackage");
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     const wrapper = await render(NATView, "/nat");
@@ -874,7 +877,7 @@ describe("October 17 frontend workflows", () => {
       let editor = wrapper.getComponent(ResourceRowEditor);
       expect(editor.props("position")).toBe(2);
       expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).toEqual(["family", "source", "out_interface"]);
-      expect(editor.findAll("td").map(cell => Number(cell.attributes("colspan") ?? 1)).reduce((sum, count) => sum + count, 0)).toBe(5);
+      expect(editor.findAll("td").map(cell => Number(cell.attributes("colspan") ?? 1)).reduce((sum, count) => sum + count, 0)).toBe(8);
       editor.vm.$emit("change", "out_interface", "lab0");
       editor.vm.$emit("change", "source", "2001:db8::/64");
       await flushPromises();
@@ -886,7 +889,7 @@ describe("October 17 frontend workflows", () => {
       editor.vm.$emit("stage"); await flushPromises();
       expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
       expect(store.draft?.firewall.nat.masquerade).toEqual([
-        ...before.firewall.nat.masquerade, { family: "ipv4", source: "192.0.2.0/24", out_interface: "lab0" },
+        ...before.firewall.nat.masquerade, { origin: "manual", import_source: null, family: "ipv4", source: "192.0.2.0/24", out_interface: "lab0" },
       ]);
       await wrapper.findAll('[aria-label="Edit / stage"]')[0]!.trigger("click");
       editor = wrapper.getComponent(ResourceRowEditor);
@@ -899,12 +902,12 @@ describe("October 17 frontend workflows", () => {
       expect(store.draft?.firewall.nat.masquerade[0]).toEqual({ ...before.firewall.nat.masquerade[0], source: "198.51.100.0/24" });
       expect(store.draft?.routes).toEqual(before.routes);
       expect(store.draft?.interfaces).toEqual(before.interfaces);
-      expect(store.state.data!.desired).toEqual(before);
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before);
       expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Changes");
       expect(submit).not.toHaveBeenCalled(); expect(confirm).not.toHaveBeenCalled();
     } finally { wrapper.unmount(); }
   });
-  it("cancels, switches and reorders inline masquerade rules without popups or stale edits", async () => {
+  it("cancels, switches and drags inline masquerade rules without popups or stale edits", async () => {
     const store = useControllerStore(), desired = store.state.data!.desired;
     desired.firewall.nat.masquerade.push({ family: "ipv6", out_interface: "lab0" });
     const before = cloneConfig(desired), confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
@@ -924,7 +927,11 @@ describe("October 17 frontend workflows", () => {
       expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(false);
       await wrapper.findAll('[aria-label="Edit / stage"]')[0]!.trigger("click");
       wrapper.getComponent(ResourceRowEditor).vm.$emit("change", "source", "192.0.2.0/24"); await flushPromises();
-      await wrapper.get('[aria-label="Move up"]').trigger("click");
+      expect(wrapper.get('[aria-label="Drag rule 2"]').attributes("disabled")).toBeDefined();
+      await wrapper.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+      expect(wrapper.find('[aria-label="Move up"]').exists()).toBe(false);
+      expect(wrapper.find('[aria-label="Move down"]').exists()).toBe(false);
+      await dragRule(wrapper.get('[aria-label="Drag rule 2"]'), wrapper.get('[data-rule-index="0"]').element);
       expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
       expect(store.draft?.firewall.nat.masquerade).toEqual([...before.firewall.nat.masquerade].reverse());
       await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
@@ -934,6 +941,26 @@ describe("October 17 frontend workflows", () => {
       expect(store.editorDirty).toBe(false);
       expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
       expect(confirm).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+  it.each([
+    ["legacy firewall", FirewallView, "/firewall"],
+    ["masquerade", NATView, "/nat"],
+  ] as const)("drags %s rules across multiple positions without swapping intervening rules", async (name, component, path) => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    if (name === "legacy firewall") desired.firewall.rules.push({ source: "198.51.100.0/24", action: "drop" }, { action: "accept" });
+    else desired.firewall.nat.masquerade.push({ family: "ipv4", out_interface: "lab0", source: "192.0.2.0/25" }, { family: "ipv4", out_interface: "lab0", source: "192.0.2.128/25" });
+    const before = cloneConfig(desired);
+    const original = name === "legacy firewall" ? before.firewall.rules : before.firewall.nat.masquerade;
+    const wrapper = await render(component, path);
+    try {
+      expect(wrapper.find('button[aria-label^="Move "]').exists()).toBe(false);
+      await dragRule(wrapper.get('[aria-label="Drag rule 1"]'), wrapper.get('[data-rule-index="2"]').element, "touch");
+      const actual = name === "legacy firewall" ? store.draft!.firewall.rules : store.draft!.firewall.nat.masquerade;
+      expect(actual).toEqual([original[1], original[2], original[0]]);
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before);
+      store.busy = true; await flushPromises();
+      expect(wrapper.get('[aria-label="Drag rule 1"]').attributes("disabled")).toBeDefined();
     } finally { wrapper.unmount(); }
   });
   it("adds masquerading inline to an empty table and disables editing in read-only mode", async () => {
@@ -947,7 +974,7 @@ describe("October 17 frontend workflows", () => {
       expect(wrapper.text()).not.toContain("No configured resources.");
       wrapper.getComponent(ResourceRowEditor).vm.$emit("change", "out_interface", "lab0"); await flushPromises();
       wrapper.getComponent(ResourceRowEditor).vm.$emit("stage"); await flushPromises();
-      expect(store.draft?.firewall.nat.masquerade).toEqual([{ family: "ipv4", out_interface: "lab0" }]);
+      expect(store.draft?.firewall.nat.masquerade).toEqual([{ origin: "manual", import_source: null, family: "ipv4", out_interface: "lab0" }]);
       store.busy = true; await flushPromises();
       expect(wrapper.findAll("button").find(button => button.text() === "Add rule")!.attributes("disabled")).toBeDefined();
       expect(wrapper.get('[aria-label="Edit / stage"]').attributes("disabled")).toBeDefined();
@@ -971,7 +998,7 @@ describe("October 17 frontend workflows", () => {
     await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
     expect(store.draft?.routes).toEqual([{ ...before.routes[0], table: 254, metric: 42 }, ...before.routes.slice(1)]);
-    expect(store.state.data!.desired).toEqual(before);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(before);
     wrapper.unmount();
   });
   it("saves edited gateway monitors in table 254 without a routing table control", async () => {
@@ -992,7 +1019,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
     expect(store.draft?.gateway_monitors).toEqual([{ ...before.gateway_monitors[0], routing_table: 254, latency_threshold_ms: 175 }]);
     expect(store.draft?.routes).toEqual(before.routes);
-    expect(store.state.data!.desired).toEqual(before);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(before);
     wrapper.unmount();
   });
   it.each([
@@ -1127,7 +1154,7 @@ describe("October 17 frontend workflows", () => {
       fields.find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.10.0.1/32");
       await flushPromises(); await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
       expect(store.draft?.interfaces[0]).toMatchObject({ name: "lab0", kind: "dummy", mtu: 1500, addresses: ["10.10.0.1/32", "2001:db8::10/64"] });
-      expect(store.state.data!.desired).toEqual(before); expect(store.draft?.routes).toEqual(before.routes);
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before); expect(store.draft?.routes).toEqual(before.routes);
       expect(store.draft?.interfaces.some(link => link.name === "lo")).toBe(false); expect(submit).not.toHaveBeenCalled();
       expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Changes");
       expect(wrapper.find("tbody").text()).not.toContain("Unsaved");
@@ -1202,7 +1229,7 @@ describe("October 17 frontend workflows", () => {
       await flushPromises();
       await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
       expect(store.draft?.interfaces[1]).toMatchObject({ name: "dummy1", addresses: ["10.10.0.1/32", "10.10.0.2/32"] });
-      expect(store.state.data!.desired).toEqual(before);
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before);
       await add.trigger("click");
       field("name").vm.$emit("update:modelValue", "dummy2");
       await flushPromises();
@@ -1510,7 +1537,11 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Name", "VLAN ID", "Admin state", "MTU", "Parent", "IPv4", "Actions"]);
     expect(wrapper.findAll("tbody td").map(cellValue)).toContain("30");
     expect(wrapper.find('a[href="/vlans/vlan30"]').exists()).toBe(false);
-    expect(cellValue(wrapper.get("tbody tr td"))).toBe("vlan30");
+    const nameCell = wrapper.get("tbody tr td");
+    expect(cellValue(nameCell)).toBe(`vlan30${displayResourceValue(role, "role")}`);
+    expect(nameCell.get(".vlan-role").text()).toBe(displayResourceValue(role, "role"));
+    expect(nameCell.get(".vlan-role").classes()).toContain("text-caption");
+    expect(nameCell.get(".vlan-role").classes()).toContain("text-medium-emphasis");
     await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
     wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.30.0.1/24");
     await flushPromises();
@@ -1712,6 +1743,106 @@ describe("October 17 frontend workflows", () => {
     expect(submit).not.toHaveBeenCalled();
     wrapper.unmount();
   });
+  it("stages DNS peer endpoints without resolution or replacing the configured name", async () => {
+    const store = useControllerStore(), lookup = vi.spyOn(api, "lookupDNS"), submit = vi.spyOn(api, "submitPackage");
+    const dns = wireguardDns();
+    store.state.data!.desired.interfaces.push({
+      name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [],
+      dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [{
+        public_key: dns.peers[0]!.public_key, endpoint: "192.0.2.1:51820",
+        allowed_ips: ["10.0.0.0/24"], persistent_keepalive_seconds: 25,
+      }] },
+    });
+    const wrapper = await render(WireGuardView, "/wireguard");
+    await wrapper.get('button[aria-label^="Edit peer"]').trigger("click");
+    const endpoint = wrapper.findAllComponents({ name: "VTextField" }).find(field => field.attributes("label") === "Endpoint (optional, hostname or IP:port)")!;
+    endpoint.vm.$emit("update:modelValue", "VPN.example.test:51820");
+    await flushPromises(); await wrapper.get("form").trigger("submit");
+    expect(store.draft).toBeNull();
+    expect(wrapper.text()).toContain("lowercase ASCII DNS");
+    endpoint.vm.$emit("update:modelValue", "vpn.example.test:51820");
+    await flushPromises(); await wrapper.get("form").trigger("submit");
+    expect(store.draft?.interfaces.find(link => link.name === "wg0")).toMatchObject({
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [{
+        endpoint: "vpn.example.test:51820", allowed_ips: ["10.0.0.0/24"], persistent_keepalive_seconds: 25,
+      }] },
+    });
+    expect(lookup).not.toHaveBeenCalled(); expect(submit).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("keeps configured, selected and actual DNS endpoints distinct and reports failure, recovery and stale data", async () => {
+    const store = useControllerStore(), dns = wireguardDns(), peer = dns.peers[0]!;
+    dns.error = "DNS worker stopped"; peer.error = "Resolver timed out";
+    store.state.data!.desired.interfaces.push({
+      name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [],
+      dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [{
+        public_key: peer.public_key, endpoint: peer.endpoint, allowed_ips: ["10.0.0.0/24"], persistent_keepalive_seconds: 25,
+      }] },
+    });
+    const desired = cloneConfig(store.state.data!.desired);
+    store.state.data = { ...store.state.data!, runtime: { wireguard_dns: {
+      ...dns, peers: [{ ...peer, interface: "other", resolved_endpoint: "203.0.113.99:51820" },
+        { ...peer, endpoint: "old.example.test:51820", resolved_endpoint: "203.0.113.98:51820" }, peer],
+    } } };
+    store.state.stale = false;
+    store.runtime.data = { ...runtime(), wireguard: [{ interface: "wg0", public_key: null, listen_port: 51820, peers: [{
+      public_key: peer.public_key, endpoint: "198.51.100.40:51820", rx_bytes: "10", tx_bytes: "20", last_handshake_unix_seconds: 0,
+    }] }] };
+    const wrapper = await render(WireGuardView, "/wireguard");
+    expect(wrapper.text()).toContain("DNS refresh: DNS worker stopped");
+    expect(wrapper.text()).toContain("DNS: Resolver timed out");
+    expect(wrapper.text()).toContain("NEVER");
+    await wrapper.get('button[aria-label^="Details for wg0"]').trigger("click");
+    const details = wrapper.get(".peer-details");
+    expect(wrapper.get("tbody tr").text()).toContain("vpn.example.test:51820");
+    expect(details.text()).toContain("DNS selection192.0.2.20:51820");
+    expect(details.text()).toContain("Actual endpoint198.51.100.40:51820");
+    expect(details.text()).toContain("DNS last success (UTC)2026-10-30 19:53:27");
+    expect(details.text()).not.toContain("203.0.113.99");
+    expect(details.text()).not.toContain("203.0.113.98");
+    expect(details.text()).not.toMatch(/\.987|T19:/);
+    store.state.data = { ...store.state.data!, runtime: { wireguard_dns: {
+      ...dns, error: null, peers: [{ ...peer, error: null, resolved_endpoint: "192.0.2.21:51820" }],
+    } } };
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Resolver timed out");
+    expect(wrapper.text()).not.toContain("DNS worker stopped");
+    expect(details.text()).toContain("192.0.2.21:51820");
+    store.state.stale = true; await flushPromises();
+    expect(details.text()).toContain("DNS data stale");
+    store.state.error = "State read failed"; await flushPromises();
+    expect(details.text()).toContain("DNS data unavailable: State read failed");
+    store.state.data = { ...store.state.data!, runtime: undefined }; await flushPromises();
+    expect(details.text()).toContain("DNS selectionUnavailable");
+    expect(details.text()).toContain("DNS last success (UTC)Unavailable");
+    expect(store.draft).toBeNull(); expect(cloneConfig(store.state.data!.desired)).toEqual(desired);
+    wrapper.unmount();
+  });
+  it("shows Never for an unsuccessful DNS selection and hides DNS measurements when disabling the peer", async () => {
+    const store = useControllerStore(), dns = wireguardDns(), peer = dns.peers[0]!;
+    peer.last_success_unix_ms = 0; peer.error = "Lookup failed";
+    store.state.data!.desired.interfaces.push({
+      name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [],
+      dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [{
+        public_key: peer.public_key, endpoint: peer.endpoint, allowed_ips: [], persistent_keepalive_seconds: 25,
+      }] },
+    });
+    store.state.data = { ...store.state.data!, runtime: { wireguard_dns: dns } };
+    const wrapper = await render(WireGuardView, "/wireguard");
+    await wrapper.get('button[aria-label^="Details for wg0"]').trigger("click");
+    expect(wrapper.get(".peer-details").text()).toContain("DNS last success (UTC)Never");
+    expect(wrapper.text()).not.toContain("1970-01-01");
+    expect(wrapper.text()).toContain("DNS: Lookup failed");
+    await wrapper.get('input[type="checkbox"]').setValue(false);
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("DNS last success");
+    expect(wrapper.text()).not.toContain("DNS: Lookup failed");
+    expect(store.draft?.interfaces.find(link => link.name === "wg0")).toMatchObject({ wireguard: { peers: [{ enabled: false, endpoint: peer.endpoint }] } });
+    wrapper.unmount();
+  });
   it("deletes a tunnel with only generated routes and removes those routes in the same draft", async () => {
     const store = useControllerStore(), candidate = cloneConfig(store.state.data!.desired);
     candidate.interfaces.push({
@@ -1798,20 +1929,124 @@ describe("October 17 frontend workflows", () => {
       expect(chips(1)[0]).toEqual(["NEVER", "red"]);
     }
     wrapper.unmount();
-  });  it("stages host-input rules separately while preserving forwarding and other settings", async () => {
+  });
+  it("shows BGP-learned allowed networks read-only, refreshes them, and keeps them out of peer edits", async () => {
+    const store = useControllerStore(), candidate = bgpConfig(), key = btoa("\x01".repeat(32)), routes = bgpRoutes();
+    candidate.interfaces.push({
+      name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [],
+      dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [{
+        public_key: key, allowed_ips: ["10.20.0.0/24"], persistent_keepalive_seconds: 25,
+      }] },
+    });
+    candidate.bgp!.neighbors[0]!.interface = "wg0";
+    candidate.bgp!.neighbors[0]!.wireguard_public_key = key;
+    routes.routes[0] = { ...routes.routes[0]!, prefix: "198.51.101.0/24", interface: "wg0", installed: true, reason: null };
+    const read = vi.spyOn(api, "getBGPRoutes").mockResolvedValue(routes);
+    store.state.data = { ...state(), desired: candidate };
+    store.state.stale = false;
+    const wrapper = await render(WireGuardView, "/wireguard");
+    expect(read).toHaveBeenCalledTimes(1);
+    await wrapper.get('button[aria-expanded="false"]').trigger("click");
+    expect(wrapper.get(".configured-networks").text()).toContain("10.20.0.0/24");
+    expect(wrapper.get(".learned-network").text()).toContain("198.51.101.0/24");
+    expect(wrapper.get(".learned-network").text()).toContain("BGP learned from remote (read-only)");
+    expect(wrapper.get(".learned-network").findAll("input, textarea, button")).toHaveLength(0);
+    await wrapper.get('button[aria-label^="Edit peer"]').trigger("click");
+    const allowed = wrapper.findAllComponents({ name: "VTextField" })
+      .find(field => field.attributes("label") === "Allowed networks (comma separated)")!;
+    expect(allowed.attributes("modelvalue")).toBe("10.20.0.0/24");
+    await wrapper.get("form").trigger("submit");
+    expect(store.draft?.interfaces.find(link => link.kind === "wireguard")).toMatchObject({
+      wireguard: { peers: [{ allowed_ips: ["10.20.0.0/24"] }] },
+    });
+    expect(store.draft?.routes.some(route => route.destination === "198.51.101.0/24")).toBe(false);
+    store.draft!.bgp!.neighbors[0]!.wireguard_public_key = "different-key";
+    await flushPromises();
+    expect(wrapper.find(".learned-network").exists()).toBe(true);
+    store.bgpRoutes.data = { ...routes, routes: [] };
+    await flushPromises();
+    expect(wrapper.find(".learned-network").exists()).toBe(false);
+    store.bgpRoutes.data = routes;
+    store.bgpRoutes.stale = true;
+    await flushPromises();
+    expect(wrapper.find(".learned-network").exists()).toBe(false);
+    expect(wrapper.get(".peer-details").text()).toContain("BGP-learned networks unavailable");
+    store.bgpRoutes.stale = false;
+    store.bgpRoutes.error = "Access denied";
+    await flushPromises();
+    expect(wrapper.get(".peer-details").text()).toContain("Access denied");
+    store.bgpRoutes.error = null;
+    store.bgpRoutes.lastSuccess = Date.now() - 16000;
+    await flushPromises();
+    expect(wrapper.find(".learned-network").exists()).toBe(false);
+    store.bgpRoutes.lastSuccess = Date.now();
+    await flushPromises();
+    expect(wrapper.find(".learned-network").exists()).toBe(true);
+    store.connected = false;
+    await flushPromises();
+    expect(wrapper.find(".learned-network").exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it("does not flash a learned-network warning before the first BGP read completes", async () => {
+    const store = useControllerStore(), candidate = bgpConfig(), key = btoa("\x01".repeat(32));
+    candidate.interfaces.push({
+      name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: [],
+      dhcp_relay: { enabled: false, servers: [] },
+      wireguard: { key_ref: "key", listen_port: 51820, peers: [{
+        public_key: key, allowed_ips: ["10.20.0.0/24"], persistent_keepalive_seconds: 25,
+      }] },
+    });
+    candidate.bgp!.neighbors[0]!.interface = "wg0";
+    candidate.bgp!.neighbors[0]!.wireguard_public_key = key;
+    store.state.data = { ...state(), desired: candidate };
+    store.state.stale = false;
+    let finish!: (value: ReturnType<typeof bgpRoutes>) => void;
+    vi.spyOn(api, "getBGPRoutes").mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const wrapper = await render(WireGuardView, "/wireguard");
+    await wrapper.get('button[aria-expanded="false"]').trigger("click");
+    expect(wrapper.get(".peer-details").text()).not.toContain("unavailable");
+    finish(bgpRoutes());
+    await flushPromises();
+    wrapper.unmount();
+  });
+  it("labels host-input interface selection from the shared draft and retains unknown interface names", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces[0]!.metadata = { display_name: "LAN", description: "Internal network notes" };
+    store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [
+      { interface: "lab0", rules: [] }, { interface: "missing0", rules: [] },
+    ] };
+    const wrapper = await render(FirewallInputView, "/firewall/input");
+    try {
+      expect(wrapper.get("section").attributes("aria-label")).toBe("Firewall destined");
+      const select = wrapper.get("select");
+      expect(select.findAll("option").map(option => option.text())).toEqual(["Select", "lab0 (LAN)", "missing0"]);
+      await select.setValue("missing0");
+      store.draft = cloneConfig(store.state.data!.desired);
+      store.draft.interfaces[0]!.metadata!.display_name = "Office";
+      await flushPromises();
+      expect(select.findAll("option")[1]!.text()).toBe("lab0 (Office)");
+      expect((select.element as HTMLSelectElement).value).toBe("missing0");
+      expect(store.draft.firewall.input!.interfaces.map(ingress => ingress.interface)).toEqual(["lab0", "missing0"]);
+    } finally { wrapper.unmount(); }
+  });
+  it("stages host-input rules separately while preserving forwarding and other settings", async () => {
     const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
     store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ protocol: "udp", destination_ports: [68], action: "accept" }] }] };
     const wrapper = await render(FirewallInputView, "/firewall/input");
-    expect(wrapper.text()).toContain("established/related");
-    expect(wrapper.find("tbody").text()).toContain("68");
-    await wrapper.findAll("button").find(button => button.text() === "Edit input policy")!.trigger("click");
-    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "interfaces")!.vm.$emit("update:modelValue", [
-      { interface: "lab0", rules: [{ protocol: "tcp", destination_ports: ["443", "80"], action: "accept" }, { action: "drop" }] },
-    ]);
+    expect(wrapper.get(".rule-section--system").text()).toContain("Est./related");
+    expect(wrapper.get(".rule-section--user").text()).toContain("68");
+    await wrapper.get('button[aria-label="Edit rule 1"]').trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "protocol")!.vm.$emit("update:modelValue", "tcp");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "ports")!.vm.$emit("update:modelValue", "443, 80");
     await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    await wrapper.get(".rule-editor form").trigger("submit");
+    await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "action")!.vm.$emit("update:modelValue", "drop");
+    await flushPromises();
+    await wrapper.get(".rule-editor form").trigger("submit");
     expect(store.draft?.firewall.input?.interfaces[0]!.rules).toEqual([
-      { protocol: "tcp", destination_ports: [443, 80], action: "accept" }, { action: "drop" },
+      { protocol: "tcp", destination_ports: [443, 80], action: "accept" }, { origin: "manual", import_source: null, action: "drop" },
     ]);
     expect(store.draft?.firewall.rules).toEqual(config().firewall.rules);
     expect(store.draft?.routes).toEqual(config().routes);
@@ -1819,14 +2054,33 @@ describe("October 17 frontend workflows", () => {
   });
   it("blocks unmanaged ingress input rules before staging", async () => {
     const store = useControllerStore();
-    store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [] };
+    store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [{ interface: "missing0", rules: [] }] };
     const wrapper = await render(FirewallInputView, "/firewall/input");
-    await wrapper.findAll("button").find(button => button.text() === "Edit input policy")!.trigger("click");
-    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "interfaces")!.vm.$emit("update:modelValue", [{ interface: "missing0", rules: [] }]);
+    await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "action")!.vm.$emit("update:modelValue", "drop");
     await flushPromises();
-    await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    await wrapper.get(".rule-editor form").trigger("submit");
     expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("unique managed ingress interface");
     expect(store.editorDirty).toBe(true);
+  });
+  it("limits input policy settings to filtering and the default without replacing interface rules", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", metadata: { display_name: "LAN", description: "" }, rules: [
+      { action: "accept", origin: "import", import_source: "sando", metadata: { display_name: "", description: "Preserved" } },
+    ] }] };
+    const wrapper = await render(FirewallInputView, "/firewall/input");
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Edit input policy")!.trigger("click");
+      const fields = wrapper.findAllComponents(FieldInput);
+      expect(fields.map(field => field.props("field").key)).toEqual(["policy"]);
+      fields[0]!.vm.$emit("update:modelValue", "accept");
+      desired.firewall.input!.interfaces[0]!.rules.push({ action: "drop" });
+      await flushPromises();
+      await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft?.firewall.input).toEqual({ ...desired.firewall.input, policy: "accept" });
+      expect(wrapper.find('table[aria-label="Input rules"]').exists()).toBe(true);
+      expect(store.editorDirty).toBe(false);
+    } finally { wrapper.unmount(); }
   });
   it("warns when removing host-input protection from a package", () => {
     const before = config(), after = config(); before.firewall.input = { policy: "drop", interfaces: [] };
@@ -1996,6 +2250,7 @@ describe("October 17 frontend workflows", () => {
     store.draft.vnstat.metadata = { display_name: "Accounting", description: "Keep existing notes" };
     store.runtime.error = "Unavailable"; store.runtime.stale = true;
     store.runtime.data!.appliance_services = [{ name: "vnstat", scope: "host", state: "running", last_report_error: "Collector route unavailable" }];
+    vi.mocked(api.getVnStatReporting).mockResolvedValue({ ...vnstatReporting(), last_report_error: "Collector route unavailable" });
     const wrapper = await render(VnStatView, "/services/vnstat");
     expect(wrapper.get('[role="status"]').text()).toBe("Collector route unavailable");
     const press = async (label: string) => { await wrapper.findAll("button").find(button => button.text() === label)!.trigger("click"); await flushPromises(); };
@@ -2244,13 +2499,13 @@ describe("October 17 frontend workflows", () => {
     wrapper.unmount();
   });
   it("keeps IPv6 enabled when disabling would invalidate saved IPv6 settings", async () => {
-    const store = useControllerStore(), before = structuredClone(store.state.data!.desired);
+    const store = useControllerStore(), before = cloneConfig(store.state.data!.desired);
     const wrapper = await render(SettingsView, "/settings/general");
     wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-ipv6")!.vm.$emit("update:modelValue", false);
     await wrapper.get("form").trigger("submit");
     expect(wrapper.text()).toContain("Remove IPv6 settings before disabling IPv6");
     expect(store.draft).toBeNull(); expect(store.ipv6Enabled).toBe(true);
-    expect(store.state.data!.desired).toEqual(before);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(before);
     wrapper.unmount();
   });
   it("hides IPv6 columns and discovered addresses globally and restores them when enabled", async () => {

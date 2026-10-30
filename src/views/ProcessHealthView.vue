@@ -2,9 +2,11 @@
 import { computed, onMounted, ref, watch } from "vue";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import { useControllerStore } from "@/stores/controller";
-import { formatTimestamp } from "@/services/timestamps";
+import { isInitialLoad } from "@/services/datasets";
+import { useTimestamps } from "@/composables/useTimestamps";
 import type { PlatformStatus } from "@/types/domain";
 import { processRestartTarget, restartTargetSchema } from "@/services/operations";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 type ComponentHealth = PlatformStatus["process_health"]["components"][number];
 const store = useControllerStore();
@@ -86,7 +88,7 @@ onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
         {{ overallLabel }}
       </v-chip>
       <span class="text-caption text-medium-emphasis">
-        Collected (UTC): {{ formatTimestamp(health?.process_health.collected_at) }}
+        Collected ({{ timeZone }}): {{ formatTimestamp(health?.process_health.collected_at) }}
       </span>
     </div>
     <p
@@ -104,7 +106,7 @@ onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
       Native runtime could not be collected. Native component states are last-known observations.
     </p>
     <p
-      v-if="!health"
+      v-if="!health && (store.platformUnsupported || !isInitialLoad(store.platform))"
       role="status"
       class="text-medium-emphasis mb-3"
     >
@@ -118,7 +120,7 @@ onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
           <th>State</th>
           <th>Health</th>
           <th>Actions</th>
-          <th>Collected (UTC)</th>
+          <th>Collected ({{ timeZone }})</th>
         </tr>
       </thead>
       <tbody>
@@ -273,10 +275,10 @@ onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
           </div>
           <p>{{ alert.message }}</p>
           <p class="text-caption text-medium-emphasis">
-            First seen (UTC): {{ formatTimestamp(alert.first_seen_at) }}
+            First seen ({{ timeZone }}): {{ formatTimestamp(alert.first_seen_at) }}
           </p>
           <p class="text-caption text-medium-emphasis">
-            Last seen (UTC): {{ formatTimestamp(alert.last_seen_at) }}
+            Last seen ({{ timeZone }}): {{ formatTimestamp(alert.last_seen_at) }}
           </p>
         </li>
       </ul>

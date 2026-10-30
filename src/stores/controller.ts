@@ -6,15 +6,17 @@ import {
   configSchema, knownStatuses, terminal,
   type Config, type StateView, type RuntimeState, type Transaction, type PlatformStatus,
   type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
-  type BGPStatus, type BGPRoutes, type BGPAdvertisedRoutes,
+  type BGPStatus, type BGPRoutes, type BGPAdvertisedRoutes, type VnStatReporting,
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, stableJson, syncWireGuardRoutes, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
+import { compareDateVersions, dateVersionSchema } from "@/services/versions";
 import type { HostHealth } from "@/services/hostHealth";
 import type { LinkDiagnostics } from "@/services/linkDiagnostics";
 import { mqttStatusSchema, dynamicDnsStatusSchema, mdnsStatusPageSchema, udpRelayStatusPageSchema } from "@/types/domain";
 import type { z } from "zod";
 import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
+import { isInitialLoad } from "@/services/datasets";
 
 export interface Dataset<T> {
   data: T | null;
@@ -92,12 +94,36 @@ export const useControllerStore = defineStore("controller", () => {
   const transactions = dataset<Record<string, Transaction>>(), statistics = dataset<Statistics>();
   const gatewayStatistics = dataset<GatewayStatisticsPage>();
   const hostHealth = dataset<HostHealth>(), mqttStatus = dataset<z.infer<typeof mqttStatusSchema>>();
+  const vnstatReporting = dataset<VnStatReporting>();
   const dynamicDnsStatus = dataset<z.infer<typeof dynamicDnsStatusSchema>>();
   const mdnsStatus = dataset<z.infer<typeof mdnsStatusPageSchema>>();
   const upgrade = dataset<UpgradeStatus>();
   const upgradePending = ref(false), upgradeUncertain = ref(false), upgradeNeedsRefresh = ref(false);
   const acceptedUpgradeID = ref(""), requestedUpgradeVersion = ref(""), previousUpgradeID = ref("");
   const upgradeNotice = ref("");
+  const softwareCheckPending = ref(false), softwareCheckDenied = ref(false), softwareCheckError = ref(""), softwareCheckNotice = ref("");
+  let softwareCheckTimer: ReturnType<typeof setTimeout> | undefined;
+  let softwareCheckAbort: AbortController | undefined;
+  let priorSoftwareCheck: { timestamp: string | null; repository: string } | undefined;
+  let softwareCheckSubmitting: AbortController | undefined;
+  function stopSoftwareCheck(): void {
+    clearTimeout(softwareCheckTimer);
+    softwareCheckAbort?.abort(); softwareCheckAbort = undefined;
+    softwareCheckPending.value = false; softwareCheckSubmitting = undefined; priorSoftwareCheck = undefined;
+  }
+  onScopeDispose(stopSoftwareCheck);
+  function settleSoftwareCheck(): void {
+    const metadata = state.data?.desired.software;
+    if (!softwareCheckPending.value || softwareCheckSubmitting || state.stale || !priorSoftwareCheck || !metadata) return;
+    if (metadata.repository !== priorSoftwareCheck.repository) {
+      stopSoftwareCheck(); softwareCheckError.value = "Release-check configuration changed. The previous request outcome is unknown.";
+    } else if (metadata.last_checked_at !== null && metadata.last_checked_at !== priorSoftwareCheck.timestamp) {
+      stopSoftwareCheck();
+      softwareCheckNotice.value = metadata.error ? "" : "Release check completed.";
+      softwareCheckError.value = metadata.error ?? "";
+    }
+  }
+  watch(() => [state.data?.desired.software, state.stale] as const, settleSoftwareCheck, { flush: "sync" });
   const revisions = dataset<RevisionMetadata[]>(), revisionDetail = dataset<Revision>();
   const comparisonRevision = dataset<Revision>();
   const nextRevision = ref<string | undefined>(), currentRevisionID = ref("");
@@ -118,7 +144,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, platform, linkDiagnostics, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, udpRelayStatus, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, platform, linkDiagnostics, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, udpRelayStatus, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, vnstatReporting, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -144,13 +170,14 @@ export const useControllerStore = defineStore("controller", () => {
     state.lastSuccess && Date.now() - state.lastSuccess < 20_000));
   const sortedTransactions = computed(() => Object.values(transactions.data ?? {}).sort((a, b) =>
     (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || a.id.localeCompare(b.id)));
-  const readOnlyNotice = computed(() => {
+  const readOnlyBlock = computed(() => {
     if (!connected.value) return "Sign in and select a registered firewall.";
     if (restartPending.value || restartReconnecting.value) return "A process restart is in progress. Your local draft is preserved.";
     if (busy.value || submitted.value || uncertain.value) return "A submitted snapshot or uncertain write is frozen. Reconcile its server outcome first.";
     return "";
   });
-  const readOnlyReason = computed(() => readOnlyNotice.value ||
+  const readOnlyNotice = computed(() => connecting.value && !connected.value ? "" : readOnlyBlock.value);
+  const readOnlyReason = computed(() => readOnlyBlock.value ||
     (!state.data ? "Committed desired configuration is unavailable. Recovery remains accessible." : ""));
   const applyBlockedReason = computed(() => {
     if (readOnlyReason.value) return readOnlyReason.value;
@@ -170,8 +197,24 @@ export const useControllerStore = defineStore("controller", () => {
     if (upgradePending.value || upgradeBlockedReason.value) return upgradeBlockedReason.value || "An upgrade is pending.";
     return "";
   });
+  function firewallDeletionBlock(includePendingReads: boolean): string {
+    if (operationBlockedReason.value) return operationBlockedReason.value;
+    if (incompatible.value) return "Resolve the incompatible configuration or transaction state first.";
+    if (editorDirty.value || draft.value) return "Save or discard local changes before deleting firewall hosts and rules.";
+    if (!state.data || state.stale || state.error || transactions.stale || transactions.error) {
+      if (!includePendingReads && !state.error && !transactions.error && (isInitialLoad(state) || isInitialLoad(transactions))) return "";
+      return "Current configuration and transaction state are unavailable. Waiting for fresh reads.";
+    }
+    if (state.data.drift) return "Resolve configuration drift before deleting firewall hosts and rules.";
+    if (!dateVersionSchema.safeParse(state.data.revision).success) return "This action requires a backend with calendar-version revisions.";
+    return "";
+  }
+  const firewallDeletionBlockedReason = computed(() => firewallDeletionBlock(true));
+  const firewallDeletionNotice = computed(() => connecting.value && !connected.value ? "" : firewallDeletionBlock(false));
 
   function invalidateReads(): void {
+    if (softwareCheckPending.value) softwareCheckError.value = "Release-check outcome is unknown because the connection changed. No request was automatically repeated.";
+    stopSoftwareCheck(); softwareCheckDenied.value = false; softwareCheckNotice.value = "";
     epoch++;
     sessionVersion.value++;
     clearTimeout(reconnectTimer);
@@ -307,6 +350,48 @@ export const useControllerStore = defineStore("controller", () => {
       if (session === epoch && !state.stale && !transactions.stale) upgradeNeedsRefresh.value = false;
     }
   }
+    async function checkSoftwareRelease(): Promise<void> {
+      if (softwareCheckPending.value) return;
+      softwareCheckError.value = ""; softwareCheckNotice.value = "";
+      const metadata = state.data?.desired.software;
+      if (!connected.value || state.stale || !metadata?.repository || softwareCheckDenied.value) {
+        softwareCheckError.value = "Release checks require fresh state, release checking enabled and system.upgrade permission.";
+        return;
+      }
+      const session = epoch, controller = new AbortController();
+      softwareCheckAbort = controller; softwareCheckPending.value = true; softwareCheckSubmitting = controller;
+      priorSoftwareCheck = { timestamp: metadata.last_checked_at, repository: metadata.repository };
+      softwareCheckTimer = setTimeout(() => {
+        stopSoftwareCheck();
+        softwareCheckError.value = "Release-check outcome is unknown after 60 seconds. The previous result is not a new successful check. You may explicitly retry.";
+        softwareCheckNotice.value = "";
+      }, 60_000);
+      try {
+        await api.checkSoftwareRelease(controller.signal);
+        if (session !== epoch || softwareCheckAbort !== controller) return;
+        softwareCheckNotice.value = "Release check requested. Waiting for a new saved result; previous values are shown.";
+      } catch (error) {
+        if (session !== epoch || softwareCheckAbort !== controller) return;
+        if (error instanceof ApiFailure && error.status === 409) {
+          softwareCheckNotice.value = "A release check is already queued or running. Waiting for its saved result; no duplicate was submitted.";
+        } else if (error instanceof ApiFailure && error.uncertain && ![400, 401, 403, 404, 405, 503].includes(error.status ?? 0)) {
+          softwareCheckNotice.value = "Request outcome is uncertain. Waiting for a changed result without resubmitting.";
+        } else {
+          const status = error instanceof ApiFailure ? error.status : undefined;
+          stopSoftwareCheck();
+          softwareCheckDenied.value = status === 403;
+          softwareCheckError.value = status === 403 ? "Release checks require system.upgrade permission (403)."
+            : status === 404 || status === 405 ? "This backend does not support manual release checks. Update the appliance backend."
+            : status === 503 ? "Release checking is disabled or its worker is unavailable (503). Check the appliance upgrade configuration."
+            : message(error);
+          return;
+        }
+      } finally { if (softwareCheckSubmitting === controller) softwareCheckSubmitting = undefined; }
+      if (session === epoch && softwareCheckAbort === controller) {
+        settleSoftwareCheck();
+        if (softwareCheckPending.value) await refreshState();
+      }
+    }
   async function checkMaintenance(): Promise<void> {
     if (upgradePending.value) throw new Error("System upgrade submission is pending");
     await refreshUpgrade();
@@ -317,11 +402,18 @@ export const useControllerStore = defineStore("controller", () => {
     const session = epoch;
     upgradePending.value = true; upgradeNotice.value = "";
     try {
-      await Promise.all([refreshUpgrade(), refreshTransactions()]);
+      await Promise.all([refreshUpgrade(), refreshTransactions(), refreshState()]);
       if (upgrade.data?.repository !== expectedRepository) throw new Error("Configured repository changed. Review the upgrade again.");
       if (session !== epoch || !connected.value || upgrade.stale || !upgrade.data?.enabled || !upgrade.data.repository || upgradeBlockedReason.value ||
           busy.value || uncertain.value || submitted.value || transactions.stale || activeTransactions.value.length) {
-        throw new Error(upgradeBlockedReason.value || "Upgrade requires configured trust, fresh status and no active or uncertain write");
+        throw new Error(upgradeBlockedReason.value || "Upgrade requires installation enabled, fresh status and no active or uncertain write");
+      }
+      dateVersionSchema.parse(version);
+      const software = state.data?.desired.software;
+      if (state.stale || !software) throw new Error("Refresh running software information before upgrading.");
+      if (compareDateVersions(version, software.version) <= 0 ||
+          (upgrade.data.last_successful_version && compareDateVersions(version, upgrade.data.last_successful_version) <= 0)) {
+        throw new Error("Upgrade version must be newer than both the running and last successful versions.");
       }
       requestedUpgradeVersion.value = version; previousUpgradeID.value = upgrade.data.job?.id ?? "";
       try {
@@ -348,6 +440,7 @@ export const useControllerStore = defineStore("controller", () => {
   const refreshGatewayStatistics = () => load(gatewayStatistics, api.getGatewayStatistics);
   const refreshHostHealth = () => load(hostHealth, api.getHostHealth);
   const refreshMqttStatus = () => load(mqttStatus, api.getMqttStatus);
+  const refreshVnStatReporting = () => load(vnstatReporting, api.getVnStatReporting);
   const refreshDynamicDnsStatus = () => load(dynamicDnsStatus, api.getDynamicDnsStatus);
   const refreshMDNSStatus = () => load(mdnsStatus, api.getMDNSStatus);
   async function refresh(): Promise<void> {
@@ -366,7 +459,7 @@ export const useControllerStore = defineStore("controller", () => {
     invalidateReads();
     platform.data = null; platformUnsupported.value = false; linkDiagnostics.data = null;
     bgpStatus.data = null; bgpRoutes.data = null; bgpUnsupported.value = false;
-    hostHealth.data = null; mqttStatus.data = null; mdnsStatus.data = null;
+    hostHealth.data = null; mqttStatus.data = null; mdnsStatus.data = null; vnstatReporting.data = null;
     await load(transactions, api.getTransactions);
     if (transactions.stale) {
       await refreshState();
@@ -527,8 +620,22 @@ export const useControllerStore = defineStore("controller", () => {
     if (!transaction || !knownStatuses.includes(transaction.status)) throw new Error("Unable to obtain a compatible fresh transaction");
     if (action === "confirm" && (transaction.status !== "pending_confirmation" || Date.parse(transaction.confirmation_deadline) <= Date.now())) throw new Error("Confirmation is not currently available; await server outcome");
     if (action === "rollback" && !["pending_confirmation", "recovery_failed"].includes(transaction.status)) throw new Error("Rollback is not available in this state");
-    return mutate(action === "confirm" ? "Confirm configuration" : "Roll back", () =>
+    const result = await mutate(action === "confirm" ? "Confirm configuration" : "Roll back", () =>
       action === "confirm" ? api.confirmTransaction(id) : api.rollbackTransaction(id), id);
+    if (result && terminal(result)) await refreshRevisions();
+    return result;
+  }
+  async function deleteFirewallHostsAndRules(reviewedRevision: string, seconds: number, description: string): Promise<Transaction | null> {
+    const trimmed = validateWindow(seconds, description);
+    if (firewallDeletionBlockedReason.value) throw new Error(firewallDeletionBlockedReason.value);
+    const session = epoch;
+    await Promise.all([refreshState(), refreshTransactions()]);
+    if (session !== epoch) throw new Error("Connection changed. Review the current firewall before deleting.");
+    if (firewallDeletionBlockedReason.value) throw new Error(firewallDeletionBlockedReason.value);
+    if (!freshState.value || state.data?.revision !== reviewedRevision) throw new Error("Configuration changed since review. Close this dialog and review the current scope before deleting.");
+    return mutate("Delete firewall hosts and forwarding rules", () => api.deleteFirewallHostsAndRules({
+      base_revision: reviewedRevision, confirm_timeout_seconds: seconds, confirm: true, description: trimmed,
+    }));
   }
   async function restore(revision: string, seconds: number, description: string): Promise<Transaction | null> {
     const trimmed = validateWindow(seconds, description);
@@ -581,7 +688,7 @@ export const useControllerStore = defineStore("controller", () => {
       revisionDetail.data = cached; revisionDetail.stale = false; revisionDetail.lastSuccess = Date.now(); return;
     }
     await load(revisionDetail, () => api.getRevision(id));
-    if (revisionDetail.data?.revision === id && !revisionDetail.stale) revisionCache.set(id, revisionDetail.data);
+    if (revisionDetail.data?.revision === id && !revisionDetail.stale && !revisionDetail.data.current) revisionCache.set(id, revisionDetail.data);
   }
   function clearComparison(): void {
     queryAborts.get(comparisonRevision)?.abort();
@@ -596,7 +703,7 @@ export const useControllerStore = defineStore("controller", () => {
       const cached = revisionCache.get(id);
       return cached ? Promise.resolve(cached) : api.getRevision(id);
     });
-    if (comparisonRevision.data?.revision === id && !comparisonRevision.stale) revisionCache.set(id, comparisonRevision.data);
+    if (comparisonRevision.data?.revision === id && !comparisonRevision.stale && !comparisonRevision.data.current) revisionCache.set(id, comparisonRevision.data);
   }
   return {
     udpRelayStatus, udpRelayStatusCurrent, refreshUDPRelayStatus,
@@ -611,9 +718,11 @@ export const useControllerStore = defineStore("controller", () => {
     canApply, applyBlockedReason, sortedTransactions, readOnlyReason, readOnlyNotice, ipv6Enabled,
     upgrade, upgradePending, upgradeUncertain, upgradeActive, upgradeBlockedReason, upgradeNotice, acceptedUpgradeID,
     refreshUpgrade, checkMaintenance, startUpgrade, supportsDhcpGatewayMonitors,
+    checkSoftwareRelease, softwareCheckPending, softwareCheckDenied, softwareCheckError, softwareCheckNotice,
     connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics, refreshGatewayStatistics,
     refreshHostHealth, refreshMqttStatus, dynamicDnsStatus, refreshDynamicDnsStatus, mdnsStatus, refreshMDNSStatus,
+    vnstatReporting, refreshVnStatReporting,
     refreshRevisions, loadRevision, compareRevision, clearComparison, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
-    readTransaction, resolveUncertainty,
+    readTransaction, resolveUncertainty, deleteFirewallHostsAndRules, firewallDeletionBlockedReason, firewallDeletionNotice,
   };
 });

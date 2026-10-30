@@ -26,7 +26,8 @@ beforeEach(() => {
 function review() {
   return mount(ChangesView, { global: { stubs: {
     VBtn: { props: ["disabled"], template: '<button :disabled="disabled"><slot /></button>' },
-    VDialog: true, VAlert: { template: "<div><slot /></div>" }, VTextarea: true,
+    VDialog: { name: "VDialog", props: ["modelValue"], template: "<div />" },
+    VAlert: { template: "<div><slot /></div>" }, VTextarea: true,
     VBtnToggle: { name: "VBtnToggle", props: ["modelValue"], template: "<div><slot /></div>" },
     ConfigDiff: true, ApplyConfigurationDialog: true, RouterLink: true,
   } } });
@@ -35,6 +36,19 @@ function button(wrapper: ReturnType<typeof review>, text: string) {
   return wrapper.findAll("button").find(item => item.text() === text || item.attributes("aria-label") === text)!;
 }
 describe("commit and push checks", () => {
+  it("shows a red labeled discard button and preserves confirmation before discarding", async () => {
+    const store = useControllerStore(), wrapper = review();
+    const discard = button(wrapper, "Discard changes");
+    expect(discard.attributes("color")).toBe("error");
+    expect(discard.attributes("variant")).toBe("flat");
+    expect(discard.attributes("icon")).toBeUndefined();
+    expect(wrapper.findComponent({ name: "VDialog" }).props("modelValue")).toBe(false);
+    await discard.trigger("click");
+    expect(wrapper.findComponent({ name: "VDialog" }).props("modelValue")).toBe(true);
+    expect(store.draft?.routes[0]?.metric).toBe(42);
+    store.discardDraft(); await flushPromises();
+    expect(wrapper.findAll("button").some(item => item.text() === "Discard changes")).toBe(false);
+  });
   it("checks aged reads on commit and push without discarding or submitting the draft", async () => {
     const store = useControllerStore();
     store.state.lastSuccess = Date.now() - 20_001;
@@ -52,7 +66,7 @@ describe("commit and push checks", () => {
     expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(true);
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
     expect(store.draft).toEqual(draft); expect(store.baseline).toEqual(baseline);
-    expect(store.baseRevision).toBe("0"); expect(store.submitted).toBeNull();
+    expect(store.baseRevision).toBe("2026.10.29.1"); expect(store.submitted).toBeNull();
   });
   it("reports a failed configuration refresh instead of enabling apply", async () => {
     const store = useControllerStore(), wrapper = review();
@@ -82,13 +96,13 @@ describe("commit and push checks", () => {
     expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(true);
   });
   it("retains the old base and requires explicit comparison/restart after a revision change", async () => {
-    const latest = { ...state(), revision: "1" }; latest.desired.interfaces[0]!.mtu = 1400;
+    const latest = { ...state(), revision: "2026.10.29.2" }; latest.desired.interfaces[0]!.mtu = 1400;
     vi.mocked(api.getState).mockResolvedValue(latest);
     const wrapper = review();
     await button(wrapper, "Commit & push").trigger("click"); await flushPromises();
-    expect(wrapper.get('[role="status"]').text()).toContain("Draft base revision 0 differs from committed revision 1");
+    expect(wrapper.get('[role="status"]').text()).toContain("Draft base revision 2026.10.29.1 differs from committed revision 2026.10.29.2");
     expect(wrapper.findComponent(ApplyConfigurationDialog).props("modelValue")).toBe(false);
-    expect(useControllerStore().baseRevision).toBe("0");
+    expect(useControllerStore().baseRevision).toBe("2026.10.29.1");
     expect(useControllerStore().draft?.routes[0]?.metric).toBe(42);
     expect(wrapper.findAllComponents(ConfigDiff)).toHaveLength(1);
     expect(wrapper.findComponent(ConfigDiff).props("before")).toEqual(useControllerStore().baseline);

@@ -15,6 +15,33 @@ import { resourceTitles } from "@/services/resourceCollections";
 const PollingHost = defineComponent({ setup() { usePolling(); return () => null; } });
 
 describe("routed navigation sections", () => {
+  it("places SANDO IMPORT and ADVANCED at the end of Settings", () => {
+    const settings = navigationSections.find(section => section.name === "settings-section");
+    expect(settings?.pages.map(page => page.name)).toEqual(["settings-general", "settings-mqtt-streaming", "settings-dynamic-dns", "settings-sando", "settings-advanced"]);
+  });
+  it("opens INTERFACE RULES first from Firewall/NAT while preserving the existing firewall page", async () => {
+    const section = navigationSections.find(section => section.name === "firewall-section")!;
+    expect(section.pages[0]).toMatchObject({ title: "INTERFACE RULES", name: "firewall-ingress", path: "/firewall/ingress" });
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    await router.push({ name: section.name });
+    expect(router.currentRoute.value.name).toBe("firewall-ingress");
+    expect(router.currentRoute.value.meta.authenticated).toBe(true);
+    await router.push("/firewall");
+    expect(router.currentRoute.value.name).toBe("firewall");
+  });
+  it("labels the existing firewall route PROTECTED HOSTS without changing its URL", () => {
+    const page = navigationSections.find(section => section.name === "firewall-section")?.pages.find(page => page.name === "firewall");
+    expect(page).toMatchObject({ title: "PROTECTED HOSTS", path: "/firewall" });
+    expect(resourceTitles.firewall).toBe("PROTECTED HOSTS");
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    expect(router.resolve("/firewall").name).toBe("firewall");
+  });
+  it("labels the input firewall route Firewall destined without changing its URL", () => {
+    const page = navigationSections.find(section => section.name === "firewall-section")?.pages.find(page => page.name === "firewall-input");
+    expect(page).toMatchObject({ title: "Firewall destined", path: "/firewall/input" });
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    expect(router.resolve("/firewall/input").name).toBe("firewall-input");
+  });
   it("routes NetFlow/IPFIX through netflow while preserving the backend resource identity", () => {
     const page = navigationSections.find(section => section.name === "services-section")?.pages.find(page => page.name === "netflow");
     expect(page?.title).toBe("NetFlow/IPFIX");
@@ -40,16 +67,24 @@ describe("routed navigation sections", () => {
   it("keeps Config routable without a duplicate primary navigation entry", () => {
     expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]);
     expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels"]);
-    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors", "bgp", "bgp-peers"]);
+    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors", "bgp", "bgp-peers", "bgp-routes"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
-    expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall", "firewall-input", "connections", "nat", "dnat"]);
+    expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall-ingress", "firewall", "firewall-input", "connections", "nat", "dnat"]);
     expect(navigationSections.find(section => section.name === "vpn-section")?.pages.map(page => page.name)).toEqual(["wireguard"]);
   });
   it("includes Download config in Diagnostics", () => {
     const diagnostics = navigationSections.find(section => section.name === "diagnostics-section");
-    expect(diagnostics?.pages.map(page => page.name)).toEqual(["real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "api-explorer", "bgp-routes", "download-config"]);
+    expect(diagnostics?.pages.map(page => page.name)).toEqual(["real-time-traffic", "firewall-drops", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "api-explorer", "download-config"]);
     expect(diagnostics?.pages.find(page => page.name === "download-config")).toMatchObject({ title: "Download config", path: "/diagnostics/download-config" });
+  });
+  it("opens BGP routes under Routing and redirects the old Diagnostics URL", async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    await router.push("/diagnostics/bgp-routes?source=bookmark#routes");
+    expect(router.currentRoute.value.fullPath).toBe("/routing/bgp/routes?source=bookmark#routes");
+    expect(router.currentRoute.value.name).toBe("bgp-routes");
+    expect(router.currentRoute.value.matched[0]?.name).toBe("routing-section");
+    expect(router.currentRoute.value.meta.authenticated).toBe(true);
   });
   it("preserves every page URL and its authenticated section", () => {
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
@@ -61,7 +96,7 @@ describe("routed navigation sections", () => {
     }
     for (const [path, selectedPage] of [
       ["/interfaces/lab0", "interfaces"], ["/wireguard/wg0", "wireguard"], ["/services/netflow/capture", "netflow"],
-      ["/config/commits/transaction-id", "commits"], ["/config/revisions/0", "history"],
+      ["/config/commits/transaction-id", "commits"], ["/config/revisions/2026.10.29.1", "history"],
     ]) {
       expect(router.resolve(path!).meta.navigationPage).toBe(selectedPage);
       expect(router.resolve(path!).meta.authenticated).toBe(true);
@@ -106,15 +141,17 @@ describe("routed navigation sections", () => {
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
     for (const [source, target] of [
       ["/config", "/config/changes"], ["/activity", "/config/changes"],
+      ["/settings/upgrade?source=bookmark#status", "/config/upgrade?source=bookmark#status"],
       ["/changes", "/config/changes"], ["/transactions", "/config/commits"],
       ["/transactions/tx-test?source=bookmark#details", "/config/commits/tx-test?source=bookmark#details"],
-      ["/history", "/config/revisions"], ["/history/9007199254740993", "/config/revisions/9007199254740993"],
+      ["/history", "/config/revisions"], ["/history/2026.10.29.4294967294", "/config/revisions/2026.10.29.4294967294"],
     ]) {
       await router.push(source!);
       expect(router.currentRoute.value.fullPath).toBe(target);
       expect(router.currentRoute.value.meta.authenticated).toBe(true);
     }
-    expect(navigationSections.find(section => section.path === "/config")?.pages.map(page => page.title)).toEqual(["SAVE", "Commits", "PUSH REQUESTS"]);
+    expect(navigationSections.find(section => section.path === "/config")?.pages.map(page => page.title)).toEqual(["SAVE", "Commits", "PUSH REQUESTS", "Upgrade"]);
+    expect(navigationSections.find(section => section.path === "/settings")?.pages.some(page => page.name === "settings-upgrade")).toBe(false);
   });
 });
 
@@ -136,6 +173,32 @@ describe("page-scoped polling", () => {
     vi.spyOn(api, "getPlatformStatus").mockResolvedValue({ process_health: {
       status: "unknown", healthy: null, collected_at: null, stale: true, components: [],
     }, active_alerts: [] });
+  });
+  it.each(["received", "advertised"] as const)("polls %s BGP routes under Routing and stops on navigation", async direction => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true; store.bgpRouteDirection = direction;
+    vi.spyOn(store, "refreshUpgrade").mockResolvedValue();
+    const received = vi.spyOn(store, "refreshBGPRoutes").mockResolvedValue();
+    const advertised = vi.spyOn(store, "refreshBGPAdvertisedRoutes").mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: "/routing/bgp/routes", name: "bgp-routes", component: PollingHost },
+      { path: "/diagnostics/traffic", component: PollingHost },
+    ] });
+    await router.push("/routing/bgp/routes");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    const active = direction === "received" ? received : advertised;
+    const inactive = direction === "received" ? advertised : received;
+    try {
+      await vi.advanceTimersByTimeAsync(6100);
+      expect(active).toHaveBeenCalledTimes(3);
+      expect(inactive).not.toHaveBeenCalled();
+      await router.push("/diagnostics/traffic");
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(active).toHaveBeenCalledTimes(3);
+      expect(inactive).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); store.$dispose(); visibility.mockRestore(); vi.useRealTimers(); }
   });
   it.each(["/diagnostics/interface-drops", "/diagnostics/qdiscs", "/diagnostics/tcp-windowing", "/diagnostics/capture-details"])("polls %s only while visible, single-flighting requests and retaining drafts", async path => {
     vi.useFakeTimers();
@@ -326,7 +389,41 @@ describe("page-scoped polling", () => {
       await vi.advanceTimersByTimeAsync(6000); expect(refreshGatewayStatistics).toHaveBeenCalledTimes(2);
     } finally { wrapper.unmount(); vi.useRealTimers(); }
   });
-  it.each(["/interfaces", "/interfaces/lab0", "/config/commits/tx-test", "/config/changes", "/config/revisions"])("keeps %s manual even during pending transactions", async path => {
+  it.each(["settings-advanced", "transaction-detail"])("monitors pending transaction outcomes on %s and pauses elsewhere or when hidden", async name => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    store.transactions.data = { "tx-test": transaction() };
+    const refreshState = vi.spyOn(store, "refreshState").mockResolvedValue();
+    const refreshTransactions = vi.spyOn(store, "refreshTransactions").mockResolvedValue();
+    const refreshRuntime = vi.spyOn(store, "refreshRuntime").mockResolvedValue();
+    vi.spyOn(store, "refreshUpgrade").mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: "/settings/advanced", name: "settings-advanced", component: PollingHost },
+      { path: "/config/commits/:id", name: "transaction-detail", component: PollingHost },
+      { path: "/interfaces", component: PollingHost },
+    ] });
+    await router.push({ name, params: name === "transaction-detail" ? { id: "tx-test" } : {} });
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(2100);
+      expect(refreshState).toHaveBeenCalledTimes(3);
+      expect(refreshTransactions).toHaveBeenCalledTimes(3);
+      expect(refreshRuntime).not.toHaveBeenCalled();
+      visibility.mockReturnValue("hidden"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(refreshTransactions).toHaveBeenCalledTimes(3);
+      visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(refreshTransactions).toHaveBeenCalledTimes(4);
+      await router.push("/interfaces");
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(refreshTransactions).toHaveBeenCalledTimes(4);
+      expect(refreshState).toHaveBeenCalledTimes(4);
+    } finally { wrapper.unmount(); store.$dispose(); visibility.mockRestore(); vi.useRealTimers(); }
+  });
+  it.each(["/interfaces", "/interfaces/lab0", "/config/changes", "/config/revisions"])("keeps %s manual even during pending transactions", async path => {
     vi.useFakeTimers();
     const pinia = createPinia();
     setActivePinia(pinia);

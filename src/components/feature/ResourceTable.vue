@@ -2,7 +2,7 @@
 import { computed, ref } from "vue";
 import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import { useControllerStore } from "@/stores/controller";
 import { configSchema, type DiscoveredInterface } from "@/types/domain";
 import { record } from "@/types/forms";
@@ -10,10 +10,27 @@ import { differences, stableJson } from "@/services/configuration";
 import { displayResourceValue, resourceColumns } from "@/services/resourceCollections";
 import type { Section } from "@/services/resourceForms";
 import type { ResourceRow } from "@/composables/useResourceCollection";
+import { useFirewallCounters } from "@/composables/useFirewallCounters";
+import FirewallCounterCells from "@/components/feature/FirewallCounterCells.vue";
+import FirewallCounterRows from "@/components/feature/FirewallCounterRows.vue";
+import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
+import { useRuleDrag } from "@/composables/useRuleDrag";
+import { resourceItems } from "@/services/resourceCollections";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const props = defineProps<{ section: Section; rows: ResourceRow[]; total: number; disabled: boolean; detail: boolean; wireguard?: boolean; vlan?: boolean; inventory?: boolean; loopbacks?: boolean; expandedName?: string; editingRow?: number }>();
 const emit = defineEmits<{ edit: [value: unknown]; delete: [row: ResourceRow]; move: [index: number, delta: number]; manage: [link: DiscoveredInterface]; toggle: [value: unknown, enabled: boolean] }>();
 const store = useControllerStore();
+const counterEnabled = computed(() => ["firewall", "nat"].includes(props.section));
+const counterConfig = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
+const counters = useFirewallCounters(counterConfig, counterEnabled);
+const dragError = ref("");
+const { dropTarget, pointerStart, pointerMove, drop, cancel: cancelDrag } = useRuleDrag({
+  blocked: () => props.disabled || props.editingRow !== undefined || Boolean(store.readOnlyReason),
+  snapshot: () => ({ section: props.section, rules: counterConfig.value ? resourceItems(counterConfig.value, props.section) : [], rows: props.rows.map(row => row.index) }),
+  move: (from, to) => { dragError.value = ""; emit("move", from, to - from); },
+  error: message => { dragError.value = message; },
+});
 const expandedMonitor = ref<string | null>(null);
 const statusVersions = ref<Record<string, number>>({});
 const blackholeLabel = computed(() => ({ blackhole: 'Drop', unreachable: 'Unreachable', prohibit: 'Prohibited' })[blackholeTarget.value?.action ?? 'blackhole']);
@@ -46,7 +63,7 @@ function statusLabel(value: Record<string, unknown>): string {
   if (props.section === "gateway_monitors") return `Monitoring enabled for ${value.name}`;
   return props.section === "softflowd" ? `Export enabled for ${value.name}` : `Route enabled for ${value.destination}`;
 }
-const columns = computed(() => previewColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 3 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)));
+const columns = computed(() => previewColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 3 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)) + Number(counterEnabled.value) * 3);
 function editable(row: ResourceRow): boolean {
   return row.value.name !== "lo" && (!row.discovered || (row.index >= 0 && row.discovered.ownership !== "loopback" && ["ethernet", "veth", "dummy", "vlan", "wireguard"].includes(row.discovered.kind)));
 }
@@ -134,7 +151,7 @@ function runtime(name: unknown): string {
     running: "Running; local responsiveness checked, delivery not verified", disabled: "Disabled", simulated: "Simulated; no real process",
     not_running: "Not running", unhealthy: "Unhealthy", exited: "Exited",
   };
-  return `${labels[status.state] ?? `Unknown (${status.state})`}${status.pid ? ` · PID ${status.pid}` : ""}${status.started_at ? ` · ${formatTimestamp(status.started_at)} UTC` : ""}${status.error ? ` · ${status.error}` : ""}`;
+  return `${labels[status.state] ?? `Unknown (${status.state})`}${status.pid ? ` · PID ${status.pid}` : ""}${status.started_at ? ` · ${formatTimestamp(status.started_at)} ${timeZone.value}` : ""}${status.error ? ` · ${status.error}` : ""}`;
 }
 function staged(value: unknown): string {
   if (!store.draft || !store.state.data) return "Committed desired";
@@ -145,7 +162,22 @@ function staged(value: unknown): string {
 </script>
 
 <template>
+  <p
+    v-if="dragError"
+    role="alert"
+    class="text-error mb-3"
+  >
+    {{ dragError }}
+  </p>
   <v-table :class="{ 'interface-table': section === 'interfaces', 'compact-interface-table': compact, 'physical-table': physical, 'wireguard-table': wireguard, 'vlan-table': vlan, 'loopback-table': loopbacks, 'routes-table': section === 'routes', 'monitors-table': section === 'gateway_monitors', 'nat-table': section === 'nat', 'inventory-table': inventory }">
+    <caption
+      v-if="counterEnabled"
+      class="text-caption text-medium-emphasis text-left"
+      style="caption-side: bottom"
+    >
+      {{ counters.notice.value }}
+      <span v-if="section === 'nat'">NAT counts initial connection-mapping evaluations, not all established packets.</span>
+    </caption>
     <thead>
       <tr>
         <th
@@ -190,6 +222,9 @@ function staged(value: unknown): string {
         <th class="column-actions">
           Actions
         </th>
+        <template v-if="counterEnabled">
+          <th>Origin</th><th>Packets</th><th>Bytes</th>
+        </template>
       </tr>
     </thead>
     <tbody>
@@ -207,7 +242,8 @@ function staged(value: unknown): string {
         />
         <tr
           v-else
-          :class="{ 'physical-interface-row': section === 'interfaces' && row.value.kind === 'ethernet' && editable(row) }"
+          :class="{ 'physical-interface-row': section === 'interfaces' && row.value.kind === 'ethernet' && editable(row), 'rule-drop-target': counterEnabled && dropTarget === row.index }"
+          :data-rule-index="counterEnabled ? row.index : undefined"
           @click="section === 'interfaces' && row.value.kind === 'ethernet' && editable(row) && !disabled && $emit('edit', row.value)"
         >
           <td v-if="['firewall', 'nat'].includes(section)">
@@ -269,6 +305,12 @@ function staged(value: unknown): string {
               class="text-caption text-medium-emphasis"
             >
               {{ physical ? record(row.value.metadata).display_name : row.value.name }}
+            </div>
+            <div
+              v-if="vlan && key === 'name'"
+              class="vlan-role text-caption text-medium-emphasis"
+            >
+              {{ cell(row.value, 'role') }}
             </div>
             <v-chip
               v-if="section === 'routes' && key === 'interface' && row.value.interface === blackholeTarget?.name"
@@ -434,26 +476,19 @@ function staged(value: unknown): string {
                 :disabled="disabled"
                 @click.stop="$emit('delete', row)"
               />
-              <template v-if="['firewall', 'nat'].includes(section)">
-                <v-btn
-                  icon="mdi-arrow-up"
-                  aria-label="Move up"
-                  title="Move up"
-                  variant="text"
-                  size="small"
-                  :disabled="Boolean(store.readOnlyReason) || row.index === 0"
-                  @click="$emit('move', row.index, -1)"
-                />
-                <v-btn
-                  icon="mdi-arrow-down"
-                  aria-label="Move down"
-                  title="Move down"
-                  variant="text"
-                  size="small"
-                  :disabled="Boolean(store.readOnlyReason) || row.index === total - 1"
-                  @click="$emit('move', row.index, 1)"
-                />
-              </template>
+              <button
+                v-if="counterEnabled"
+                type="button"
+                class="drag-handle"
+                :aria-label="`Drag rule ${row.index + 1}`"
+                :disabled="disabled || editingRow !== undefined || Boolean(store.readOnlyReason)"
+                @pointerdown="pointerStart($event, row.index)"
+                @pointermove="pointerMove"
+                @pointerup="drop"
+                @pointercancel="cancelDrag"
+              >
+                <v-icon icon="mdi-drag" />
+              </button>
             </div>
             <v-btn
               v-else-if="physical && adoptable(row)"
@@ -479,6 +514,14 @@ function staged(value: unknown): string {
               class="text-medium-emphasis"
             >Read-only</span>
           </td>
+          <td v-if="counterEnabled">
+            <span class="compact-cell-label">Origin</span>
+            <RuleOriginLabel :rule="row.value" />
+          </td>
+          <FirewallCounterCells
+            v-if="counterEnabled"
+            :counts="counters.counts(section === 'nat' ? `/firewall/nat/masquerade/${row.index}` : `/firewall/rules/${row.index}`, section === 'nat' ? 'postrouting' : 'forward')"
+          />
         </tr>
         <slot
           name="expanded-row"
@@ -496,7 +539,12 @@ function staged(value: unknown): string {
         :columns="columns"
         :keys="visibleColumns"
       />
-      <tr v-if="!rows.length && editingRow === undefined && (inventory || section !== 'interfaces' || detail || wireguard || vlan)">
+      <FirewallCounterRows
+        v-if="section === 'firewall'"
+        :rows="counters.summaries('forward')"
+        :columns="columns"
+      />
+      <tr v-if="(inventory || counterConfig) && !rows.length && editingRow === undefined && (inventory || section !== 'interfaces' || detail || wireguard || vlan)">
         <td :colspan="columns">
           {{ inventory ? "No discovered interfaces match this filter." : detail ? "Resource not found in this configuration." : "No configured resources." }}
         </td>
@@ -563,7 +611,7 @@ function staged(value: unknown): string {
 .monitors-table :deep(.column-actions) { width: 96px; }
 .nat-table :deep(.column-position) { width: 64px; }
 .nat-table :deep(.column-family) { width: 112px; }
-.nat-table :deep(.column-actions) { width: 192px; }
+.nat-table :deep(.column-actions) { width: 128px; }
 .monitors-table :deep(td) { vertical-align: middle; }
 .compact-interface-table :deep(td:last-child .v-btn) { padding-inline: 8px; }
 .physical-table :deep(td:last-child .v-btn__content),

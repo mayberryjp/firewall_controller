@@ -1,5 +1,11 @@
-import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus, PlatformStatus } from "@/types/domain";
+import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus, PlatformStatus, SoftwareMetadata, VnStatReporting, WireGuardDNS } from "@/types/domain";
 import type { HostHealth } from "../src/services/hostHealth";
+export function vnstatReporting(): VnStatReporting {
+  return {
+    scope: "host", last_report_date: "2026-10-29", last_report_error: null,
+    sent_datagrams: "18446744073709551615", failed_datagrams: "0",
+  };
+}
 export function healthSnapshot(ticks = "9007199254740993", idle = "9007199254740993", uptime = 100): HostHealth {
   const unavailable = { status: "unavailable" as const, data: null, error: "Not supported" };
   return {
@@ -58,7 +64,32 @@ export function config(): Config {
   };
 }
 export function state(): StateView {
-  return { revision: "0", desired: config(), observed: config(), drift: false };
+  return { revision: "2026.10.29.1", desired: { ...config(), software: software() }, observed: config(), drift: false };
+}
+export function hostPolicyConfig(): Config {
+  const result = config();
+  result.firewall.rules = [];
+  result.firewall.policies = {
+    hosts: [
+      { id: "desk", name: "Workstation", addresses: ["192.0.2.20"], policy: "drop", rules: [
+        { destination_host: "server", protocol: "tcp", destination_ports: [443, 8443], out_interface: "lab0", action: "accept" },
+        { destination: "198.51.100.0/24", protocol: "udp", destination_ports: [53], action: "drop" },
+        { action: "accept" },
+      ] },
+      { id: "server", name: "Server", addresses: ["198.51.100.10"], policy: "accept", rules: [] },
+      { id: "phone", name: "Phone", addresses: ["192.0.2.30"], policy: "drop", rules: [
+        { destination: "2001:db8::/64", protocol: "udp", destination_ports: [5353], action: "accept" },
+      ] },
+    ],
+    interfaces: [{ interface: "lab0", rules: [{ destination: "203.0.113.99/32", action: "drop" }] }],
+  };
+  return result;
+}
+export function software(): SoftwareMetadata {
+  return {
+    version: "2026.10.29.1", repository: null, latest_version: null,
+    update_available: null, last_checked_at: null, error: null,
+  };
 }
 export function mdnsStatus(): MDNSStatus {
   return {
@@ -93,8 +124,20 @@ export function runtime(): RuntimeState { return {
 }; }
 export function transaction(status = "pending_confirmation"): Transaction {
   return {
-    id: "tx-test", actor: "operator", status, base_revision: "0", candidate: config(), previous: config(),
+    id: "tx-test", actor: "operator", status, base_revision: "2026.10.29.1",
+    committed_revision: status === "committed" ? "2026.10.29.2" : null, candidate: config(), previous: config(),
     confirmation_deadline: new Date(Date.now() + 120_000).toISOString(), submitted_at: new Date().toISOString(), committed_at: null,
+  };
+}
+export function wireguardDns(): WireGuardDNS {
+  return {
+    running: true, refresh_interval_seconds: 60, error: null,
+    peers: [{
+      interface: "wg0", public_key: btoa("\x01".repeat(32)), endpoint: "vpn.example.test:51820",
+      ipv6_enabled: true, resolved_endpoint: "192.0.2.20:51820",
+      last_attempt_unix_ms: Date.parse("2026-10-30T19:53:27.987Z"),
+      last_success_unix_ms: Date.parse("2026-10-30T19:53:27.987Z"), error: null,
+    }],
   };
 }
 export function statistics(): Statistics {

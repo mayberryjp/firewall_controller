@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useControllerStore } from "@/stores/controller";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
+const { formatTimestamp, timeZone } = useTimestamps();
 const store = useControllerStore();
 </script>
 <template>
@@ -23,7 +24,7 @@ const store = useControllerStore();
     <template v-if="store.statistics.data">
       <p class="mb-3">
         {{ store.statistics.data.sample.status }} · scope {{ store.statistics.data.sample.scope }} · collection window
-        {{ formatTimestamp(store.statistics.data.sample.started_at) }} – {{ formatTimestamp(store.statistics.data.sample.collected_at) }} (UTC).
+        {{ formatTimestamp(store.statistics.data.sample.started_at) }} – {{ formatTimestamp(store.statistics.data.sample.collected_at) }} ({{ timeZone }}).
         Counters are exact decimal strings; unavailable values are not zero. This is not an atomic snapshot.
       </p>
       <v-alert

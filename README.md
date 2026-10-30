@@ -9,7 +9,7 @@ Backend contracts were checked against the October 25 and 27
 [journals](https://github.com/mayberryjp/firewall_backend/tree/main/docs/journal)
 and [frontend handoffs](https://github.com/mayberryjp/firewall_backend/tree/main/docs/frontend-handoffs),
 including native mDNS, journald-only syslog, resilient supervision and platform health,
-alongside the earlier source-policy removal, signed upgrades and connection-state deletion.
+alongside the earlier source-policy removal, self-upgrades and connection-state deletion.
 These backend features are Unreleased; local mock tests do not establish deployment or native acceptance.
 The [October 28 operational handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-28.md)
 adds targeted process restart and timed DNS testing; the October 27 link-diagnostics
@@ -88,7 +88,7 @@ Configuration changes require `udp_broadcast_relay.write` plus
 `transactions.write`; shared-service repair also requires the relay permission
 whenever it is globally enabled. Status uses `state.read`, polls only on this
 page, and keys rows by numeric instance ID. Expand a row for exact decimal
-counters, UTC sample times, unknown receive loss, retries and retained errors.
+counters, system-timezone sample times, unknown receive loss, retries and retained errors.
 Confirmed instance restart uses `system.restart` and `udp-broadcast-relay:ID`;
 it resets counters, not saved configuration. Runtime failures do not lock editing.
 Complete config/history/export packages preserve the section; older backends
@@ -123,7 +123,7 @@ while retaining preferences.
 
 The page separates configured/draft membership from applied/provisional status,
 polls status without overlapping requests every 3 seconds (failure backoff capped
-at 5 seconds), and shows exact decimal counters, loss warnings and UTC sample times.
+at 5 seconds), and shows exact decimal counters, loss warnings and system-timezone sample times.
 Status failures retain local edits and do not globally lock configuration.
 Repair uses committed/pending settings, never the draft, and requires `mdns.write`
 for enabled mDNS even through another service's aggregate repair endpoint.
@@ -170,7 +170,7 @@ with a five-second maximum failure backoff and hidden/disconnected-tab pause. It
 available independently of configuration observation. Unsupported or forbidden cached
 endpoints stop polling for the session; existing service status remains compatible.
 The panel shows backend-reported aggregate/component states, freshness and active
-alerts, deduplicated by stable ID. First/last-seen times use UTC seconds. Unknown codes
+alerts, deduplicated by stable ID. First/last-seen times use system-timezone seconds. Unknown codes
 remain readable; recovery removes resolved alerts. There is no dismiss, acknowledgement,
 stored alert history or automatic repair. A cached health read expires locally after
 15 seconds without a successful refresh, even if a request is still pending. Stale
@@ -190,8 +190,8 @@ Both use the shared SAVE/apply flow. For initial setup, save the process identit
 while disabled, add a peer, then enable BGP. Peer rows show colored applied session
 states and sent/received route counts; uncommitted changes show Not applied, and
 unavailable or expired observations are neutral with unknown counts. Neighbor
-failures do not lock unrelated edits. Diagnostics > **BGP ROUTES**
-(`/diagnostics/bgp-routes`) has separate Received and Advertised views with a
+failures do not lock unrelated edits. Routing > **BGP ROUTES**
+(`/routing/bgp/routes`, with `/diagnostics/bgp-routes` redirecting here) has separate Received and Advertised views with a
 client-side neighbor filter. Received routes keep selected and installed paths
 distinct, with AS paths and actionable rejection/install reasons. Advertised
 rows use `GET /api/v1/routes/bgp/advertised` and show only prefix, peer, interface
@@ -202,6 +202,14 @@ stale, unavailable and stopped-worker results do not retain exports as current.
 Both reads use `state.read`; deploy the matching Unreleased backend before
 using Advertised. Learned routes and WireGuard AllowedIPs are never copied into
 desired configuration.
+
+WireGuard peer details label configured Allowed IPs separately from read-only
+BGP-learned additions. These use successfully installed, selected received routes,
+matched to the applied neighbor's tunnel and WireGuard public key; rejected,
+withdrawn, stale and statically covered prefixes are not shown as additions.
+The peer editor and generated static routes contain configured Allowed IPs only.
+The current backend does not expose a complete kernel AllowedIPs inventory or
+provenance for additions made by other tools, so those cannot be displayed yet.
 
 The **BGP peers** overview box uses applied configuration, not the draft. It is
 included in new/default layouts; existing customized layouts are preserved and
@@ -215,7 +223,7 @@ BGP changes require `bgp.write`; enabled BGP also requires that permission for
 aggregate service repair. Default-route import opt-ins appear in SAVE review.
 
 Firewall/NAT > **DNAT** (`/firewall/nat/dnat`) is an ordered destination rewrite
-table with inline add/edit/delete/reorder controls. WAN, TCP/UDP, exact port, LAN
+table with inline add/edit/delete and drag-to-reorder controls. WAN, TCP/UDP, exact port, LAN
 and target address are the only required fields; optional Labels retain metadata.
 Rules preserve existing masquerade and all unrelated settings and require
 `nat.write`. Validation checks interface roles/up state, target subnet/family,
@@ -231,6 +239,54 @@ editor remains disabled when committed NAT reads lack `destination_rewrite`;
 unsupported BGP endpoints report an actionable error without locking other pages.
 Native peering/interoperability, bootstrap routing and Linux DNAT forwarding
 require separate real-appliance acceptance; mocked UI tests do not prove forwarding.
+
+### Firewall Drop History And Rule Counters
+
+Diagnostics > **FIREWALL DROPS** (`/diagnostics/firewall-drops`) reads
+`GET /api/v1/firewall/deny-log` with the independent `firewall.logs.read`
+permission. It supports address, numeric IP protocol, chain and inclusive system-timezone
+time filters, manual refresh and exact exclusive-cursor pagination. Desktop section
+navigation starts collapsed and can be expanded from the hamburger button, as on
+Connections. The compact toolbar keeps system-timezone bounds behind **More filters**;
+protocols, ports, chains and drop reasons use colored chips. Tables stack on mobile.
+Records stay
+in server ID order even if the clock changes. Retention gaps, unhealthy capture,
+unsupported backends and permission errors are explicit. Overlapping daemon-session
+loss indicators are never summed into an exact lost-packet count. Historical
+interface names are not inferred from current indexes. The table has no Details
+expander and does not display compiled positions or historical ruleset hashes.
+Addresses and history remain in component memory only: no browser persistence,
+exports, analytics or capture-management writes.
+
+Packet/byte totals appear on host, interface, host-input, legacy forwarding,
+masquerade and DNAT rules using `GET /api/v1/statistics/firewall` (`state.read`).
+Exact decimal strings preserve uint128 totals; missing, failed and simulated
+measurements show dashes, not measured zero. Default policies, ICMP exceptions and
+generated bypasses are listed separately where applicable. Host, interface and
+host-input rule lists use one compact table in evaluation order: **System Rules**
+bypasses, **User Rules**, then **Default Rules**, separated by slim divider rows.
+Host tables also include all **Interface Overrides** between system bypasses
+and **Host Rules**, with an Ingress column identifying their applicability.
+Overrides retain their original ownership and exact, shared per-interface
+counters; they are read-only here and edited on INTERFACE RULES.
+System entries are read-only and use short, single-line names; tooltips retain
+loopback-ingress and connection-state match details without extra descriptions.
+System-rule definitions remain visible when counters
+are unavailable; their measurements still show dashes. Counts are attributed
+only when revision, pending applied transaction and firewall configuration match;
+unapplied or reordered firewall drafts hide them. NAT counters count initial
+mapping evaluations, not all established packets. Totals reset whenever the
+ruleset is replaced, including apply, rollback, repair and daemon restart.
+Visible rule pages use single-flight five-second polling with bounded failure
+backoff and abort on hide/unmount; samples are not persisted.
+
+Deploy a backend supporting the October 29 deny-log/counter handoffs. Native
+collection requires `nf_tables`, `nfnetlink_log` and `nft_log`, NFLOG group 100,
+and the backend's network-namespace permissions. Counter expressions are provided
+by `nf_tables`; no separate `nft_counter` module is required. Reads do not start capture.
+History is bounded (up to 4096 retained records), not a retention-time guarantee;
+empty history does not prove that no drops occurred. Mocked UI checks do not
+validate actual kernel collection.
 
 ### Process Restart, DNS Testing And Link Diagnostics
 
@@ -333,11 +389,25 @@ DNS routing, kernel capture prerequisites, daemon systemd recovery or native res
 effects. Deploy the matching backend and scoped permissions before operational use;
 unsupported endpoints and backend authorization/conflict errors remain visible.
 
+### Raw Configuration Editor
+
+**Config → Config editor** edits the desired configuration as JSON, including the
+shared draft. **Save** validates JSON, schema and configuration references, then
+stages changes without writing to the firewall. Use **SAVE → Commit & push** for
+the existing review, confirmation and rollback flow. Read-only software release
+metadata is excluded; unknown top-level configuration sections are preserved.
+The editor accepts up to 1 MiB of UTF-8 JSON.
+
+Polling does not overwrite typed edits. If the revision or shared configuration
+changes during editing, copy your edits, use **Reset editor**, and merge them into
+the latest configuration before saving. Reset discards only unstaged editor text,
+not the shared draft.
+
 ### Committed Configuration Download
 
 Revision history provides **Download committed configuration**, using one read of
 `GET /revisions/latest`, independently of live observation. It saves only the returned
-`config` as `netcontrol-config-r<revision>.json`, preserving the exact uint64 revision.
+`config` as `netcontrol-config-r<revision>.json`, preserving the exact date-version revision.
 Historical revision exports remain available. A pending candidate may be running
 instead of the committed configuration. The existing export confirmation covers
 sensitive topology and key references; this is not a full-device backup and excludes
@@ -381,8 +451,11 @@ or appliance acceptance.
 | `/blackhole` | The single deviceless drop target (`config.blackhole`: name and drop/unreachable/prohibit action) that static routes can use as their interface; routes only, needs `routes.write`, no drop counters |
 | `/vlans`, `/vlans/:name` | VLAN-only creation, behavior editing and deletion, parent/tag validation and dependency review |
 | `/routes` | Static routes and managed-interface/table/metric validation; legacy `/policy-rules` redirects here |
-| `/firewall` | Default forward policy and ordered accept/drop rules; existing host/ingress policies preserved read-only |
-| `/settings`, `/settings/general` | Host name, cosmetic domain name, time zone, global IPv6 policy, IPv4 ICMP exception, and one DHCP DNS override control for all currently configured interfaces; settings join the shared draft |
+| `/firewall` | PROTECTED HOSTS: searchable host navigation beside ordered outbound rules/default action; legacy forwarding editor when host policies are absent |
+| `/firewall/ingress` | INTERFACE RULES: first Firewall/NAT page, with an interface selector and ordered ingress override rules |
+| `/settings`, `/settings/general` | Host name, domain label, time zone, global IPv6 policy, IPv4 ICMP exception, and one DHCP DNS override control for all currently configured interfaces; settings join the shared draft |
+| `/settings/sando` | Sando endpoint, automatic host/threat-score sync toggle, and one-time host and approved-connection imports into the shared draft |
+| `/config/upgrade` | Current version, update availability, Check for upgrade and last checked; old `/settings/upgrade` links redirect here |
 | `/settings/mqtt-streaming` | MQTT STREAMING (old `/settings/home-assistant` redirects here): MQTT broker, source interface, publish interval and write-only password replacement; shared draft and confirmed publisher status |
 | `/connections` | Live conntrack snapshots, filters/paging, exact nullable counters and explicitly confirmed state deletion |
 | `/nat` | Ordered IPv4/IPv6 masquerading with family-correct egress |
@@ -394,7 +467,7 @@ or appliance acceptance.
 | `/services/remote-dns` | Inline Add DNS server, edit and delete actions stage the server list to `dns[interface].servers` for every current LAN/WAN interface; existing per-interface servers are combined into one list. Preserves domains, DHCP settings and unassigned interfaces. Not a DNS server for LAN clients. Review through SAVE and Commit & push; future interfaces require staging again. |
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
-| `/services/maintenance` | Explicit all-managed-services repair and signed self-upgrade with version/repository confirmation |
+| `/services/maintenance` | Explicit all-managed-services repair and a link to Config / Upgrade |
 | `/diagnostics`, `/diagnostics/traffic` | REAL TIME TRAFFIC: live bytes/second and packets/second ApexCharts, with one combined inbound + outbound line per interface |
 | `/diagnostics/process-health` | Read-only daemon/component health, recovery states, collection freshness and active alerts |
 | `/config/changes` | Staged changes, unified diff, Commit & push |
@@ -425,12 +498,12 @@ shows only that interface's combined line, using the same color in both graphs.
 Missing or failed counters and counter resets leave gaps, not fabricated zeroes;
 the API's per-request `started_at` is a collection timestamp, not a counter-reset
 identifier. Simulated samples are not shown as measured traffic. Leaving the page stops its
-traffic polling and discards its chart history. Chart times are UTC.
+traffic polling and discards its chart history. Chart times use the saved system timezone.
 
 On Overview, click a system metric name to open its inline live ApexChart
 (CPU, memory, swap, load, temperature or fan); uptime and filesystem remain
 plain text. Charts retain the latest 120 host-health samples while the widget
-is mounted and use UTC timestamps. Click the metric again or Close live view
+is mounted and use system-timezone timestamps. Click the metric again or Close live view
 to collapse the chart. The Interface counters heading opens Real Time Traffic;
 an interface name opens it with that interface selected. These links retain
 the surrounding text styling.
@@ -439,7 +512,7 @@ Diagnostics also includes Process health, using the existing authenticated
 `/platform/status` cache and shared three-second polling. It shows aggregate,
 daemon and component states, recovery, collection times and active alerts.
 Stale observations are marked unknown rather than healthy; native collection
-failures and retained alerts remain visible. Health timestamps use UTC seconds.
+failures and retained alerts remain visible. Health timestamps use system-timezone seconds.
 This is local process health, not verification of remote delivery or forwarding.
 Viewing the page does not modify configuration, disturb drafts or restart workers.
 
@@ -453,7 +526,7 @@ details and Disconnect. There is no profile/person button. Interfaces
 contains Physical interfaces, Loopbacks and VLANs. Routing contains Static Routes
 Gateway monitors and BGP. The Modan モダン
 brand links to Overview; there is no separate Overview navigation button. Firewall
-contains forwarding, Host input, Connections, NAT and DNAT; VPN contains WireGuard. The existing **Config rN**
+contains forwarding, Firewall destined, Connections, NAT and DNAT; VPN contains WireGuard. The existing **Config rN**
 revision box opens `/config`; there is no separate Config navigation button.
 Each section exposes its own routed page tabs: a left rail on desktop and a
 horizontal scrollable strip below 1280px when a section has multiple pages. `/networking` (Interfaces), `/routing`, `/vpn`, `/services`, and
@@ -489,9 +562,13 @@ not write to the backend. Rule order and settings not changed in the editor are
 preserved. The editor omits Labels (display name and description), retaining any
 existing saved labels. Cancel or switching rows discards the current unstaged input.
 
-Human-facing timestamps use `yyyy-mm-dd hh:mm:ss` in UTC, matching the supplied
-containers' default timezone, not the browser's timezone. Table headings, detail
-labels and tooltips identify UTC. Fractional seconds are omitted for display only;
+Human-facing timestamps use `yyyy-mm-dd hh:mm:ss` in the saved General settings
+**Time zone** (`system.timezone`), not the browser's timezone. UTC is used when
+no timezone is configured; unsaved drafts do not affect displayed times.
+Table headings, detail labels, chart axes and tooltips identify that timezone
+and update when the saved setting changes. Firewall-drop time filters use the
+same timezone; nonexistent or ambiguous clock-change times produce inline errors.
+Fractional seconds are omitted for display only;
 API/storage timestamps, machine-readable HTML `datetime` attributes, exports and
 deadline calculations retain their original precision and formats. DHCP lease
 acquisition timestamps are converted from Unix seconds for display.
@@ -500,12 +577,14 @@ Each setting has one owning editor. Physical interfaces shows discovered non-loo
 rows and **Active Addresses** from `GET /api/v1/interfaces/discovered` (`state.read`).
 Managed configuration is joined by technical name for labels, roles and settings.
 General settings includes an optional **Domain name** beside **Host name**, stored
-as `system.domain` with the existing `system.write` permission. This is a cosmetic
-label only, not a host-domain or DNS search-domain setting. Use lowercase labels
+as `system.domain` with the existing `system.write` permission. This is a
+display/reporting label, not an OS host-domain or DNS search-domain setting. Use lowercase labels
 with no trailing dot (up to 253 characters, including the host name and separating
 dot when both are set). Clear the field to remove it. Host name and domain remain
-configuration controls in General settings; the navigation bar shows CONFIG
-status without a hostname/domain line.
+configuration controls in General settings; the navigation bar shows only
+`R<revision>` without a CONFIG prefix or hostname/domain line. The revision label stays unchanged
+when edits are pending, pulsing from orange to bright yellow over four seconds.
+Reduced-motion preferences disable the pulse while keeping the orange highlight.
 General settings owns the single **Ignore DHCP-provided DNS servers** control.
 Changing it and saving writes `dns[interface].override_dhcp_dns` for every currently
 configured interface, including down and unassigned links, without changing servers
@@ -546,6 +625,7 @@ configuration and available adopted parents, not VLANs, loopbacks or tunnels.
 The IPv4 cell accepts comma-separated static addresses with prefixes; DHCP clients
 are supported only on physical Ethernet interfaces.
 New VLANs inherit their parent's role and default to admin down and no addresses.
+Each VLAN's saved role appears in smaller, muted text beneath its name.
 Existing VLAN settings not shown in the row are preserved; committed parent/ID
 values remain immutable and renames require dependency acknowledgement. VLANs
 are excluded from the Physical Interfaces inventory, including unmanaged VLANs.
@@ -558,8 +638,9 @@ copied into saved static settings. There is no separate Active Addresses column.
 Hardware identity and ownership remain read-only.
 Stage changes saves the row into the shared draft; hidden DNS and relay settings are preserved. Interfaces
 use optional `metadata.display_name` for friendly labels. Interface dropdowns show
-`Display name (interface name)`, for example `WAN (eno1)`, or just the interface name
-when no display name is set. Selections still save the interface name.
+`Interface name (display name)`, for example `eno1 (LAN)`, or just the interface name
+when no display name is set. This includes INTERFACE RULES, PROTECTED HOSTS, Firewall destined,
+NAT and DNAT selectors. Selections still save the interface name.
 Description is not shown in the
 interface table or editor; existing `metadata.description` values are preserved when editing.
 Existing virtual-interface
@@ -576,14 +657,212 @@ Refreshing does not rebase a draft onto a newer committed revision.
 Input and forwarding default policies remain separate because they control
 different traffic paths.
 
+### Advanced settings
+
+Settings > ADVANCED provides one compact solid red **Delete all firewall hosts and
+forwarding rules** button, matching the backend's combined
+`DELETE /api/v1/firewall/hosts-and-rules` operation. Its Vue dialog previews the
+removed and preserved scope, warns about connectivity and broader access, and
+requires explicit acknowledgement. NAT, management input, global defaults/ICMP,
+interface-policy entries and Sando data are preserved; connections are not flushed.
+Local drafts/unstaged input, active or uncertain transactions, drift, restarts,
+upgrades and unavailable/incompatible state block deletion. Fresh state and
+transaction reads must still match the reviewed calendar-version revision.
+The API requires `transactions.write` and `firewall.write`. Deletion is applied
+provisionally with a 120-second rollback window, then opens the normal commit
+detail page for explicit confirmation or rollback. Nothing is auto-confirmed,
+uncertain writes are never automatically retried, and rollback does not stage a
+new deletion draft. Configured hosts are distinct from preserved Sando discovery
+metadata and are not automatically reimported.
+
+### Sando synchronization and one-time imports
+
+Settings > SANDO IMPORT accepts an HTTP(S) server URL or `/api` base URL. The browser
+calls Sando directly, with no registry/firewall credentials. Sando must be reachable
+from the browser, allow its origin through CORS, and use HTTPS when required by
+the frontend's HTTPS origin. The base URL is staged as `config.sando.api_url`
+through the normal SAVE flow (`sando.write`). Complete `/api/localhosts` device
+records remain only in page memory, never in the appliance configuration.
+**Automatic host and threat-score sync** stages `config.sando.sync_enabled`
+(default false) through SAVE, independently of manual imports. Enabling requires
+a saved endpoint. Only committed settings drive the daemon's hourly metadata
+worker; pending or rolled-back changes do not start or stop it. Disabling cancels
+automatic acquisition without removing imported hosts or rules. Automatic
+Protected Hosts metadata lookups also follow the committed flag and source.
+Sync never automatically changes firewall hosts, rules or verdicts.
+**Import hosts** and **Import rules** remain available when sync is disabled.
+Each successful or partial import stages a separate host/rule report with its
+source URL, counts and UTC timestamp alongside its firewall changes
+(`firewall.write`). While automatic sync is enabled, a small chip beside its toggle
+shows the latest host/rule import timestamp in the saved system timezone
+(`yyyy-mm-dd hh:mm:ss`, falling back to UTC when unset), or
+"No imports yet" when neither report exists. Full reports remain in configuration
+without a historical report section. The page shows endpoint/import controls, immediate staging feedback,
+and actionable errors or skipped entries, without historical report sections.
+Failed/canceled attempts do not replace saved reports. Repeated attempts before confirmation
+share one pending operation count; a rule replacement reports its latest
+replacement rather than accumulating removed rules. Changing/clearing the URL retains report provenance.
+Older backends without saved Sando support show an inline upgrade requirement.
+
+**Import hosts** adds IP-based hosts to `firewall.policies.hosts`. Choose the
+outbound default for new hosts explicitly; the safe initial selection is drop.
+Existing names, addresses, defaults, rules,
+ingress overrides, NAT and unrelated draft edits remain unchanged. Identical
+hosts/rules are skipped; conflicting ownership and unsupported entries are
+reported inline. IPv4 and optional IPv6 addresses are retained together; invalid
+or globally disabled IPv6 prevents importing that device rather than silently
+dropping its address.
+
+**Import rules** also fetches `/api/ignorelist/ip/<encoded-IP>` for each inventory
+host and imports missing hosts. Connection IDs (`ignorelist_id`) are optional;
+ID-less candidates are deduplicated by source, destination, protocol and port.
+Skipped ID-less candidates are identified by those traffic fields.
+Rules retain their explicit source-to-destination direction even when returned by
+the destination's lookup. A valid rule source missing from inventory is added as
+an IP-named host with the selected new-host default; existing source hosts retain
+their names, defaults and non-Sando rules. Invalid rules do not create fallback hosts, and
+failed inventory-device validation is not bypassed. These are Sando detection exceptions,
+not proof that traffic should be authorized. Exact source IPs, destination IPs or
+explicit `*` destinations, protocol 6 (TCP) or 17 (UDP), and destination ports
+1..65535 or explicit `*` ports are translated into outbound accept candidates.
+Protocol 1 (ICMP) and 58 (ICMPv6) candidates are also supported when their
+addresses match the protocol family and their destination port is explicit `*`.
+ICMPv6 requires global IPv6 enabled.
+Destination wildcards become `0.0.0.0/0` or `::/0` according to the source IP,
+so they do not enable the other address family on a dual-stack host. Port
+wildcards omit the port constraint while retaining the selected protocol.
+Missing or malformed ports, wildcard sources, CIDRs and other protocols are
+reported rather than widened. Earlier manual drops/catch-alls and ingress
+overrides can shadow imported rules.
+
+Rule origins (`manual`, `import`, `system`, `inherited`) and nullable
+`import_source` are preserved across forwarding, host/interface/input and NAT
+rules, unrelated edits, exports, revisions and transactions. Imported rules require
+a provider ID such as `sando`, never a URL; other origins have no provider.
+The rule tables show compact Origin labels; generated counter rows are System.
+Unlabeled legacy rules display as Manual without guessing ownership from host
+IDs or past import reports. New editor-created rules are manual/null. Labels are
+descriptive, not permissions or verified upstream identity; interface rules keep
+their saved ownership rather than persisting inherited duplicates on hosts.
+Ownership-only edits do not invalidate otherwise matching packet/byte totals.
+
+Rule imports automatically stage their results in the shared draft, with no
+separate replacement review or staging acknowledgement. Review and apply the
+changes through **SAVE**. Only host-forwarding rules with both `origin: "import"` and
+`import_source: "sando"` are replaced, including old targets absent from the new
+source. Manual rules retain their relative order first, other retained rules keep
+their relative order, and new Sando rules follow in source order. Host inventory,
+defaults, interface policy, input and NAT are not deleted or recreated.
+Successful empty or partial replacements are staged automatically, with skipped
+entries reported inline; all-invalid sources and failed acquisition retain prior
+rules and reports. Imports merge into the latest shared draft after acquisition.
+Nothing is applied until the normal **SAVE** flow completes.
+
+Deploy the October 30 label-capable backend before using ownership-bearing writes.
+SAVE verifies that the accepted candidate retains requested labels, matching host
+groups by host ID and interface groups by interface name rather than their array
+positions. Backend normalization may reorder these groups; rule order within each
+group remains significant. If an older
+backend prunes them, the operation is reported as an incompatible, uncertain write
+with its provisional transaction retained for review/rollback; it is never
+automatically retried or confirmed. Historical drop records do not acquire current
+rule labels.
+
+Legacy forwarding rules cannot coexist with host policies; imports never delete
+or translate legacy rules. Remove them deliberately in the shared draft first.
+Entering host/interface policy mode requires an inline acknowledgement because it
+introduces stateful return traffic. Review the full difference in **SAVE** before
+applying. Backend host-policy limits, address uniqueness, references, family
+compatibility, port limits, expansion limits and metadata size are validated.
+Nothing is applied automatically.
+
 Configurable resources support optional shared metadata. Display names are empty or
 up to 128 Unicode scalar values, with no controls or whitespace-only names;
 descriptions allow up to 2048 scalars, including newline/tab. Empty annotations
 are omitted. Labels never replace technical names, keys or selectors. Editors,
 imports, exports, transaction review and revision restore preserve annotations;
-existing read-only host/ingress policy summaries remain read-only. Annotation edits
+host identities can be added manually or through additive Sando imports. PROTECTED HOSTS
+collapses the Firewall/NAT page menu on desktop (reopen it with the menu button)
+and shows a searchable, alphabetically sorted uppercase host list beside the
+selected host's ordered outbound rules and default action. The blue **+ ADD HOST**
+button below the host list opens an inline IP-address row. Choose the host's default
+action (initially **drop**) and click **Add** to stage it in the shared draft, or
+**Cancel** to leave configuration unchanged. New hosts use their IP address as their
+name, start without rules, and are selected automatically. Canonical unicast IPv4
+and enabled IPv6 addresses are supported; invalid or duplicate addresses show inline
+errors. Use **SAVE** to review and apply the staged host.
+Rule actions use labeled green accept/red drop chips with matching row accents; protocols, ports and egress
+interfaces use compact chips. Wildcards remain muted text, and the final default
+rule is visually separated and its action can be edited. PROTECTED HOSTS, INTERFACE
+RULES, and host-input rules stay in compact table rows on desktop, with horizontal
+scrolling inside the table when space is limited; only phone-sized viewports use
+stacked cards. They support inline add/edit/delete and drag-to-reorder.
+Drag the handle to move a rule using a mouse or touch screen; there are no up/down
+reordering buttons. Legacy forwarding, masquerade and DNAT tables also use drag
+handles. Ordering is scoped to the selected host or ingress
+interface; the host default stays last. Changes stage into the shared draft for
+the existing **SAVE** review/apply flow, never apply automatically, and show
+validation errors inline. Host-input policy settings also expand inline.
+Desktop rule rows stay single-line with bounded horizontal scrolling; long values
+wrap in mobile cards. Browsing alone never
+changes rule order or stages configuration. Host rows match
+[Sando's HostList](https://github.com/mayberryjp/sando-website/blob/a6364b6ff7fde4e4d353b2604ae8e84b327f9c08/src/components/dashboard/HostList.vue):
+single-line uppercase descriptions, 8px/16px row padding, a 40px icon column with
+the original 24px device SVG, and a blue selected-row background/3px left border.
+Device icons use Sando's threat-score colors: green for 0, yellow for 1–24,
+orange for 25–50, red for 51–75, and crimson above 75. Missing or invalid scores
+use neutral gray (`#b1b8c0`); unknown icons use the bundled DEFAULT artwork. The scrolling host list
+uses Sando's thin, transparent-track scrollbar with a 10%-white thumb, 6px WebKit
+dimensions and 3px thumb radius. On desktop, the host panel fills the available
+page height, including for short or filtered lists, and resizes with the window.
+The host list and rules scroll independently. The panel scrolls as a whole with
+a sticky search field, whose outline uses Sando's 0.3 opacity.
+The row label uses Sando `local_description`; full names and IP addresses remain
+in its accessible label/tooltip and the selected-host heading. Configured display names/names are used
+when no description is available; inventory errors appear inline without hiding
+the configured rules. Search matches names, addresses and device types. On small
+screens the bounded host list sits above the rules.
+The adapted host-list styling and bundled SVG artwork are from Sando revision
+`a6364b6ff7fde4e4d353b2604ae8e84b327f9c08`, under its
+[MIT license](src/assets/deviceicons/LICENSE). No Sando risk headers or alert bars
+are added to the firewall rule navigation.
+Destination-host references display host names;
+ingress-interface overrides are shown before source-host rules in the same table,
+in configuration order and labeled by ingress interface. They remain independently
+editable on INTERFACE RULES, the first Firewall/NAT page. Its interface dropdown selects configured ingress policies and
+the table shows their ordered rules; empty policies show an explicit empty state.
+Firewall destined uses the same interface selector and compact rule table, with
+inline Add/Edit/Delete and drag ordering. **Edit input policy** changes only
+filtering and its global default; it does not contain a separate nested rule editor
+or replace interface rules. All edits stage through the existing SAVE review.
+Neither selector stages changes. Selection
+does not stage changes, and shared draft/pending rules take precedence over
+committed rules. The legacy forwarding editor remains available when host
+policies are absent. Annotation edits
 use the resource's existing transaction permissions. These fields require the
 backend's October 24 metadata contract.
+
+Forwarding uses first-matching-verdict precedence, not cumulative allow layers:
+optional IPv4 ICMP acceptance, established/related acceptance, ingress-interface
+overrides, then the source host's ordered rules and default. An interface allow
+overrides a host deny, and an interface deny overrides a host allow; an interface
+catch-all prevents host evaluation for traffic on that ingress interface.
+The destination host's outbound policy is not evaluated. The table labels the
+global default **Global**; it is for unknown source hosts, not another check after
+a known host's default. Existing connections may survive new blocks until
+connection state expires or is explicitly deleted.
+
+Host, interface, Firewall destined and legacy forwarding filters support **Any**,
+**TCP**, **UDP**, **ICMP** and **ICMPv6**. Any covers every IP protocol. ICMP
+matches all IPv4 types/codes; ICMPv6 matches all IPv6 types/codes and requires
+global IPv6 enabled. Explicit networks and host address pairs must match the
+protocol family; dual-stack hosts expand only compatible pairs.
+Destination ports are TCP/UDP-only: at most 32 unique individual ports in
+1..65535, without ranges. Switching to Any/ICMP/ICMPv6 clears and disables the
+port control. Legacy rules preserve the same protocol/port fields and order,
+with a maximum of 4096 port-expanded entries. Editors show inline guidance that
+the global IPv4 ICMP exception precedes ICMP drops and that blocking ICMPv6 can
+break neighbor discovery and IPv6 error reporting. NAT remains TCP/UDP-only.
 
 Committed, administratively up DHCP interfaces have a **Reload DHCP** action in
 their table row. It calls `POST /interfaces/{name}/dhcp/retry` with no body and
@@ -690,6 +969,31 @@ blocks. Missing, partial and simulated readings remain explicit. Verification
 uses synthetic data; physical hardware, broker TLS and Home Assistant ingestion
 require appliance acceptance.
 
+### WireGuard DNS endpoints
+
+WireGuard endpoints accept optional canonical `IPv4:port`,
+`[IPv6]:port` or lowercase DNS `hostname:port` endpoints, for example
+`vpn.example.test:51820`. Ports are mandatory decimal 1..65535 without leading
+zeroes. DNS labels allow letters, digits and internal hyphens, at most 63 bytes
+per label and 253 bytes overall; URLs, trailing dots, underscores and zones are
+not accepted. Empty/omitted endpoints retain roaming behavior.
+
+Deploy the updated backend before using DNS endpoints. Resolution happens in
+the backend's managed namespace, never the browser. Underlay DNS must work
+independently of the tunnel. The backend refreshes immediately and then after
+each 60-second wait; IPv6 disabled permits only IPv4 answers/resolvers. Initial
+uncached resolution must succeed. Later failures retain the persisted last-good
+selection and report errors; disabled peers are not resolved.
+
+The peer table retains the configured hostname and shows DNS errors inline.
+Existing peer details distinguish the cached DNS selection, actual roaming
+endpoint and last DNS success (UTC). Worker errors remain separate from
+handshake/traffic; absent native measurements are Unavailable, not success.
+Existing state/runtime reads supply these details without browser DNS, new
+refresh controls, configuration flags or interval settings. Drafts, full-package
+SAVE, exports, history and restores retain the configured hostname. Endpoint
+refresh does not change revisions, keys, keepalive or static/BGP AllowedIPs.
+
 ### WireGuard Allowed IP routes
 
 Saving a WireGuard peer or tunnel stages a static route for every Allowed IP
@@ -743,14 +1047,52 @@ deleting an entry does not delete the Azure record, and rollback cannot undo DNS
 writes already made. Deployment needs an Azure DNS Zone Contributor service
 principal; secrets are stored unencrypted on the appliance.
 
-### Signed self-upgrade
+### Upgrade checks
 
-Service maintenance reads `GET /api/v1/system/upgrade` with `state.read` and submits
-only `{"version":"1.2.3"}` via POST with `system.upgrade`. Canonical SemVer is limited
-to 80 bytes, permits prereleases and excludes leading `v` and build metadata.
-Confirmation identifies the exact version, configured repository and management/service
-interruption risk. Disabled setup requires operator-managed repository/signing trust and
-credentials; the browser never configures trust, URLs, tokens, paths or force flags.
+Config / Upgrade (`/config/upgrade`) reads running software and release-check
+results from `GET /api/v1/state` at `desired.software`. The page shows only the
+current version, whether a new version is available (including its version),
+a **Check for upgrade** button, and the last-check time in the saved system timezone. Errors stay inline;
+there are no installation controls, repository/job details or status refresh controls.
+It distinguishes up-to-date (including older published releases), pending,
+disabled, failed and unavailable checks. From backend build `2026.10.30.4`,
+release checking defaults to `mayberryjp/firewall_backend`, even when installation
+support is disabled or unconfigured. `--disable-release-checks` is the explicit
+opt-out; the frontend uses the backend's `software.repository` (null when checks
+are disabled), never installation's `enabled`, to gate checking. Older backends'
+reported settings remain authoritative; the browser does not invent a repository.
+Appliances check GitHub's latest stable release at startup and every 24 hours;
+normal state polling observes results. **Check for upgrade** sends an entirely empty
+`POST /api/v1/system/upgrade/check` (`system.upgrade`) and waits for a changed
+saved `last_checked_at` (`state.read`), not merely the 202 queued acknowledgement.
+A 409 joins an existing check without resubmitting. Prior results remain labeled
+as previous while waiting; an unchanged result after 60 seconds is uncertain and
+requires an explicit retry. Permissions, unavailable workers and older unsupported
+backends are reported inline. Checking does not allocate a revision, change the
+draft, alter the daily schedule or install software. Discovery does not validate
+installation assets or establish installation success.
+
+The API client retains Ubuntu self-upgrade support for backend integrations, but this
+page does not submit installations. Canonical versions
+use a real Gregorian date and iteration: `yyyy.mm.dd.iteration`, year 0001..9999,
+iteration 1..4294967295, with no leading `v`, prerelease or build suffix.
+Versions compare numeric components (`.10` is newer than `.9`). Installation
+requires a version newer than both the running and last-successful versions.
+Ubuntu self-upgrades trust the configured GitHub repository over HTTPS, without
+independent publisher signatures. Same-source SHA-256 verifies consistency, not
+publisher identity. Separate signed `.ncpkg` packages are unchanged.
+Standard Ubuntu install/source-upgrade scripts bootstrap private
+`/etc/netcontrol/updates.json` and the managed `NETCONTROL_UPGRADE_CONFIG`
+environment. Valid custom repository/token settings are preserved; private
+repositories still require an operator-provisioned private token file. Retired
+`public_key` settings must be removed explicitly before deployment, after active
+workers are finished/recovered with their matching binary.
+Installation requires an explicitly published stable `v<version>` release with
+`netcontrold-ubuntu-amd64` and `netcontrol-ubuntu-amd64.json` assets, not a `.sig`.
+Build-only does not configure services, and CI artifacts are not published
+releases. The browser never supplies repository, token, signing, force or
+unsigned-request overrides. See the backend
+[upgrade handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-29.md#2026-10-29-05-automatic-github-https-upgrades).
 
 The shared store retains accepted job identity across transient failures and polls
 without overlap, with backoff. Only `succeeded`, `failed` and `rolled_back` are terminal;
@@ -762,6 +1104,27 @@ Drafts remain intact, and committed state/revision is refreshed before later sub
 Last successful version is historical, not a claim about the running version. There
 are no browser cancel, force, reset or reboot actions. No real upgrade was executed
 as part of frontend verification.
+
+Configuration revisions independently use the same canonical date-version string
+format. Requests, responses, history cursors, restore URLs and exports preserve
+those strings; transaction result links use the server's nullable
+`committed_revision`, never base plus one. Software metadata is daemon-managed:
+it remains visible in committed exports but is omitted from imports into editable
+drafts and transaction submissions. Daily check changes do not stale a draft or
+appear as configuration changes.
+
+The frontend supports deployed numeric-revision backends as well as the October 29
+date-version contract. Legacy uint64 revisions remain exact internal decimal strings
+and are sent back as numeric JSON tokens; date revisions stay quoted strings.
+Older transaction responses may omit `committed_revision`; the UI does not invent a
+result-revision link. Backends without `desired.software` remain usable for
+configuration but cannot provide the new software/release-check display.
+
+The updated backend uses `netcontrol-rust-state-v2` journals. Coordinate its
+deployment separately: that backend refuses numeric v1 journals unchanged.
+Never delete/reset them or automatically
+convert existing appliance data. Existing appliances require a separately reviewed
+operator deployment plan and private backup.
 
 ### Breaking source-policy removal
 
@@ -803,7 +1166,7 @@ copying a leased address into static configuration; IPv6 still needs an address.
   popup or connectivity attestation. Rollback is explicit recovery. Only
   server-verified outcomes establish commit/rollback.
 - Deadlines use absolute server timestamps, with approximate browser-clock
-  countdowns. Absolute times are displayed in container-default UTC. At expiry, confirmation is disabled
+  countdowns. Absolute times are displayed in the saved system timezone. At expiry, confirmation is disabled
   while the application awaits server outcome. There is no automatic confirm.
 - Timeouts/disconnects/operational write failures freeze the outcome as unknown.
   Known IDs are read directly; new transaction records are correlation hints,
@@ -818,7 +1181,7 @@ copying a leased address into static configuration; IPv6 still needs an address.
 - Reconcile services is a distinct bodyless, explicitly confirmed action using
   stored configuration, not the draft. It creates no revision, does not replay
   networking, and may lose flow caches or briefly disrupt DHCP relay on other interfaces.
-- Restore uses the historical restore endpoint (including revision 0), never
+- Restore uses the historical date-revision restore endpoint, never
   ordinary package submission. It requires no local draft, shows full impact,
   and follows the same provisional lifecycle.
 
@@ -903,9 +1266,9 @@ fields are rejected as incompatible rather than silently stripped.
   exceptions rather than blocking ICMP. Backend startup automatically enables
   older saved configurations, even those with previous ICMP drops.
   The toggle works in both legacy and host/interface policy modes. Existing
-  `firewall.policies` are decoded, compared and preserved read-only; no implicit
-  exception rows or host-policy editor are synthesized. Import cannot silently
-  replace these preserved policies; historical restore remains server-authorized.
+  `firewall.policies` are decoded, compared and preserved; no implicit
+  exception rows are synthesized. Sando imports add hosts/rules without replacing
+  existing entries; historical restore remains server-authorized.
 - Each interface has `dhcp_relay: { enabled, servers }`, default disabled/empty.
   Disabled server lists remain preserved and validated. Entries must be distinct
   canonical unicast IPv4 addresses, with no names, ports, prefixes, IPv6,
@@ -1015,7 +1378,7 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   resolved-path details. Narrow screens wrap the inline statistics within the
   same monitor record.
 - A compact, 200px-high ApexCharts Mean RTT graph plots one line per
-  gateway monitor in milliseconds, with UTC timestamps. It retains the latest
+  gateway monitor in milliseconds, with system-timezone timestamps. It retains the latest
   120 samples per monitor while the page is open, ignores duplicate cached
   readings, and shows unavailable measurements as gaps rather than zero latency.
   Simulated measurements are not plotted.
@@ -1049,7 +1412,7 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   are Unknown, not current reachability or remote Down. Per-row measurement
   timestamps are distinct from envelope retrieval timestamps.
 - Fractional loss/RTT values are JSON numbers; null is unavailable, genuine zero
-  is displayed as zero. Revisions remain exact uint64 numeric tokens and kernel
+  is displayed as zero. Revisions remain exact date-version JSON strings and kernel
   counters remain exact quoted decimal strings. Loss excludes pending probes.
   RTT standard deviation is population deviation; p50/p95 are nearest-rank.
   **RTT variation** is mean absolute RTT difference between adjacent transmitted
@@ -1103,13 +1466,26 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   when disabled, and IPv6 destinations require global IPv6 enabled. Existing
   metadata is preserved without adding label controls. Configuration uses the
   existing SAVE review, transaction confirmation and rollback flow.
-- Daily UDP reports use the appliance hostname and vnStat-compatible oneline
-  format in the host's local 23:59 minute. UDP has no delivery acknowledgement;
+- Daily UDP reports use committed `system.hostname` and `system.domain` as
+  `hostname.domain`, or hostname alone when the domain is empty, with vnStat-compatible
+  oneline format in the host's local 23:59 minute. Pending or rolled-back identity
+  changes do not affect reports. Coordinate collector identity/history queries
+  when changing these values; the qualified name can create a different collector
+  identity without deleting existing history. UDP has no delivery acknowledgement;
   reporting errors are local, non-blocking warnings. No cron, external vnStat
   binary or automatic firewall permit is installed. Restart targets `vnstat`,
   not the retired host/managed names. Never sum overlapping physical/VLAN/veth/
   loopback counters as device-wide traffic. Coordinate frontend/backend rollout
   for handoff `2026-10-28-10`; real collector interoperability remains unverified.
+- The vnStat page reads `/statistics/vnstat` independently and shows Last report,
+  Sent and Failed columns in the collector's existing table row, with any
+  non-blocking reporting error inline. Tooltips explain attempt and UDP-delivery
+  semantics without a separate reporting panel. `last_report_date` is an appliance-local
+  `YYYY-MM-DD` calendar date, not a timestamp; it is displayed without inventing
+  a time or converting it to UTC. Failed sends can advance it. Neither this date
+  nor `sent_datagrams` proves delivery; there is no last-successful-upload
+  timestamp or collector acknowledgment. Unavailable statistics do not block
+  collector editing and are never replaced with fabricated zero counts.
 - Status uses the independently polled `/runtime` dataset. Missing rows are
   Unknown; disabled/simulated/error states stay distinct, including top-level
   and per-row failures in HTTP 200. Simulation changes no clock and creates no
@@ -1139,8 +1515,10 @@ native readiness or native reboot recovery. Deployment labels stay explicit.
 - Strict Zod runtime decoding rejects missing/incompatible desired configuration.
   Documented nil collections normalize to empty arrays; missing sections do not.
   Unknown observed kinds remain read-only diagnostic data.
-- `lossless-json` parses uint64 revisions/cursors/provenance into validated decimal
-  strings and emits them as exact unquoted numeric tokens on requests.
+- Revisions/cursors/provenance support canonical date-version JSON strings and
+  legacy uint64 numeric tokens. `lossless-json` preserves legacy precision as
+  internal decimal strings and serializes the original revision format on writes,
+  while continuing to guard other numeric values against precision loss.
 - Statistics counters/protocol values remain **quoted decimal strings**, including
   values above the JS safe-integer limit and gauges such as `Tcp.MaxConn = "-1"`.
   Missing counters/groups are unavailable, not zero.
@@ -1161,7 +1539,9 @@ Staged Changes shows the unified diff and **Commit & push**. There are no import
 draft export or refresh controls. Commit & push checks the latest firewall state
 before opening the push dialog; no write occurs until **Push changes** is confirmed.
 The dialog accepts a commit message and an automatic rollback deadline, then stays
-open to show push progress. **Confirm changes** in that same dialog keeps the changes
+open to show push progress, without showing pre-submit blockers while the request
+is in flight. An empty draft is a neutral no-changes state, not a push warning.
+**Confirm changes** in that same dialog keeps the changes
 and records the new revision, with no separate confirmation banner, popup or
 connectivity checkbox. Otherwise the firewall rolls back at the deadline. This is a combined commit/push
 workflow, not a separate local Git commit or an immediate permanent network change.
@@ -1179,16 +1559,19 @@ error, last-success and stale indicators. Automatic state/runtime refresh runs o
 Overview: state/runtime every 5 seconds, transaction discovery every 10 seconds,
 and interface/gateway statistics every 3 seconds. Active/uncertain transactions
 increase Overview state/discovery polling to 1 second after each read completes.
-Connections separately polls visible live snapshots every 5 seconds after each
-completed read, with bounded backoff. Other pages, including transaction details,
-do not poll for pending transactions, except the open push dialog: it reads only its
-own active commit every 2 seconds after each read completes, backing off to 30 seconds
-on failures. Reads pause while hidden and stop on close or final outcome. Reload the browser or use a page's refresh control to update
-them. Reads performed on entry and fresh-state checks required by explicit writes
+Advanced settings and transaction details also poll state/discovery at these
+intervals, so provisional deletions and server rollback outcomes remain visible;
+they do not poll runtime or operational measurements. Connections separately polls
+visible live snapshots every 5 seconds after each completed read, with bounded
+backoff. Other configuration pages remain manual even during pending transactions,
+except the open push dialog: it reads only its own active commit every 2 seconds
+after each read completes, backing off to 30 seconds on failures. Dialog reads pause
+while hidden and stop on close or final outcome. Reload the browser or use a page's
+refresh control to update manual pages. Reads performed on entry and fresh-state checks required by explicit writes
 remain enabled. Deadline countdowns do not make network requests.
 Overview polling pauses in hidden tabs and wakes on visibility/online events;
 Connections also pauses in hidden tabs and refreshes on visibility when live;
-these events do not trigger background state/runtime reads on other pages. Overview transport failures
+these events do not trigger background state/runtime reads on manual pages. Overview transport failures
 back off 1/2/5/10 seconds.
 
 Reads time out after 80 seconds, writes after 90. Reads delayed over 3 seconds are
@@ -1226,7 +1609,7 @@ text redacts the registry session token.
 
 ### Overview layout
 
-On Overview, select the pencil button (**Customize layout**) at the top right to drag boxes within or between the two
+On Overview, select the pencil button (**Customize layout**) below the boxes at the bottom right to open the layout editor and drag boxes within or between the two
 columns. Move buttons provide keyboard and touch alternatives. Hide unwanted
 boxes, use **Show** to restore them, or **Reset layout** to restore the default
 arrangement. On narrow screens the left column appears above the right column.
@@ -1343,7 +1726,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Vitest covers transport/endpoint contracts, uint64 and quoted-statistics precision,
+Vitest covers transport/endpoint contracts, date revisions and quoted-statistics precision,
 schema/import behavior, IP parsing, numeric/UTF-8 bounds, shared drafts,
 dependencies, fresh-state gating, unknown outcomes, explicit lifecycle actions,
 recovery without observation, and restore/reconcile semantics. Component tests

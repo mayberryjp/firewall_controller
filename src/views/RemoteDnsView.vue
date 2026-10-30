@@ -82,7 +82,7 @@ function remove(address: string): void {
       {{ error }}
     </v-alert>
     <v-alert
-      v-if="!interfaces.length"
+      v-if="selected && !interfaces.length"
       type="info"
       variant="tonal"
       class="mb-4"

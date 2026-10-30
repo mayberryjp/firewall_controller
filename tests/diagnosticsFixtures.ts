@@ -3,7 +3,7 @@ import type { DNSLookup } from "@/services/operations";
 
 export function dnsResponse(requestedInterface: string | null = null): DNSLookup {
   const answer = { server: "192.0.2.53", transport: "udp" as const, rcode: 0, addresses: ["192.0.2.7"], rtt_ms: 12.5, status: "answered" as const, error: null };
-  return { ...answer, interface: requestedInterface, hostname: "example.test", record_type: "A", elapsed_ms: 13.2, attempts: [answer], scope: "host:opaque", revision: "9007199254740993" };
+  return { ...answer, interface: requestedInterface, hostname: "example.test", record_type: "A", elapsed_ms: 13.2, attempts: [answer], scope: "host:opaque", revision: "2026.10.29.4294967294" };
 }
 export function linkDiagnostics(): LinkDiagnostics {
   return {

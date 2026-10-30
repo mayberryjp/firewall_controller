@@ -118,12 +118,12 @@ describe("lossless boundary and import", () => {
       expect(configSchema.safeParse({ ...candidate, firewall: { ...candidate.firewall, input } }).success).toBe(false);
     }
   });
-  it.each(["0", "9007199254740993", "18446744073709551615"])("round trips revision %s exactly", revision => {
+  it.each(["0001.01.01.1", "2026.10.29.10", "9999.12.31.4294967295"])("round trips revision %s as a JSON string", revision => {
     const wire = encodeJson({ base_revision: revision, restored_from_revision: revision });
-    expect(wire).toBe(`{"base_revision":${revision},"restored_from_revision":${revision}}`);
+    expect(wire).toBe(`{"base_revision":"${revision}","restored_from_revision":"${revision}"}`);
     expect(decodeJson(wire)).toEqual({ base_revision: revision, restored_from_revision: revision });
   });
-  it.each(["-1", "18446744073709551616", "01", "1.5"])("rejects invalid uint64 %s", revision => {
+  it.each(["-1", "18446744073709551616", "01", "1.5", "2026.02.29.1", "2026.10.29.0", "2026.10.29.4294967296"])("rejects invalid revision %s", revision => {
     expect(revisionSchema.safeParse(revision).success).toBe(false);
   });
   it("keeps statistics decimals quoted, including gauges and > safe integers", () => {

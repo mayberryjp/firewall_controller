@@ -53,6 +53,13 @@ beforeEach(() => {
 });
 
 describe("mDNS / Discovery", () => {
+  it("colors service trash icons red", async () => {
+    const wrapper = mount(MDNSView, { global });
+    await setServices(wrapper, "_ipp._tcp", "_googlecast._tcp");
+    const buttons = wrapper.findAll('button[icon="mdi-delete"]');
+    expect(buttons).toHaveLength(2);
+    for (const button of buttons) expect(button.attributes("color")).toBe("error");
+  });
   it("offers and stages VLANs attached to LAN parents without requiring their own LAN role", async () => {
     const store = useControllerStore();
     store.state.data!.desired.interfaces.push({
@@ -103,7 +110,7 @@ describe("mDNS / Discovery", () => {
     expect(stage).toHaveBeenCalledTimes(1); expect(apply).not.toHaveBeenCalled();
     expect(store.draft!.mdns).toMatchObject({ enabled: true, metadata: desired.mdns!.metadata, reflection: { filters: ["_ipp._tcp.local.", "printer.local."] } });
     expect(store.draft!.ntp.servers).toEqual(["time.example.com"]);
-    expect(store.state.data!.desired).toEqual(desired); expect(store.editorDirty).toBe(false);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(desired); expect(store.editorDirty).toBe(false);
     expect(confirm).not.toHaveBeenCalled(); expect(alert).not.toHaveBeenCalled();
   });
   it("stages exact instances with service shorthand without stripping instance labels", async () => {

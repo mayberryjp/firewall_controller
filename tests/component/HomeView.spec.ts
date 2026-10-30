@@ -63,6 +63,7 @@ describe("connection and editor contracts", () => {
 
 describe("compact overview dashboard", () => {
   beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
     const store = useControllerStore();
     vi.spyOn(registry, "getOverviewLayout").mockResolvedValue(defaultOverviewLayout());
     vi.spyOn(registry, "saveOverviewLayout").mockImplementation(async layout => layout);
@@ -98,9 +99,13 @@ describe("compact overview dashboard", () => {
       expect(customize.attributes("icon")).toBe("mdi-pencil-outline");
       expect(customize.attributes("title")).toBe("Customize layout");
       expect(customize.attributes("disabled")).toBe("false");
+      expect(wrapper.find(".overview-heading").exists()).toBe(false);
+      expect(wrapper.get(".overview-footer").element.contains(customize.element)).toBe(true);
       await customize.trigger("click");
       expect(button(wrapper, "Save layout").exists()).toBe(true);
       expect(button(wrapper, "Cancel").exists()).toBe(true);
+      expect(wrapper.find(".overview-footer").exists()).toBe(false);
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "start" });
     } finally { wrapper.unmount(); }
   });
   it("loads the registry layout and saves moved and hidden boxes without staging firewall changes", async () => {

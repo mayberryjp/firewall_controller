@@ -1,184 +1,67 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed } from "vue";
 import { useControllerStore } from "@/stores/controller";
-import { upgradeVersionSchema } from "@/types/domain";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
+import { isInitialLoad } from "@/services/datasets";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
-const version = ref(""), error = ref(""), dialog = ref(false), confirmedVersion = ref(""), confirmedRepository = ref("");
-const invalidVersion = computed(() => !upgradeVersionSchema.safeParse(version.value).success);
-const blocked = computed(() => !store.connected || !store.upgrade.data?.enabled || !store.upgrade.data.repository || store.upgrade.stale ||
-  store.upgradePending || Boolean(store.upgradeBlockedReason) || store.busy || Boolean(store.uncertain || store.submitted) || store.activeTransactions.length > 0);
-async function review(): Promise<void> {
-  error.value = "";
-  await store.refreshUpgrade();
-  if (blocked.value || invalidVersion.value) return;
-  confirmedVersion.value = version.value; confirmedRepository.value = store.upgrade.data?.repository ?? ""; dialog.value = true;
-}
-async function install(): Promise<void> {
-  error.value = "";
-  try {
-    await store.refreshUpgrade();
-    if (store.upgrade.data?.repository !== confirmedRepository.value) throw new Error("Configured repository changed. Review the upgrade again.");
-    await store.startUpgrade(confirmedVersion.value, confirmedRepository.value); dialog.value = false;
-  } catch (failure) {
-    error.value = failure instanceof Error ? failure.message : "Upgrade request failed";
-    if (store.upgradeUncertain) dialog.value = false;
-  }
-}
-onMounted(() => { void store.refreshUpgrade(); });
+const software = computed(() => store.state.data?.desired.software);
+const unavailable = computed(() => store.state.stale || Boolean(store.state.error) || !software.value);
+const availability = computed(() => {
+  if (isInitialLoad(store.state)) return "Loading...";
+  const metadata = software.value;
+  if (unavailable.value || !metadata) return "Unavailable";
+  if (store.softwareCheckPending) return "Checking...";
+  if (store.softwareCheckError || metadata.error !== null) return "Unable to check";
+  if (!metadata.repository) return "Checks disabled";
+  if (metadata.update_available === true) return `Update available${metadata.latest_version ? `: ${metadata.latest_version}` : ""}`;
+  if (metadata.update_available === false) return "Up to date";
+  return "Not checked";
+});
+const error = computed(() => {
+  if (isInitialLoad(store.state)) return store.softwareCheckError;
+  if (unavailable.value) return store.state.error || (store.state.data && !software.value
+    ? "Update the appliance backend to enable upgrade checks."
+    : "Software information is unavailable. Reconnect to try again.");
+  if (store.softwareCheckPending) return "";
+  return store.softwareCheckError || software.value?.error || "";
+});
 </script>
 
 <template>
   <section
     aria-label="System upgrade"
-    class="mt-6"
+    class="mt-4"
   >
-    <div class="d-flex align-center ga-2 mb-3">
-      <h2 class="text-h6">
-        System upgrade
-      </h2>
-      <v-btn
-        icon="mdi-refresh"
-        variant="text"
-        size="small"
-        aria-label="Refresh upgrade status"
-        title="Refresh upgrade status"
-        :loading="store.upgrade.loading"
-        :disabled="!store.connected"
-        @click="store.refreshUpgrade"
-      />
-    </div>
+    <dl class="upgrade-status mb-4">
+      <dt>Current version</dt><dd>{{ software?.version ?? (isInitialLoad(store.state) ? 'Loading...' : 'Unavailable') }}</dd>
+      <dt>New version</dt><dd role="status">
+        {{ availability }}
+      </dd>
+      <dt>Last checked ({{ timeZone }})</dt><dd>{{ isInitialLoad(store.state) ? 'Loading...' : formatTimestamp(software?.last_checked_at) }}</dd>
+    </dl>
+    <v-btn
+      variant="outlined"
+      :loading="store.softwareCheckPending"
+      :disabled="!store.connected || unavailable || !software?.repository || store.softwareCheckPending || store.softwareCheckDenied"
+      @click="store.checkSoftwareRelease"
+    >
+      Check for upgrade
+    </v-btn>
     <v-alert
-      v-if="store.upgrade.error || error"
+      v-if="error"
       type="error"
       role="alert"
-      class="mb-3"
+      class="mt-3"
     >
-      {{ error || store.upgrade.error }}
+      {{ error }}
     </v-alert>
-    <v-alert
-      v-if="store.upgradeBlockedReason"
-      type="warning"
-      role="status"
-      class="mb-3"
-    >
-      {{ store.upgradeBlockedReason }}
-    </v-alert>
-    <v-alert
-      v-if="store.upgradeNotice"
-      type="warning"
-      class="mb-3"
-    >
-      {{ store.upgradeNotice }}
-    </v-alert>
-    <p
-      v-if="store.upgrade.data && !store.upgrade.data.enabled"
-      class="mb-3"
-    >
-      Self-upgrade is disabled. Repository, signing trust and credentials require operator setup on the appliance.
-    </p>
-    <dl
-      v-if="store.upgrade.data"
-      class="upgrade-status mb-4"
-    >
-      <dt>Repository</dt><dd class="mono">
-        {{ store.upgrade.data.repository ?? 'Not configured' }}
-      </dd>
-      <dt>Last successful upgrade</dt><dd>{{ store.upgrade.data.last_successful_version ?? 'None recorded' }} (historical, not the running version)</dd>
-      <template v-if="store.upgrade.data.job">
-        <dt>Latest job</dt><dd class="mono">
-          {{ store.upgrade.data.job.id }}
-        </dd>
-        <dt>Version / status</dt><dd>{{ store.upgrade.data.job.version }} / {{ store.upgrade.data.job.status }}</dd>
-        <dt>Updated</dt><dd>{{ formatTimestamp(store.upgrade.data.job.updated_at) }} UTC</dd>
-        <dt v-if="store.upgrade.data.job.error">
-          Error
-        </dt><dd
-          v-if="store.upgrade.data.job.error"
-          role="alert"
-        >
-          {{ store.upgrade.data.job.error }}
-        </dd>
-      </template>
-    </dl>
-    <form
-      class="upgrade-form"
-      @submit.prevent="review"
-    >
-      <v-text-field
-        v-model="version"
-        label="Version"
-        placeholder="1.2.3"
-        autocomplete="off"
-        variant="outlined"
-        density="compact"
-        hide-details="auto"
-        :error-messages="version && invalidVersion ? 'Use 1.2.3 or 1.2.3-rc.1, without v or build metadata.' : undefined"
-        :disabled="store.upgradePending"
-      />
-      <v-btn
-        prepend-icon="mdi-update"
-        :disabled="blocked || invalidVersion"
-        @click="review"
-      >
-        Upgrade
-      </v-btn>
-    </form>
-    <v-dialog
-      v-model="dialog"
-      max-width="600"
-      :persistent="store.upgradePending"
-    >
-      <v-card
-        :title="`Upgrade to ${confirmedVersion}?`"
-        class="upgrade-confirmation"
-      >
-        <v-card-text>
-          <p>Repository: <span class="mono">{{ confirmedRepository }}</span></p>
-          <p class="mt-3">
-            Requires system.upgrade. Installation can interrupt management connectivity and appliance services. No cancel or undo is available here. A disconnect does not establish success or failure; do not resubmit.
-          </p>
-          <p class="mt-3">
-            Local configuration changes are retained. Writes remain blocked while the upgrade is active; recovery_required requires console recovery.
-          </p>
-          <v-alert
-            v-if="error"
-            type="error"
-            role="alert"
-            class="mt-3"
-          >
-            {{ error }}
-          </v-alert>
-        </v-card-text>
-        <v-card-actions>
-          <v-btn
-            :disabled="store.upgradePending"
-            @click="dialog = false"
-          >
-            Cancel
-          </v-btn>
-          <v-btn
-            color="warning"
-            prepend-icon="mdi-update"
-            :loading="store.upgradePending"
-            :disabled="blocked"
-            @click="install"
-          >
-            Install upgrade
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
   </section>
 </template>
 
 <style scoped>
-.upgrade-form { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; max-width: 520px; }
-.upgrade-form > .v-input { min-width: 180px; }
 .upgrade-status { display: grid; grid-template-columns: minmax(100px, 180px) minmax(0, 1fr); gap: 8px 16px; }
 .upgrade-status dd { margin: 0; overflow-wrap: anywhere; }
-.upgrade-confirmation :deep(.v-card-title) { white-space: normal; overflow-wrap: anywhere; }
-.upgrade-confirmation :deep(.v-card-text) { overflow-wrap: anywhere; }
 @media (max-width: 480px) { .upgrade-status { grid-template-columns: 1fr; gap: 4px; } .upgrade-status dd { margin-bottom: 8px; } }
 </style>

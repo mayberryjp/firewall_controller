@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
+import { isInitialLoad } from "@/services/datasets";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import { uploadDynamicDnsSecret } from "@/services/netcontrol";
-import { formatTimestamp } from "@/services/timestamps";
+import { useTimestamps } from "@/composables/useTimestamps";
 import type { DynamicDnsEntry } from "@/types/domain";
+const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.desired);
@@ -79,6 +81,7 @@ function stateColor(state?: string): string {
   return store.dynamicDnsStatus.stale ? "default" : state === "current" ? "success" : state === "error" ? "error" : state === "checking" ? "warning" : "default";
 }
 function stateLabel(name: string): string {
+  if (isInitialLoad(store.dynamicDnsStatus)) return "—";
   const item = statuses.value.get(name);
   return store.dynamicDnsStatus.stale ? (item ? "Stale" : "Unavailable") : item?.state ?? "Unavailable";
 }
@@ -137,7 +140,7 @@ function updated(name: string): string {
             Address
           </th>
           <th scope="col">
-            Last updated (UTC)
+            Last updated ({{ timeZone }})
           </th>
           <th
             scope="col"
