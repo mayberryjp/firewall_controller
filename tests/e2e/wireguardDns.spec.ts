@@ -36,6 +36,22 @@ for (const editor of ["peer", "tunnel"] as const) {
     await expect(view).toContainText(sample.endpoint);
     await page.getByRole("button", { name: /^Details for wg0 peer/ }).click();
     const details = page.locator(".peer-details");
+    const groups = details.locator(".peer-detail-group");
+    await expect(groups.getByRole("heading", { level: 3 })).toHaveText(["Connection", "Allowed networks", "Keys and tunnel"]);
+    const boxes = await groups.evaluateAll(elements => elements.map(element => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    }));
+    const [connection, networks, keys] = boxes;
+    if (page.viewportSize()!.width > 700) {
+      expect(connection!.y).toBe(networks!.y);
+      expect(networks!.y).toBe(keys!.y);
+      expect(connection!.x + connection!.width).toBeLessThanOrEqual(networks!.x);
+      expect(networks!.x + networks!.width).toBeLessThanOrEqual(keys!.x);
+    } else {
+      expect(connection!.y + connection!.height).toBeLessThanOrEqual(networks!.y);
+      expect(networks!.y + networks!.height).toBeLessThanOrEqual(keys!.y);
+    }
     if (editor === "peer") {
       await expect(view).toContainText("DNS refresh: DNS worker stopped");
       await expect(view).toContainText("DNS: Resolver timed out");

@@ -8,6 +8,10 @@ export function interfaceChoice(link: Pick<Config["interfaces"][number], "name" 
   return { title: link.metadata?.display_name ? `${link.name} (${link.metadata.display_name})` : link.name, value: link.name };
 }
 
+export function isSystemLoopback(link?: { kind: string; ownership?: string }): boolean {
+  return link?.kind === "loopback" || link?.ownership === "loopback";
+}
+
 export const resourceTitles: Record<Section, string> = {
   interfaces: "Physical interfaces", routes: "Static Routes",
   firewall: "PROTECTED HOSTS", nat: "NAT masquerading", softflowd: "NetFlow/IPFIX", gateway_monitors: "Gateway monitors",
@@ -50,7 +54,7 @@ export function displayResourceValue(value: unknown, key: string): string {
   if (key === "up" && typeof value === "boolean") return value ? "Up" : "Down";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value)) return value.length ? value.map(item => displayResourceValue(item, key)).join(", ") : "None";
-  if (key === "role" && typeof value === "string") return ({ wan: "WAN", lan: "LAN", unassigned: "Unassigned" } as Record<string, string>)[value] ?? value;
+  if (key === "role" && typeof value === "string") return ({ wan: "WAN", lan: "LAN", unassigned: "Unassigned", loopback: "Loopback" } as Record<string, string>)[value] ?? value;
   if (key === "kind" && typeof value === "string") return ({ dummy: "Loopback", loopback: "Loopback", vlan: "VLAN", wireguard: "WireGuard" } as Record<string, string>)[value] ?? value.charAt(0).toUpperCase() + value.slice(1);
   if (typeof value === "object") return Object.entries(value).map(([name, entry]) => `${name.replaceAll("_", " ")}: ${displayResourceValue(entry, name)}`).join("; ") || "None";
   return String(value);

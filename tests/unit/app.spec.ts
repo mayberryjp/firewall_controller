@@ -7,7 +7,7 @@ import { useAppStore } from "@/stores/app";
 import { useControllerStore } from "@/stores/controller";
 import { usePolling } from "@/composables/usePolling";
 import * as api from "@/services/netcontrol";
-import { state, runtime, transaction, healthSnapshot, mdnsStatus } from "../fixtures";
+import { state, runtime, transaction, healthSnapshot, mdnsStatus, mqttStatus } from "../fixtures";
 import privateRoutes from "@/router/routes/privateRoutes";
 import { navigationSections, primaryNavigationSections } from "@/constants/navigation";
 import { resourceTitles } from "@/services/resourceCollections";
@@ -150,7 +150,7 @@ describe("routed navigation sections", () => {
       expect(router.currentRoute.value.fullPath).toBe(target);
       expect(router.currentRoute.value.meta.authenticated).toBe(true);
     }
-    expect(navigationSections.find(section => section.path === "/config")?.pages.map(page => page.title)).toEqual(["SAVE", "Commits", "PUSH REQUESTS", "Upgrade"]);
+    expect(navigationSections.find(section => section.path === "/config")?.pages.map(page => page.title)).toEqual(["SAVE", "Commits", "PUSH REQUESTS", "Upgrade", "Config editor"]);
     expect(navigationSections.find(section => section.path === "/settings")?.pages.some(page => page.name === "settings-upgrade")).toBe(false);
   });
 });
@@ -351,7 +351,7 @@ describe("page-scoped polling", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     let finish!: (value: ReturnType<typeof healthSnapshot>) => void;
     const host = vi.spyOn(api, "getHostHealth").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue(healthSnapshot());
-    const mqtt = vi.spyOn(api, "getMqttStatus").mockResolvedValue({ device_id: "a".repeat(32), enabled: false, state: "disabled", error: null, last_published_at_unix: null });
+    const mqtt = vi.spyOn(api, "getMqttStatus").mockResolvedValue(mqttStatus());
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
     await router.push("/overview");
     const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });

@@ -9,7 +9,7 @@ import { decodeJson, encodeJson } from "@/services/json";
 import { differences, normalize, requiredPermissions } from "@/services/configuration";
 import { ruleOwnershipEntries } from "@/services/ruleOwnership";
 import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema } from "@/types/domain";
-import { config, hostPolicyConfig, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus, vnstatReporting } from "../fixtures";
+import { config, hostPolicyConfig, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus, vnstatReporting, mqttStatus } from "../fixtures";
 import { dnsResponse, linkDiagnostics } from "../diagnosticsFixtures";
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
@@ -25,6 +25,49 @@ beforeEach(() => {
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
 });
 describe("controller-proxied API boundary", () => {
+  it.each(["0", "1", "9007199254740991", "9007199254740993", "18446744073709551615"])("reads exact MQTT uint64 counters %s", async count => {
+    body = JSON.stringify({ ...mqttStatus(), connection_attempts: 0, reconnect_count: 0 })
+      .replace('"connection_attempts":0', `"connection_attempts":${count}`)
+      .replace('"reconnect_count":0', `"reconnect_count":${count}`);
+    const controller = new AbortController();
+    expect(await net.getMqttStatus(controller.signal)).toEqual({ ...mqttStatus(), connection_attempts: count, reconnect_count: count });
+    expect(captured?.method).toBe("get"); expect(captured?.url).toBe("/services/mqtt/status");
+    expect(captured?.data).toBeUndefined(); expect(captured?.signal).toBe(controller.signal);
+  });
+  it.each(["connection_attempts", "reconnect_count"])("rejects malformed or missing MQTT %s without inventing zero", async field => {
+    for (const token of ["null", "-1", "1.5", '"3"', "18446744073709551616", "true"]) {
+      body = JSON.stringify({ ...mqttStatus(), connection_attempts: 0, reconnect_count: 0 })
+        .replace(`"${field}":0`, `"${field}":${token}`);
+      await expect(net.getMqttStatus()).rejects.toMatchObject({ incompatible: true });
+    }
+    const wire: Record<string, unknown> = { ...mqttStatus(), connection_attempts: 0, reconnect_count: 0 };
+    delete wire[field]; body = JSON.stringify(wire);
+    await expect(net.getMqttStatus()).rejects.toMatchObject({ incompatible: true });
+  });
+  it("preserves current and historical safe MQTT reasons and nullable OS codes", async () => {
+    const failure = { category: "future_transport_issue", message: "MQTT connection reset by peer", os_error_code: null, at_unix: 1792800060 };
+    body = JSON.stringify({ ...mqttStatus(), state: "running", connection_attempts: 3, reconnect_count: 2,
+      last_connected_at_unix: 1792800000, last_failure: failure });
+    expect(await net.getMqttStatus()).toMatchObject({ state: "running", error: null, last_failure: failure, last_connected_at_unix: 1792800000 });
+    for (const code of [0, -104, 104]) {
+      body = JSON.stringify({ ...mqttStatus(), state: "reconnecting", error: failure.message, connection_attempts: 4, reconnect_count: 3,
+        last_failure: { ...failure, os_error_code: code } });
+      expect(await net.getMqttStatus()).toMatchObject({ error: failure.message, last_failure: { ...failure, os_error_code: code } });
+    }
+  });
+  it.each([null, -1, 0.1, "1792800060"])("rejects invalid MQTT failure observation time %j", async at_unix => {
+    body = JSON.stringify({ ...mqttStatus(), connection_attempts: 0, reconnect_count: 0,
+      last_failure: { category: "network", message: "Network unavailable", os_error_code: null, at_unix } });
+    await expect(net.getMqttStatus()).rejects.toMatchObject({ incompatible: true });
+  });
+  it("does not change ordinary JSON numbers that share MQTT counter names", () => {
+    expect(decodeJson('{"metadata":{"connection_attempts":3,"reconnect_count":2}}')).toEqual({ metadata: { connection_attempts: 3, reconnect_count: 2 } });
+    expect(() => decodeJson('{"connection_attempts":18446744073709551615}')).toThrow("Unsafe numeric value");
+  });
+  it("keeps denied MQTT status access visible", async () => {
+    status = 403; body = '{"error":"state.read required"}';
+    await expect(net.getMqttStatus()).rejects.toMatchObject({ status: 403, message: "HTTP 403: state.read required" });
+  });
   it("accepts preserved ownership when the backend canonicalizes host group order", async () => {
     const candidate = hostPolicyConfig(), pending = transaction();
     for (const rule of ruleOwnershipEntries(candidate).values()) Object.assign(rule, { origin: "import", import_source: "sando" });
@@ -433,12 +476,24 @@ describe("controller-proxied API boundary", () => {
     expect(result.candidate.firewall).toEqual(candidate.firewall);
   });
   it("reads discovered NICs without converting null simulator identity or hiding errors", async () => {
-    const inventory = [{ name: "eth0", kind: "ethernet", index: null, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged" }];
+    const inventory = [{ name: "eth0", kind: "ethernet", index: null, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged", role: null, addressing_type: null }];
     body = encodeJson(inventory);
     expect(await net.getDiscoveredInterfaces()).toEqual(inventory);
     expect(captured?.url).toBe("/interfaces/discovered");
     expect(captured?.method).toBe("get");
     body = "null";
+    await expect(net.getDiscoveredInterfaces()).rejects.toThrow(/Incompatible API response/);
+  });
+  it("preserves fixed loopback discovery metadata independently of names, addresses and link state", async () => {
+    const inventory = [{ name: "kernel0", kind: "loopback", index: 1, mac: null, mtu: 65536, up: false, addresses: [], ownership: "loopback", role: "loopback", addressing_type: "static" }];
+    body = encodeJson(inventory);
+    expect(await net.getDiscoveredInterfaces()).toEqual(inventory);
+  });
+  it.each([
+    ["role", undefined], ["addressing_type", undefined],
+    ["role", "wan"], ["addressing_type", "dhcp"],
+  ])("rejects invalid discovery metadata %s=%s explicitly", async (field, value) => {
+    body = encodeJson([{ name: "eth0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged", role: null, addressing_type: null, [String(field)]: value }]);
     await expect(net.getDiscoveredInterfaces()).rejects.toThrow(/Incompatible API response/);
   });
   it("targets the selected device through the registry with no cache/cookies or redirects", () => {

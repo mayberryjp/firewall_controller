@@ -200,7 +200,7 @@ describe("human-facing timestamp displays", () => {
     const hash = "0123456789abcdef0123456789abcdef01234567";
     vi.spyOn(store, "refreshRevisions").mockResolvedValue();
     store.revisions.data = [{
-      revision: "2026.10.29.2", transaction_id: hash,
+      revision: "2026.10.29.2", transaction_id: hash, current: false, submitted_at: null, committed_at: null,
     }];
     const wrapper = mount(HistoryView, { global });
     const link = wrapper.get(`tbody [to="/config/commits/${hash}"]`);

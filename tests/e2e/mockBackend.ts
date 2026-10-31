@@ -150,7 +150,8 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         for (const section of Object.values(sample.sections)) { section.status = "simulated"; section.data = null; section.error = "No physical host measurements in simulator"; }
         return reply(sample);
       }
-      if (path === "/services/mqtt/status") return reply({ device_id: "a".repeat(32), enabled: committed.mqtt?.enabled ?? false, state: committed.mqtt?.enabled ? "simulated" : "disabled", error: null, last_published_at_unix: null });
+      if (path === "/services/mqtt/status") return reply({ device_id: "a".repeat(32), enabled: committed.mqtt?.enabled ?? false, state: committed.mqtt?.enabled ? "simulated" : "disabled", error: null, last_published_at_unix: null,
+        connection_attempts: 0, reconnect_count: 0, last_connected_at_unix: null, last_failure: null });
       if (path === "/statistics/connections") return reply({ ...connections(), connections: [], sample: { ...connections().sample, status: "simulated" }, summary: { total: null, matched: null, returned: 0, accounting_unavailable: null } });
       if (path === "/statistics/gateways") return reply({ sample: statistics().sample, monitors: gatewayRows() });
       if (path.startsWith("/statistics/gateways/")) {

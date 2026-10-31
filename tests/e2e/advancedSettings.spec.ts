@@ -35,8 +35,8 @@ for (const outcome of ["confirm", "rollback"] as const) {
     const view = page.getByRole("region", { name: "Advanced settings", exact: true });
     await expect(view.getByRole("button")).toHaveCount(1);
     const action = view.getByRole("button");
-    await expect(action).toHaveClass(/v-btn--variant-flat/);
-    await expect(action).toHaveClass(/bg-error/);
+    await expect(action).toHaveClass(/v-btn--variant-tonal/);
+    await expect(action).toHaveClass(/text-error/);
     const bounds = (await action.boundingBox())!;
     expect(bounds.height).toBeLessThanOrEqual(isMobile ? 60 : 40);
     if (!isMobile) expect(bounds.width).toBeLessThan(560);

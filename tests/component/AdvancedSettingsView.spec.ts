@@ -118,12 +118,14 @@ describe("Advanced settings combined deletion", () => {
       expect(useControllerStore().deleteFirewallHostsAndRules).not.toHaveBeenCalled();
     } finally { wrapper.unmount(); }
   });
-  it("blocks deletion while there are local changes", () => {
-    const store = useControllerStore(); store.editorDirty = true;
+  it("blocks deletion while there are local changes without a SAVE review link", () => {
+    const store = useControllerStore(); store.draft = state().desired;
     const wrapper = mount(AdvancedSettingsView, { global: { stubs } });
     try {
       expect(wrapper.get("button").attributes("disabled")).toBeDefined();
       expect(wrapper.text()).toContain("Save or discard local changes");
+      expect(wrapper.find("#advanced-blocked a").exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("Review in SAVE");
     } finally { wrapper.unmount(); }
   });
   it("shows failed submissions inline without claiming success or navigating", async () => {

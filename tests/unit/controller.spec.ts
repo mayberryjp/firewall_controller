@@ -4,7 +4,7 @@ import { ApiFailure } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
-import { config, state, transaction, runtime, statistics, software, vnstatReporting } from "../fixtures";
+import { config, state, transaction, runtime, statistics, software, vnstatReporting, mqttStatus } from "../fixtures";
 vi.mock("@/services/netcontrol", () => ({
   getState: vi.fn(), getRuntime: vi.fn(), getTransactions: vi.fn(), getTransaction: vi.fn(),
   getStatistics: vi.fn(), getGatewayStatistics: vi.fn(), getRevisions: vi.fn(), getRevision: vi.fn(),
@@ -146,7 +146,7 @@ describe("independent reads and complete shared draft", () => {
     vi.mocked(api.getPlatformStatus).mockResolvedValue({ process_health: processHealth, active_alerts: [alert] });
     const store = await connected();
     await store.refreshPlatformStatus();
-    store.mqttStatus.data = { device_id: "firewall", enabled: true, state: "reconnecting", error: "Broker unavailable", last_published_at_unix: null };
+    store.mqttStatus.data = { ...mqttStatus(), device_id: "firewall", enabled: true, state: "reconnecting", error: "Broker unavailable" };
     store.mqttStatus.stale = false;
     expect(store.healthStatus?.process_health.components[0]?.state).toBe("reconnecting");
     expect(store.healthStatus?.active_alerts).toEqual([alert]);

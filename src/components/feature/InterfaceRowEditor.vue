@@ -103,7 +103,14 @@ function change(field: Field, value: unknown): void {
         @update:model-value="change(field, $event)"
       />
     </td>
-    <td :colspan="columns - inputs.length">
+    <td v-if="loopbacks">
+      <span
+        class="compact-cell-label"
+        aria-hidden="true"
+      >Mode</span>
+      {{ form.address_mode === "dhcp" ? "DHCP" : "Static" }}
+    </td>
+    <td :colspan="columns - inputs.length - Number(loopbacks === true)">
       <div class="editor-actions">
         <v-btn
           color="primary"

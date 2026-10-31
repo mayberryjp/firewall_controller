@@ -43,7 +43,9 @@ for (const scope of ["legacy", "masquerade", "dnat"] as const) {
       await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
       await target.evaluate(element => element.scrollIntoView({ block: "center" }));
       const end = await target.boundingBox();
-      await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: end!.x + end!.width / 2, y: end!.y + end!.height / 2 }] });
+      const visibleLeft = Math.max(0, end!.x);
+      const visibleRight = Math.min(page.viewportSize()!.width, end!.x + end!.width);
+      await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: (visibleLeft + visibleRight) / 2, y: end!.y + end!.height / 2 }] });
       await expect(target).toHaveClass(/rule-drop-target/);
       await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
       await session.detach();

@@ -3,12 +3,13 @@ import { legacyRevisionSchema, revisionSchema } from "@/types/domain";
 
 const revisionKeys = new Set(["revision", "base_revision", "committed_revision", "restored_from_revision", "next_before_revision"]);
 
-export function decodeJson(text: string): unknown {
+export function decodeJson(text: string, exactIntegerFields: readonly string[] = []): unknown {
   return parse(text, (key, value: unknown) => {
     if (revisionKeys.has(key) && value !== null) {
       return isLosslessNumber(value) ? legacyRevisionSchema.parse(value.value) : revisionSchema.parse(value);
     }
     if (!isLosslessNumber(value)) return value;
+    if (exactIntegerFields.includes(key)) return value;
     const number = Number(value.value);
     if (!Number.isFinite(number) || Math.abs(number) > Number.MAX_SAFE_INTEGER) throw new Error("Unsafe numeric value in API response");
     // Integer tokens must remain exact; bounded fractional measurements use JSON numbers.

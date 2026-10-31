@@ -24,6 +24,10 @@ this project retains the existing Vue/Vuetify stack.
 
 Use Node.js 22+ and npm.
 
+The supplied Compose file targets a Linux Docker host. Prepare
+`/docker/modan/registry-data` using the deployment instructions below before
+starting the registry.
+
 ```powershell
 npm ci
 if (-not (Test-Path .env)) {
@@ -42,7 +46,7 @@ npm run dev
 
 Open http://localhost:3030, sign in with the registry password, then add a
 firewall's name, API address and networking API key. The registry runs on
-port 3031 and persists entries in a Docker volume. Stop other listeners on
+port 3031 and persists entries under `/docker/modan/registry-data`. Stop other listeners on
 ports 3030 and 3031 before starting. Keep the ignored `.env` file and back up
 its encryption key securely; never regenerate the key for an existing registry
 database. If `.env` already exists, add both registry settings without replacing
@@ -543,6 +547,16 @@ the tooltip retains the original state. Unknown interface modes also display `-`
 This does not by itself indicate a broken
 link. Stale, failed or missing observations remain
 Unknown in both columns, and simulated samples remain explicitly Simulated.
+Both overview interface tables show the applied interface role alongside the
+device name and its configured display name beneath it. Long names and addresses
+are ellipsized with full values on hover, keeping the tables within their widgets
+without wrapping labels or adding columns.
+On narrow widgets, counters pair in/out values vertically in each metric column
+so the values remain readable without horizontal scrolling.
+
+The DHCP relay table keeps the interface name, role, and configured display name
+on one line in the Interface column. Long display names are ellipsized with the
+full value available on hover.
 
 Operational pages show settings, records, and current status without repeated
 read timestamps or deployment instructions. Errors and stale-data notices remain
@@ -602,6 +616,14 @@ role and admin state use colored chips (green Up, red Down).
 Unmanaged/down links and unsupported kinds remain visible; unsupported kinds are
 read-only. There is no interface visibility dropdown. Interfaces > Loopbacks contains
 managed loopback interfaces and built-in loopback links such as `lo`, which is always read-only.
+Discovery supplies required nullable `role` and `addressing_type` fields. Actual kernel
+loopbacks show the fixed **Loopback** role and **Static** mode in Overview and the
+Loopbacks inventory, even when down or addressless, and cannot be adopted, edited or
+deleted. Classification follows the backend's kind/ownership, not the interface name.
+Other discovered links return null metadata; their configured role and addressing
+remain authoritative. Loopback is not a managed role or an editable addressing option.
+This requires the rebuilt backend's
+[loopback discovery contract](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-30.md#2026-10-30-09-fixed-loopback-role-and-static-addressing).
 Loopback creation, edits, adoption and deletion stage into the shared draft; discovered
 addresses are never copied into saved settings. Configured loopback interfaces remain
 listed even if not yet discovered. The loopback editor cannot manage `lo` or change kind.
@@ -957,6 +979,12 @@ Upload over HTTPS or a trusted management channel. Appliance password files are
 private but unencrypted; discarded uploads still count toward the 256-reference
 limit. Prefer `mqtts://` with a trusted broker certificate.
 
+The Publisher row shows only the current state and actionable errors. Broker
+timestamps, attempt/retry counters and retained failure history are not displayed.
+Recovery clears the current error without marking a running publisher unhealthy.
+Error messages remain plain text. Broker logs may still be needed to establish
+the cause of resets or missing acknowledgments.
+
 Overview polls `/statistics/host` independently every three seconds while visible;
 the settings page polls confirmed MQTT status every 7.5 seconds. Reads do not
 overlap and failures back off. System stats describe the daemon-visible host, not
@@ -986,7 +1014,9 @@ uncached resolution must succeed. Later failures retain the persisted last-good
 selection and report errors; disabled peers are not resolved.
 
 The peer table retains the configured hostname and shows DNS errors inline.
-Existing peer details distinguish the cached DNS selection, actual roaming
+Expanded peer details group connection measurements, allowed networks, and
+keys/tunnel settings in separate columns that stack on narrow screens.
+Connection measurements distinguish the cached DNS selection, actual roaming
 endpoint and last DNS success (UTC). Worker errors remain separate from
 handshake/traffic; absent native measurements are Unavailable, not success.
 Existing state/runtime reads supply these details without browser DNS, new
@@ -1599,10 +1629,15 @@ simulated states. There is no offline mutation queue.
 | `REGISTRY_ADMIN_PASSWORD` | Required | Registry administrator password (at least 16 characters) |
 | `REGISTRY_ENCRYPTION_KEY` | Required | Fernet key used to encrypt stored device credentials |
 | `REGISTRY_UI_ORIGINS` | `http://localhost:3030,http://127.0.0.1:3030` | Comma-separated trusted frontend origins for session cookies; use the exact public UI origin in network deployments |
-| `REGISTRY_TLS_CERT` | Empty | Optional in-container TLS certificate path for the registry |
-| `REGISTRY_TLS_KEY` | Empty | Optional in-container TLS private-key path for the registry |
+| `REGISTRY_TLS_CERT` | Empty | Optional registry-process TLS certificate path; not passed by the supplied HTTP Compose file |
+| `REGISTRY_TLS_KEY` | Empty | Optional registry-process TLS private-key path; not passed by the supplied HTTP Compose file |
 
 `VITE_*` settings are public build-time settings. Do not put secrets in them.
+For the published-image Compose setup, only `REGISTRY_ADMIN_PASSWORD` and
+`REGISTRY_ENCRYPTION_KEY` are unconditionally required. Set `REGISTRY_UI_ORIGINS`
+to the exact public frontend origin when not using the localhost defaults.
+The images already define the registry database path and listen port; no frontend
+runtime environment variables are required.
 The fetch adapter refuses controller redirects rather than forwarding
 Authorization elsewhere; normal API calls omit cookies and set `cache: no-store`. Session login, restore, and sign-out include the registry cookie. Error
 text redacts the registry session token.
@@ -1636,8 +1671,8 @@ the password or bearer token in web storage. HTTPS cookies are Secure. The brows
 remembers only the selected device ID and reconnects it when reloading a protected
 page. Explicit sign-out clears the cookie and remembered device. Drafts and unstaged
 input remain in memory only; pending transactions are rediscovered from the server.
-Device names and addresses are stored in SQLite on the `registry-data`
-volume. Device keys are encrypted at rest using `REGISTRY_ENCRYPTION_KEY`, never
+Device names and addresses are stored in `/docker/modan/registry-data/registry.sqlite3`
+on the Docker host. Device keys are encrypted at rest using `REGISTRY_ENCRYPTION_KEY`, never
 returned to the browser, and decrypted server-side only while proxying an
 authenticated request to the selected firewall. Back up the encryption key
 separately from the database; without it, stored keys cannot be recovered. Keep
@@ -1655,9 +1690,9 @@ restrict controller access and use strong administrator credentials.
 
 Use HTTPS for both the website and registry in a network deployment. The
 controller verifies certificates when connecting to HTTPS firewall APIs.
-To enable registry TLS, place certificate files in the ignored
-`registry-certs` directory and set `REGISTRY_TLS_CERT=/certs/fullchain.pem` and
-`REGISTRY_TLS_KEY=/certs/private-key.pem`. Set
+The supplied Compose stack uses HTTP internally and omits built-in registry TLS
+settings and certificate mounts. Terminate HTTPS at an external reverse proxy
+for network deployments; do not expose the HTTP ports directly to untrusted networks. Set
 `VITE_REGISTRY_API_URL` at frontend build time if the registry is not reachable
 at the website hostname on port 3031. The container CSP permits registry
 `connect-src` connections to `http:` and `https:` origins.
@@ -1667,6 +1702,18 @@ cached; the app document is revalidated. The document receives a CSP,
 no-referrer and nosniff headers. Vuetify needs inline styles, not inline scripts.
 Apply additional HTTPS/HSTS policy at ingress. No third-party analytics/CDNs are
 used.
+
+Prepare storage on the Linux Docker host. The registry runs as UID/GID `10001`;
+the bind mount must exist and be writable by that account:
+
+```sh
+sudo install -d -m 0700 -o 10001 -g 10001 /docker/modan/registry-data
+```
+
+If upgrading from the previous `registry-data` named volume, stop the registry
+and copy its entire contents into this directory before starting the updated
+stack. Preserve UID/GID `10001` ownership and the existing encryption key; do not
+delete the old volume until the migrated registry has been verified.
 
 ```powershell
 docker compose pull
@@ -1678,9 +1725,13 @@ the central registry without local builds or npm downloads. Node.js and npm are
 not required for this Docker-only setup. Stop `npm run dev` before starting the
 Compose frontend because both use port 3030. Set
 `REGISTRY_ADMIN_PASSWORD` and generate `REGISTRY_ENCRYPTION_KEY` before starting,
-as shown in the local setup commands above. The registry database persists in a
-named Docker volume. Stop the stack with `docker compose down`; the named volume
-is retained. There are no container healthchecks; orchestrator readiness is
+as shown in the local setup commands above. Persistent storage is the explicit
+`/docker/modan/registry-data` bind mount, not a Docker-managed named volume.
+Pre-create the directory with the ownership above rather than relying on Docker's
+automatic directory creation. The registry retains
+its read-only root filesystem, in-memory `/tmp` and no-new-privileges restriction.
+Stop the stack with `docker compose down`; the host data directory is retained.
+There are no container healthchecks; orchestrator readiness is
 external.
 
 ## Tests and delivery

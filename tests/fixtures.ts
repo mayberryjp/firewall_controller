@@ -1,9 +1,15 @@
-import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus, PlatformStatus, SoftwareMetadata, VnStatReporting, WireGuardDNS } from "@/types/domain";
+import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus, PlatformStatus, SoftwareMetadata, VnStatReporting, WireGuardDNS, MqttStatus } from "@/types/domain";
 import type { HostHealth } from "../src/services/hostHealth";
 export function vnstatReporting(): VnStatReporting {
   return {
     scope: "host", last_report_date: "2026-10-29", last_report_error: null,
     sent_datagrams: "18446744073709551615", failed_datagrams: "0",
+  };
+}
+export function mqttStatus(): MqttStatus {
+  return {
+    device_id: "a".repeat(32), enabled: false, state: "disabled", error: null, last_published_at_unix: null,
+    connection_attempts: "0", reconnect_count: "0", last_connected_at_unix: null, last_failure: null,
   };
 }
 export function healthSnapshot(ticks = "9007199254740993", idle = "9007199254740993", uptime = 100): HostHealth {

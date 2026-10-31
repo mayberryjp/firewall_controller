@@ -3,7 +3,9 @@ import { computed, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { isInitialLoad } from "@/services/datasets";
 import { formatBytes } from "@/services/hostHealth";
+import { isSystemLoopback } from "@/services/resourceCollections";
 import OverviewWidget from "./OverviewWidget.vue";
+import OverviewInterfaceIdentity from "./OverviewInterfaceIdentity.vue";
 const store = useControllerStore();
 const counters = [
   { label: "Packets in", key: "rx_packets" }, { label: "Packets out", key: "tx_packets" },
@@ -74,7 +76,17 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
     :note="note"
     :detail="store.statistics.error ?? undefined"
   >
-    <v-table density="compact">
+    <v-table
+      density="compact"
+      class="overview-counters"
+    >
+      <colgroup>
+        <col style="width: 25%"><col
+          v-for="counter in counters"
+          :key="counter.key"
+          style="width: 12.5%"
+        >
+      </colgroup>
       <thead>
         <tr>
           <th scope="col">
@@ -84,6 +96,7 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
             v-for="counter in counters"
             :key="counter.key"
             scope="col"
+            :title="counter.label"
           >
             {{ counter.label }}
           </th>
@@ -95,12 +108,17 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
           :key="item.name"
         >
           <th scope="row">
-            <RouterLink
-              :to="{ path: '/diagnostics/traffic', query: { interface: item.name } }"
-              class="counter-link"
+            <OverviewInterfaceIdentity
+              :name="item.name"
+              :loopback="isSystemLoopback(item)"
             >
-              {{ item.name }}
-            </RouterLink>
+              <RouterLink
+                :to="{ path: '/diagnostics/traffic', query: { interface: item.name } }"
+                class="counter-link"
+              >
+                {{ item.name }}
+              </RouterLink>
+            </OverviewInterfaceIdentity>
           </th>
           <td
             v-for="counter in counters"
@@ -136,6 +154,30 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
 </template>
 
 <style scoped>
-.counter-value { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; }
+.overview-counters { container-type: inline-size; }
+.overview-counters :deep(table) { width: 100%; table-layout: fixed; }
+.overview-counters :deep(table th), .overview-counters :deep(table td) { padding: 2px 6px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overview-counters :deep(table th) { font-size: 12px; }
+.counter-value { display: flex; flex-direction: column; align-items: flex-start; max-width: 100%; line-height: 14px; }
+.counter-value > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.counter-value :deep(.v-chip) { min-width: 0; max-width: 100%; height: 14px; font-size: 10px; }
+.counter-value :deep(.v-chip__content) { display: block; overflow: hidden; text-overflow: ellipsis; }
 .counter-link { color: inherit; text-decoration: none; }
+@container (max-width: 480px) {
+  .overview-counters :deep(table),
+  .overview-counters :deep(thead),
+  .overview-counters :deep(tbody) { display: block; }
+  .overview-counters :deep(colgroup) { display: none; }
+  .overview-counters :deep(tr) { display: grid; grid-template-columns: 30% repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(17px, auto)); }
+  .overview-counters :deep(table th),
+  .overview-counters :deep(table td) { min-width: 0; height: auto !important; padding: 0 6px !important; line-height: 14px; align-content: center; }
+  .overview-counters :deep(tr > :first-child) { grid-column: 1; grid-row: 1 / span 2; }
+  .overview-counters :deep(tr > :nth-child(2)) { grid-column: 2; grid-row: 1; }
+  .overview-counters :deep(tr > :nth-child(3)) { grid-column: 2; grid-row: 2; }
+  .overview-counters :deep(tr > :nth-child(4)) { grid-column: 3; grid-row: 1; }
+  .overview-counters :deep(tr > :nth-child(5)) { grid-column: 3; grid-row: 2; }
+  .overview-counters :deep(tr > :nth-child(6)) { grid-column: 4; grid-row: 1; }
+  .overview-counters :deep(tr > :nth-child(7)) { grid-column: 4; grid-row: 2; }
+  .overview-counters :deep(td[colspan]) { grid-column: 1 / -1; }
+}
 </style>

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { getDiscoveredInterfaces } from "@/services/netcontrol";
+import { isSystemLoopback } from "@/services/resourceCollections";
 import { record } from "@/types/forms";
 import type { ResourceRow } from "@/composables/useResourceCollection";
 import ResourceTable from "@/components/feature/ResourceTable.vue";
@@ -14,7 +15,7 @@ const inventory = ref<DiscoveredInterface[] | null>(null), loading = ref(false),
 const selected = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
 const rows = computed<ResourceRow[]>(() => {
   const links = (inventory.value ?? []).filter(link => {
-    const loopback = link.name === "lo" || link.kind === "loopback" || link.ownership === "loopback" || link.kind === "dummy";
+    const loopback = isSystemLoopback(link) || link.kind === "dummy";
     const vlan = link.kind === "vlan" || selected.value?.interfaces.some(item => item.name === link.name && item.kind === "vlan");
     const tunnel = link.kind === "wireguard" || selected.value?.interfaces.some(item => item.name === link.name && item.kind === "wireguard");
     return props.loopbacks ? loopback : !loopback && !vlan && !tunnel;

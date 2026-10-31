@@ -89,7 +89,20 @@ function toggle(name: string, enabled: boolean): void {
           v-for="link in links"
           :key="link.name"
         >
-          <td>{{ link.name }}</td>
+          <td>
+            <div class="relay-interface">
+              <span class="relay-interface-name">{{ link.name }}</span>
+              <span
+                class="relay-interface-role text-medium-emphasis"
+                :title="`Role: ${link.role === 'unassigned' ? 'Unassigned' : link.role.toUpperCase()}`"
+              >{{ link.role === "unassigned" ? "Unassigned" : link.role.toUpperCase() }}</span>
+              <span
+                v-if="link.metadata?.display_name"
+                class="relay-interface-description text-medium-emphasis"
+                :title="link.metadata.display_name"
+              >{{ link.metadata.display_name }}</span>
+            </div>
+          </td>
           <td v-if="editing === link.name">
             <v-text-field
               v-model="servers"
@@ -170,4 +183,9 @@ function toggle(name: string, enabled: boolean): void {
 
 <style scoped>
 .relay-table :deep(.column-actions) { width: 160px; }
+.relay-table :deep(th), .relay-table :deep(td) { white-space: nowrap; }
+.relay-interface { display: flex; align-items: baseline; gap: 8px; width: clamp(180px, 24vw, 320px); }
+.relay-interface-name, .relay-interface-role { flex-shrink: 0; }
+.relay-interface-role { font-size: 10px; font-weight: 500; }
+.relay-interface-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 </style>

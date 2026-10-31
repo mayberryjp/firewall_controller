@@ -3,9 +3,11 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { getDiscoveredInterfaces } from "@/services/netcontrol";
 import { isInitialLoad } from "@/services/datasets";
+import { isSystemLoopback } from "@/services/resourceCollections";
 import type { DiscoveredInterface } from "@/types/domain";
 import OverviewWidget from "./OverviewWidget.vue";
 import OverviewInterfaceStatus from "./OverviewInterfaceStatus.vue";
+import OverviewInterfaceIdentity from "./OverviewInterfaceIdentity.vue";
 const store = useControllerStore();
 const interfaceStates = ["admin", "operational"] as const;
 const discovered = ref<DiscoveredInterface[]>([]), addressError = ref("");
@@ -24,11 +26,16 @@ const rows = computed(() => [...new Set([
   ...(store.statistics.data?.interfaces.map(item => item.name) ?? []),
   ...(store.state.data?.desired.interfaces.map(item => item.name) ?? []),
   ...discovered.value.map(item => item.name),
-])].map(name => ({
-  name, sample: store.statistics.data?.interfaces.find(item => item.name === name),
-  addresses: discovered.value.find(item => item.name === name)?.addresses.filter(address => store.ipv6Enabled || !address.includes(":")),
-  mode: store.state.data?.desired.dhcp_clients?.[name] ? "DHCP" : store.state.data?.desired.interfaces.some(item => item.name === name) ? "Static" : "-",
-})));
+])].map(name => {
+  const link = discovered.value.find(item => item.name === name);
+  return {
+    name, sample: store.statistics.data?.interfaces.find(item => item.name === name),
+    addresses: link?.addresses.filter(address => store.ipv6Enabled || !address.includes(":")),
+    loopback: isSystemLoopback(link),
+    mode: isSystemLoopback(link) ? link?.addressing_type === "static" ? "Static" : "—" :
+      store.state.data?.desired.dhcp_clients?.[name] ? "DHCP" : store.state.data?.desired.interfaces.some(item => item.name === name) ? "Static" : "-",
+  };
+}));
 const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLoad(store.statistics) ? "" : store.statistics.stale ? "Stale" : store.statistics.data?.sample.status === "simulated" ? "Simulated" : "");
 </script>
 
@@ -43,13 +50,33 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
       density="compact"
       class="overview-interfaces"
     >
-      <thead><tr><th>Name</th><th>Admin state</th><th>Operational state</th><th>Active IP</th><th>Mode</th></tr></thead>
+      <colgroup><col style="width: 30%"><col style="width: 15%"><col style="width: 18%"><col style="width: 24%"><col style="width: 13%"></colgroup>
+      <thead>
+        <tr>
+          <th title="Name">
+            Name
+          </th><th title="Admin state">
+            Admin state
+          </th><th title="Operational state">
+            Operational state
+          </th><th title="Active IP">
+            Active IP
+          </th><th title="Mode">
+            Mode
+          </th>
+        </tr>
+      </thead>
       <tbody>
         <tr
           v-for="row in rows"
           :key="row.name"
         >
-          <td>{{ row.name }}</td>
+          <td>
+            <OverviewInterfaceIdentity
+              :name="row.name"
+              :loopback="row.loopback"
+            />
+          </td>
           <td
             v-for="state in interfaceStates"
             :key="state"
@@ -66,6 +93,8 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
               <div
                 v-for="address in row.addresses"
                 :key="address"
+                class="interface-address"
+                :title="address"
               >
                 {{ address }}
               </div>
@@ -87,6 +116,10 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
 </template>
 
 <style scoped>
-.overview-interfaces :deep(table th), .overview-interfaces :deep(table td) { padding: 2px 6px !important; white-space: normal; }
-.overview-interfaces :deep(td) { overflow-wrap: anywhere; }
+.overview-interfaces :deep(table) { width: 100%; table-layout: fixed; }
+.overview-interfaces :deep(table th), .overview-interfaces :deep(table td) { padding: 2px 6px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.overview-interfaces :deep(table th) { font-size: 12px; }
+.interface-address { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 14px; }
+.overview-interfaces :deep(.v-chip) { max-width: 100%; }
+.overview-interfaces :deep(.v-chip__content) { display: block; overflow: hidden; text-overflow: ellipsis; }
 </style>

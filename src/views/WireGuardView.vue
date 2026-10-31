@@ -329,33 +329,45 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
             class="peer-details"
           >
             <td colspan="9">
-              <dl class="detail-list">
-                <template v-if="item.dnsEndpoint && item.peer.enabled !== false">
-                  <div>
-                    <dt>DNS selection</dt>
-                    <dd>
-                      {{ item.dns?.resolved_endpoint || 'Unavailable' }}
-                      <span
-                        v-if="dns && dnsNotice"
-                        role="status"
-                        class="text-caption text-medium-emphasis"
-                      >
-                        ({{ dnsNotice }})
-                      </span>
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Actual endpoint</dt>
-                    <dd>{{ item.stats?.endpoint || 'Unavailable' }}</dd>
-                  </div>
-                  <div>
-                    <dt>DNS last success (UTC)</dt>
-                    <dd>{{ item.dns ? formatTimestamp(item.dns.last_success_unix_ms || undefined, "Never") : 'Unavailable' }}</dd>
-                  </div>
-                </template>
-                <div>
-                  <dt>Allowed networks</dt>
-                  <dd>
+              <div class="peer-detail-grid">
+                <div
+                  v-if="item.dnsEndpoint && item.peer.enabled !== false"
+                  class="peer-detail-group"
+                  role="group"
+                  aria-label="Connection"
+                >
+                  <h3>Connection</h3>
+                  <dl class="detail-list">
+                    <div>
+                      <dt>DNS selection</dt>
+                      <dd>
+                        {{ item.dns?.resolved_endpoint || 'Unavailable' }}
+                        <span
+                          v-if="dns && dnsNotice"
+                          role="status"
+                          class="text-caption text-medium-emphasis"
+                        >
+                          ({{ dnsNotice }})
+                        </span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Actual endpoint</dt>
+                      <dd>{{ item.stats?.endpoint || 'Unavailable' }}</dd>
+                    </div>
+                    <div>
+                      <dt>DNS last success (UTC)</dt>
+                      <dd>{{ item.dns ? formatTimestamp(item.dns.last_success_unix_ms || undefined, "Never") : 'Unavailable' }}</dd>
+                    </div>
+                  </dl>
+                </div>
+                <div
+                  class="peer-detail-group"
+                  role="group"
+                  aria-label="Allowed networks"
+                >
+                  <h3>Allowed networks</h3>
+                  <div class="network-list">
                     <div class="configured-networks">
                       {{ item.peer.allowed_ips.join(', ') || 'None' }}
                       <span class="text-caption text-medium-emphasis">(Configured)</span>
@@ -375,25 +387,34 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
                     >
                       {{ learnedNotice }}
                     </p>
-                  </dd>
+                  </div>
                 </div>
-                <div>
-                  <dt>Tunnel public key</dt>
-                  <dd class="mono">
-                    {{ live.get(item.tunnel)?.public_key ?? '—' }}
-                  </dd>
+                <div
+                  class="peer-detail-group"
+                  role="group"
+                  aria-label="Keys and tunnel"
+                >
+                  <h3>Keys and tunnel</h3>
+                  <dl class="detail-list">
+                    <div>
+                      <dt>Peer public key</dt>
+                      <dd class="mono">
+                        {{ item.peer.public_key }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Tunnel public key</dt>
+                      <dd class="mono">
+                        {{ live.get(item.tunnel)?.public_key ?? '—' }}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Listen port</dt>
+                      <dd>{{ live.get(item.tunnel)?.listen_port ?? '—' }}</dd>
+                    </div>
+                  </dl>
                 </div>
-                <div>
-                  <dt>Listen port</dt>
-                  <dd>{{ live.get(item.tunnel)?.listen_port ?? '—' }}</dd>
-                </div>
-                <div>
-                  <dt>Peer public key</dt>
-                  <dd class="mono">
-                    {{ item.peer.public_key }}
-                  </dd>
-                </div>
-              </dl>
+              </div>
             </td>
           </tr>
         </template>
@@ -482,9 +503,15 @@ section { padding-bottom: 56px; }
 .peer-table :deep(.column-status) { width: 80px; }
 .peer-disabled > :not(.peer-status):last-child, .peer-disabled > :not(.peer-status) { opacity: 0.55; }
 .peer-disabled > :last-child { opacity: 1; }
-.detail-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px 16px; margin: 0; }
+.peer-details > td { padding: 16px 20px 24px !important; }
+.peer-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 24px; align-items: start; }
+.peer-detail-group { min-width: 0; border-top: 1px solid var(--border-light); padding-top: 12px; }
+.peer-detail-group h3 { font-size: .875rem; font-weight: 600; margin-bottom: 12px; }
+.detail-list { display: grid; gap: 12px; margin: 0; }
 .detail-list dt { font-size: .75rem; color: var(--text-muted); }
 .detail-list dd { margin: 0; }
+.network-list { display: grid; gap: 8px; }
+.configured-networks, .learned-network { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; }
 .peer-form { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-light); }
 .peer-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; max-width: 900px; }
 .peer-wide { grid-column: 1 / -1; }

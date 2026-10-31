@@ -111,7 +111,7 @@ export async function request<T>(
     : response.headers["x-registry-auth-error"];
   if (response.status === 401 && registryAuthError === "true") unauthorized();
   let data: unknown;
-  try { data = decodeJson(raw); }
+  try { data = decodeJson(raw, method === "GET" && path === "/services/mqtt/status" ? ["connection_attempts", "reconnect_count"] : []); }
   catch (error) {
     const reason = error instanceof Error ? diagnostic(error.message, requestCredential) : "Unable to decode response";
     throw new ApiFailure(`HTTP ${response.status}: non-JSON or incompatible response. ${reason}`,

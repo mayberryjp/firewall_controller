@@ -402,8 +402,8 @@ test("global IPv6 setting hides IPv6 UI and persists through commit", async ({ p
   initial.ipv6_enabled = true;
   initial.interfaces[0] = { ...original, kind: "ethernet", addresses: original.addresses.filter(address => !address.includes(":")) };
   const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [
-    { name: original.name, kind: "ethernet", index: 2, mac: null, mtu: original.mtu, up: true, ownership: "managed", addresses: ["192.0.2.10/24", "fe80::1/64"] },
-    { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] },
+    { name: original.name, kind: "ethernet", index: 2, mac: null, mtu: original.mtu, up: true, ownership: "managed", role: null, addressing_type: null, addresses: ["192.0.2.10/24", "fe80::1/64"] },
+    { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] },
   ] });
   await connect(page); await navigate(page, "General");
   const ipv6 = page.getByLabel("Enable IPv6", { exact: true });
@@ -507,10 +507,10 @@ test("INTERFACE RULES is the first Firewall/NAT page with selectable ordered rul
   const navigation = page.getByRole("navigation", { name: "Firewall/NAT pages" });
   await expect(navigation.getByRole("tab").first()).toHaveText("INTERFACE RULES");
   const region = page.getByRole("region", { name: "INTERFACE RULES", exact: true });
-  await expect(region.locator(".rule-value")).toHaveText(["1", "203.0.113.99/32", "Any", "Any", "Any", "drop"]);
+  await expect(region.locator(".host-rule:not(.host-rule--default) .rule-value")).toHaveText(["1", "203.0.113.99/32", "Any", "Any", "Any", "drop"]);
   await region.locator(".v-select .v-field").click();
   await page.getByRole("option", { name: "wan0", exact: true }).click();
-  await expect(region.locator(".rule-value")).toHaveText(["1", "Server", "TCP", "443", "Any", "accept"]);
+  await expect(region.locator(".host-rule:not(.host-rule--default) .rule-value")).toHaveText(["1", "Server", "TCP", "443", "Any", "accept"]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await navigation.getByRole("tab", { name: "PROTECTED HOSTS", exact: true }).click();
   await expect(page).toHaveURL(/\/firewall$/);
@@ -550,9 +550,13 @@ test("top navigation opens routed sections in the black reference theme", async 
     for (const entry of section.pages) {
       const expand = pages.getByRole("button", { name: /^Expand .* navigation$/ });
       if (await expand.isVisible()) await expand.click();
+      await pages.getByRole("tablist").evaluate(async element => {
+        // Cancelled transitions have also stopped moving the click target.
+        await Promise.allSettled(element.getAnimations({ subtree: true }).map(animation => animation.finished));
+      });
       await pages.getByRole("tab", { name: entry.title, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-      if (["connections", "firewall"].includes(entry.name) && !isMobile) await expect(pages.getByRole("tab")).toHaveCount(0);
+      if (["connections", "firewall", "firewall-drops"].includes(entry.name) && !isMobile) await expect(pages.getByRole("tab")).toHaveCount(0);
       else await expect(pages.getByRole("tab", { name: entry.title, exact: true })).toHaveAttribute("aria-current", "page");
     }
   }
@@ -621,9 +625,9 @@ test("compact overview contains live status widgets without diagnostic clutter",
   counters.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UNKNOWN", status: "available", counters: { rx_packets: "1250000", tx_packets: "2450000", rx_bytes: "42100", tx_bytes: "84200", rx_errors: "0", tx_errors: "0" } });
   counters.interfaces.push({ ...counters.interfaces[0]!, name: "lo", kind: "loopback", counters: { rx_bytes: "0", tx_bytes: "0" } });
   const backend = await mockBackend(page, { initialConfig: initial, statistics: counters, discoveredInterfaces: [
-    { name: "lab0", kind: "dummy", index: 1, mac: null, mtu: 1500, up: true, ownership: "managed", addresses: ["192.0.2.99/24", "2001:db8:1234:5678:90ab:cdef:1234:5678/64"] },
-    { name: "wg0", kind: "wireguard", index: 2, mac: null, mtu: 1420, up: true, ownership: "managed", addresses: ["10.0.0.1/24"] },
-    { name: "lo", kind: "loopback", index: 3, mac: null, mtu: 65536, up: true, ownership: "unmanaged", addresses: ["127.0.0.1/8", "::1/128"] },
+    { name: "lab0", kind: "dummy", index: 1, mac: null, mtu: 1500, up: true, ownership: "managed", role: null, addressing_type: null, addresses: ["192.0.2.99/24", "2001:db8:1234:5678:90ab:cdef:1234:5678/64"] },
+    { name: "wg0", kind: "wireguard", index: 2, mac: null, mtu: 1420, up: true, ownership: "managed", role: null, addressing_type: null, addresses: ["10.0.0.1/24"] },
+    { name: "lo", kind: "loopback", index: 3, mac: null, mtu: 65536, up: true, ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] },
   ] });
   await connect(page);
   const dashboard = page.getByRole("region", { name: "Overview", exact: true });
@@ -633,7 +637,7 @@ test("compact overview contains live status widgets without diagnostic clutter",
   await expect(interfaceWidget.getByRole("columnheader")).toHaveText(["Name", "Admin state", "Operational state", "Active IP", "Mode"]);
   await expect(interfaceWidget.locator(".v-chip.text-success")).toHaveCount(3);
   for (const name of ["lab0", "wg0", "lo"]) {
-    const row = interfaceWidget.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
+    const row = interfaceWidget.getByRole("row").filter({ has: page.locator(".interface-name").filter({ hasText: new RegExp(`^${name}$`) }) });
     await expect(row.getByRole("cell").nth(1)).toHaveText("Up");
     await expect(row.getByRole("cell").nth(2)).toHaveText("-");
   }
@@ -879,7 +883,7 @@ test("connections viewer filters and pages read-only snapshots with exact counte
     await expect(sidebar.locator(".v-icon")).toHaveCount(1);
     await page.getByRole("button", { name: "Expand Firewall/NAT navigation", exact: true }).click();
     await expect(page.locator(".section-layout")).not.toHaveClass(/section-layout--collapsed/);
-    await expect(sidebar.getByRole("tab")).toHaveCount(5);
+    await expect(sidebar.getByRole("tab")).toHaveCount(navigationSections.find(section => section.name === "firewall-section")!.pages.length);
     await expect(sidebar.getByRole("tab").locator(".v-icon")).toHaveCount(0);
     await page.getByRole("button", { name: "Collapse Firewall/NAT navigation", exact: true }).click();
     await expect(sidebar.getByRole("tab")).toHaveCount(0);
@@ -945,8 +949,8 @@ test("connections viewer filters and pages read-only snapshots with exact counte
 test("loopbacks edits dummy interfaces and keeps lo read-only outside Physical interfaces", async ({ page }, testInfo) => {
   const initial = config(), original = initial.interfaces[0]!;
   const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [
-    { name: original.name, kind: "dummy", index: 2, mac: null, mtu: original.mtu, up: true, ownership: "managed", addresses: ["192.0.2.99/24"] },
-    { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] },
+    { name: original.name, kind: "dummy", index: 2, mac: null, mtu: original.mtu, up: true, ownership: "managed", role: null, addressing_type: null, addresses: ["192.0.2.99/24"] },
+    { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] },
   ] });
   await connect(page); await navigate(page, "Physical interfaces");
   const physical = page.getByRole("region", { name: "Physical interfaces", exact: true });
@@ -999,7 +1003,7 @@ test("tables use compact spacing across resource, overview, and connection pages
   ];
   await mockBackend(page, { initialConfig: initial, discoveredInterfaces: initial.interfaces.map((link, index) => ({
     name: link.name, kind: link.kind, index: index + 2, mac: null, mtu: link.mtu, up: link.up,
-    addresses: link.addresses, ownership: "managed",
+    addresses: link.addresses, ownership: "managed", role: null, addressing_type: null,
   })) });
   await connect(page);
   await expect(page.locator(".v-table").first()).toBeVisible();
@@ -1035,10 +1039,10 @@ test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ p
   initial.interfaces = ["eno1", "enp3s0", "wlp1s0"].map((name, index) => ({ ...original, name, kind: "ethernet", role: "unassigned", addresses: index === 0 ? ["172.16.10.2/24"] : [] }));
   initial.dhcp_clients = { enp3s0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
   initial.routes = []; initial.softflowd = []; initial.firewall.nat.masquerade = [];
-  const discovered = initial.interfaces.map((link, index) => ({ name: link.name, kind: link.kind, index: index + 2, mac: "02:00:00:00:00:01", mtu: link.mtu, up: link.up, addresses: link.addresses, ownership: "managed" as const }));
+  const discovered = initial.interfaces.map((link, index) => ({ name: link.name, kind: link.kind, index: index + 2, mac: "02:00:00:00:00:01", mtu: link.mtu, up: link.up, addresses: link.addresses, ownership: "managed" as const, role: null, addressing_type: null }));
   const inventory = [
     ...discovered.map(link => link.name === "eno1" ? { ...link, addresses: ["172.16.10.99/24", "fe80::2/64"] } : link.name === "enp3s0" ? { ...link, addresses: ["192.0.2.123/24", "2001:db8::123/64"] } : link),
-    { ...discovered[0]!, name: "lo", kind: "loopback", ownership: "loopback" as const, addresses: ["127.0.0.1/8", "::1/128"] },
+    { ...discovered[0]!, name: "lo", kind: "loopback", ownership: "loopback" as const, role: "loopback" as const, addressing_type: "static" as const, addresses: ["127.0.0.1/8", "::1/128"] },
     { ...discovered[0]!, name: "br0", kind: "bridge", ownership: "unmanaged" as const, up: false, addresses: ["198.51.100.1/24"] },
     { ...discovered[0]!, name: "spare0", ownership: "unmanaged" as const, up: false, addresses: [] },
   ];
@@ -1152,7 +1156,7 @@ test("staged changes shows an expanded unified diff without JSON panels", async 
   const initial = config(); initial.interfaces[0]!.kind = "ethernet";
   const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [{
     name: "lab0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:02", mtu: 1500,
-    up: true, addresses: initial.interfaces[0]!.addresses, ownership: "managed",
+    up: true, addresses: initial.interfaces[0]!.addresses, ownership: "managed", role: null, addressing_type: null,
   }] });
   await connect(page); await navigate(page, "Physical interfaces");
   await page.getByRole("region", { name: "Physical interfaces", exact: true }).getByRole("cell", { name: "lab0", exact: true }).click();
@@ -1183,7 +1187,7 @@ test("host NIC discovery stages simple inline DHCP without live writes", async (
   initial.interfaces[0] = { ...initial.interfaces[0]!, kind: "ethernet", role: "unassigned" };
   const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [{
     name: "eth1", kind: "ethernet", index: 3, mac: "02:00:00:00:00:03", mtu: 1500,
-    up: true, addresses: ["192.0.2.99/24"], ownership: "unmanaged",
+    up: true, addresses: ["192.0.2.99/24"], ownership: "unmanaged", role: null, addressing_type: null,
   }] });
   await connect(page);
   await navigate(page, "Physical interfaces");
@@ -1643,7 +1647,7 @@ test("removing host input requires visible protection review and no immediate wr
 
 test("inline interface settings and multi-server relay stage together without auto-configuring networking", async ({ page }) => {
   const initial = config(); initial.interfaces[0] = { ...initial.interfaces[0]!, kind: "ethernet" };
-  const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [{ name: "lab0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:02", mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed" }] }); await connect(page);
+  const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [{ name: "lab0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:02", mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed", role: null, addressing_type: null }] }); await connect(page);
   await navigate(page, "Physical interfaces");
   await page.getByRole("row", { name: /lab0/ }).first().click();
   await page.getByLabel("MTU", { exact: true }).fill("1450");
@@ -2004,7 +2008,7 @@ test("operational pages keep content compact with readable details", async ({ pa
     await navigate(page, entry.title);
     const main = page.getByRole("main");
     await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections)/.test(entry.path) ? 1 : 0);
+    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections|config\/(upgrade|editor))/.test(entry.path) ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
     await expect(main).not.toContainText("Operator prerequisites");
     await expect(main).not.toContainText("Last successful read");
@@ -2015,6 +2019,7 @@ test("operational pages keep content compact with readable details", async ({ pa
       await page.screenshot({ path: testInfo.outputPath(`${entry.name}-compact.png`), fullPage: true, animations: "disabled" });
     }
   }
+  await navigate(page, "PUSH REQUESTS");
   await page.getByRole("main").getByRole("link", { name: "2026.10.29.1", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Revision 2026.10.29.1", exact: true })).toBeVisible();
   await expect(page.locator("details").filter({ has: page.getByText("Configuration", { exact: true }) })).not.toHaveAttribute("open");
@@ -2066,9 +2071,9 @@ test("VLANs have a dedicated route while Interfaces edits physical behavior only
   const existing = { ...initial.interfaces[0]!, name: "vlan10", kind: "vlan" as const, addresses: ["10.10.0.1/24"], vlan: { parent: "lab0", id: 10 } };
   initial.interfaces.push(existing);
   const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [
-    { name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: initial.interfaces[0]!.addresses, ownership: "managed" },
-    { name: "vlan10", kind: "vlan", index: 3, mac: null, mtu: 1500, up: true, addresses: existing.addresses, ownership: "managed" },
-    { name: "unmanaged20", kind: "vlan", index: 4, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged" },
+    { name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: initial.interfaces[0]!.addresses, ownership: "managed", role: null, addressing_type: null },
+    { name: "vlan10", kind: "vlan", index: 3, mac: null, mtu: 1500, up: true, addresses: existing.addresses, ownership: "managed", role: null, addressing_type: null },
+    { name: "unmanaged20", kind: "vlan", index: 4, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged", role: null, addressing_type: null },
   ] });
   await connect(page); await navigate(page, "VLANs");
   await expect(page.getByRole("columnheader", { name: "Parent", exact: true })).toBeVisible();

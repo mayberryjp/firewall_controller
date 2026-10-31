@@ -7,7 +7,7 @@ import { useControllerStore } from "@/stores/controller";
 import { configSchema, type DiscoveredInterface } from "@/types/domain";
 import { record } from "@/types/forms";
 import { differences, stableJson } from "@/services/configuration";
-import { displayResourceValue, resourceColumns } from "@/services/resourceCollections";
+import { displayResourceValue, isSystemLoopback, resourceColumns } from "@/services/resourceCollections";
 import type { Section } from "@/services/resourceForms";
 import type { ResourceRow } from "@/composables/useResourceCollection";
 import { useFirewallCounters } from "@/composables/useFirewallCounters";
@@ -54,7 +54,7 @@ function toggleStatus(row: ResourceRow, enabled: boolean): void {
 const physical = computed(() => props.section === "interfaces" && !props.loopbacks && !props.vlan && !props.wireguard);
 const compact = computed(() => physical.value || props.vlan || props.loopbacks || ["routes", "gateway_monitors", "nat", "softflowd"].includes(props.section));
 const hasChanges = computed(() => !compact.value && store.diff.some(item => item.area === props.section));
-const visibleColumns = computed(() => (physical.value ? ["name", "role", "up", "mtu", "address_mode", "addresses", "ipv6_addresses"] : props.loopbacks ? ["name", "role", "up", "mtu", "active_addresses"] : props.inventory ? ["name", "kind", "ownership", "role", "up", "mtu", "active_addresses"] : props.vlan ? ["name", "id", "up", "mtu", "parent", "addresses"] : props.wireguard ? ["name", "key_ref", "listen_port", "peers"] : resourceColumns[props.section])
+const visibleColumns = computed(() => (physical.value ? ["name", "role", "up", "mtu", "address_mode", "addresses", "ipv6_addresses"] : props.loopbacks ? ["name", "role", "up", "mtu", "active_addresses", "address_mode"] : props.inventory ? ["name", "kind", "ownership", "role", "up", "mtu", "active_addresses"] : props.vlan ? ["name", "id", "up", "mtu", "parent", "addresses"] : props.wireguard ? ["name", "key_ref", "listen_port", "peers"] : resourceColumns[props.section])
   .filter(key => store.ipv6Enabled || key !== "ipv6_addresses"));
 const previewColumns = computed(() => visibleColumns.value.filter(key => props.section !== "gateway_monitors" || key !== "target"));
 const monitorMetrics = ["Health", "Loss", "Mean RTT", "Stddev", "RTT variation"];
@@ -65,12 +65,17 @@ function statusLabel(value: Record<string, unknown>): string {
 }
 const columns = computed(() => previewColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 3 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)) + Number(counterEnabled.value) * 3);
 function editable(row: ResourceRow): boolean {
-  return row.value.name !== "lo" && (!row.discovered || (row.index >= 0 && row.discovered.ownership !== "loopback" && ["ethernet", "veth", "dummy", "vlan", "wireguard"].includes(row.discovered.kind)));
+  return row.value.name !== "lo" && !isSystemLoopback(row.discovered) && (!row.discovered || (row.index >= 0 && ["ethernet", "veth", "dummy", "vlan", "wireguard"].includes(row.discovered.kind)));
 }
 function adoptable(row: ResourceRow): boolean {
   return Boolean(row.discovered && row.index < 0 && row.discovered.name !== "lo" && row.discovered.ownership === "unmanaged" && (props.loopbacks ? ["dummy"] : ["ethernet", "veth"]).includes(row.discovered.kind) && !store.runtime.data?.parent_interfaces.some(parent => parent.name === row.discovered!.name));
 }
 function cell(value: Record<string, unknown>, key: string, discovered?: DiscoveredInterface): string {
+  if (key === "role" && isSystemLoopback(discovered)) return displayResourceValue(discovered?.role, key);
+  if (props.loopbacks && key === "address_mode") {
+    if (isSystemLoopback(discovered)) return discovered?.addressing_type === "static" ? "Static" : "—";
+    return discovered?.ownership === "unmanaged" ? "—" : rowMode(value);
+  }
   if (props.vlan && key === "addresses") return (Array.isArray(value.addresses) ? value.addresses.filter(address => !String(address).includes(":")).join(", ") : "") || "None";
   if (physical.value) {
     if (key === "name") return String(value.name);
@@ -555,6 +560,7 @@ function staged(value: unknown): string {
 
 <style scoped>
 .physical-interface-row { cursor: pointer; }
+.vlan-role { line-height: 18px !important; }
 .interface-table :deep(td) {
   vertical-align: middle;
   white-space: nowrap;
@@ -596,6 +602,7 @@ function staged(value: unknown): string {
 .loopback-table :deep(.column-kind) { width: 80px; }
 .loopback-table :deep(.column-ownership) { width: 96px; }
 .loopback-table :deep(.column-role) { width: 176px; }
+.loopback-table :deep(.column-address_mode) { width: 80px; }
 .compact-interface-table :deep(.v-table__wrapper > table > tbody > .physical-editor-row > td),
 .compact-interface-table :deep(.v-table__wrapper > table > tbody > .vlan-editor-row > td),
 .compact-interface-table :deep(.v-table__wrapper > table > tbody > .resource-editor-row > td) { vertical-align: top; padding: 12px 6px; }

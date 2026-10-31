@@ -39,6 +39,7 @@ test("raw configuration editor validates, stages and persists through SAVE", asy
   expect(backend.writes.map(write => write.path)).toEqual(["/transactions", "/transactions/tx-test/confirm"]);
   await page.getByRole("navigation", { name: "Config pages", exact: true })
     .getByRole("tab", { name: "Config editor", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/editor$/);
   await page.reload();
   await expect(editor).toHaveValue(/"allow_all_icmp": false/);
   expect(configSchema.parse(JSON.parse(await editor.inputValue())).firewall.allow_all_icmp).toBe(false);

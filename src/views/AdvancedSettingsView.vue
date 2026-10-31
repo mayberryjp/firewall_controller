@@ -53,12 +53,6 @@ async function remove(): Promise<void> {
         role="status"
       >
         {{ store.firewallDeletionNotice }}
-        <router-link
-          v-if="store.activeTransactions.length || store.uncertain || store.draft"
-          to="/config/changes"
-        >
-          Review in SAVE
-        </router-link>
       </p>
     </div>
     <v-dialog

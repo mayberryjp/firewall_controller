@@ -43,7 +43,7 @@ import { useControllerStore } from "@/stores/controller";
 import { configSchema, runtimeSchema } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
 import { cloneConfig, differences, requiredPermissions, validateConfig } from "@/services/configuration";
-import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns } from "../fixtures";
+import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns, mqttStatus } from "../fixtures";
 import type { Component } from "vue";
 import { bgpConfig, bgpRoutes } from "../bgpFixtures";
 import { dragRule } from "../dragRule";
@@ -63,11 +63,11 @@ beforeEach(() => {
   setActivePinia(createPinia());
   const store = useControllerStore();
   store.connected = true; store.state.data = state(); store.runtime.data = runtime();
-  vi.spyOn(api, "getMqttStatus").mockResolvedValue({ device_id: "a".repeat(32), enabled: false, state: "disabled", error: null, last_published_at_unix: null });
+  vi.spyOn(api, "getMqttStatus").mockResolvedValue(mqttStatus());
   vi.spyOn(api, "getGatewayStatistics").mockResolvedValue({ sample: statistics().sample, monitors: [] });
   vi.spyOn(api, "getVnStatReporting").mockResolvedValue(vnstatReporting());
   vi.spyOn(api, "getSystemUpgrade").mockResolvedValue({ enabled: false, repository: null, job: null, last_successful_version: null });
-  vi.spyOn(api, "getDiscoveredInterfaces").mockImplementation(async () => (store.state.data?.desired.interfaces ?? []).map((link, index) => ({ name: link.name, kind: link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: [...link.addresses], ownership: "managed" as const })));
+  vi.spyOn(api, "getDiscoveredInterfaces").mockImplementation(async () => (store.state.data?.desired.interfaces ?? []).map((link, index) => ({ name: link.name, kind: link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: [...link.addresses], ownership: "managed" as const, role: null, addressing_type: null })));
 });
 async function render(component: Component, path: string, props: Record<string, unknown> = {}) {
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component }] });
@@ -82,6 +82,31 @@ function cellValue(cell: Pick<DOMWrapper<Element>, "element">): string {
   return (content.textContent ?? "").trim();
 }
 describe("October 17 frontend workflows", () => {
+  it.each(["lan", "wan", "unassigned"] as const)("shows DHCP relay interface display names and the %s role in the existing column", async role => {
+    const store = useControllerStore();
+    store.draft = cloneConfig(store.state.data!.desired);
+    const link = store.draft.interfaces[0]!;
+    link.role = role;
+    link.metadata = { display_name: "Office network ".repeat(8).trim(), description: "Not the display name" };
+    const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    expect(wrapper.get(".relay-interface-name").text()).toBe(link.name);
+    expect(wrapper.get(".relay-interface-role").text()).toBe(role === "unassigned" ? "Unassigned" : role.toUpperCase());
+    expect(wrapper.get(".relay-interface-description").text()).toBe(link.metadata.display_name);
+    expect(wrapper.get(".relay-interface-description").attributes("title")).toBe(link.metadata.display_name);
+    expect(wrapper.text()).not.toContain("Not the display name");
+    expect(wrapper.findAll("thead th")).toHaveLength(5);
+    wrapper.unmount();
+  });
+  it("keeps DHCP relay interface names and roles when no display name is configured", async () => {
+    const store = useControllerStore();
+    delete store.state.data!.desired.interfaces[0]!.metadata;
+    const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
+    expect(wrapper.get(".relay-interface-name").text()).toBe("lab0");
+    expect(wrapper.get(".relay-interface-role").text()).toBe("LAN");
+    expect(wrapper.find(".relay-interface-description").exists()).toBe(false);
+    expect(store.draft).toBeNull();
+    wrapper.unmount();
+  });
   it("shows recovering workers and retains last failure history without changing configuration", async () => {
     const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
     const wrapper = mount(ServiceWorkerStatus, { props: { status: {
@@ -308,16 +333,82 @@ describe("October 17 frontend workflows", () => {
     expect(upload.mock.calls[0]?.[1]?.aborted).toBe(true);
     resolve({ password_ref: "a".repeat(32) }); await flushPromises(); expect(useControllerStore().draft).toBeNull();
   });
-  it("formats the Home Assistant broker acknowledgment in UTC without implying ingestion", async () => {
-    vi.mocked(api.getMqttStatus).mockResolvedValue({ device_id: "a".repeat(32), enabled: true, state: "running", error: null, last_published_at_unix: Date.UTC(2026, 9, 24, 12, 34, 56) / 1000 });
+  it("keeps the MQTT publisher row compact when broker timing is available", async () => {
+    vi.mocked(api.getMqttStatus).mockResolvedValue({ ...mqttStatus(), enabled: true, state: "running", last_published_at_unix: Date.UTC(2026, 9, 24, 12, 34, 56) / 1000 });
     const wrapper = await render(HomeAssistantView, "/settings/home-assistant");
-    expect(wrapper.text()).toContain("Last broker acknowledgment (UTC): 2026-10-24 12:34:56");
+    expect(wrapper.text()).not.toContain("Last broker acknowledgment");
     const rows = wrapper.findAll(".setting-row");
     expect(rows[0]!.get(".setting-name").text()).toBe("Publisher");
     expect(rows[0]!.text()).toContain("running");
+    expect(rows[0]!.get(".setting-control").text()).toBe("running");
     expect(rows[1]!.get(".setting-name").text()).toBe("Enable MQTT");
     expect(wrapper.findAll(".status-chip")).toHaveLength(1);
     expect(wrapper.find(".status-chip").attributes("data-color")).toBe("success"); wrapper.unmount();
+  });
+  it("shows only current MQTT status and actionable errors through retry, recovery and disable", async () => {
+    const sample = { ...mqttStatus(), enabled: true, state: "reconnecting", error: "MQTT connection reset by peer",
+      connection_attempts: "18446744073709551615", reconnect_count: "9007199254740993",
+      last_connected_at_unix: Date.UTC(2026, 9, 30, 20, 50, 0) / 1000,
+      last_failure: { category: "connection_reset", message: "MQTT connection reset by peer", os_error_code: 0, at_unix: Date.UTC(2026, 9, 30, 20, 51, 43) / 1000 },
+    };
+    vi.mocked(api.getMqttStatus).mockResolvedValue(sample);
+    const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
+    const wrapper = await render(HomeAssistantView, "/settings/mqtt-streaming");
+    expect(wrapper.find(".mqtt-diagnostics").exists()).toBe(false);
+    for (const label of ["Attempts / retries", "Last broker connection", "Last failure", "OS code", "18446744073709551615"]) {
+      expect(wrapper.text()).not.toContain(label);
+    }
+    expect(wrapper.text()).toContain("Current error: MQTT connection reset by peer");
+    expect(wrapper.find(".status-chip").attributes("data-color")).toBe("warning");
+    store.mqttStatus.data = { ...sample, connection_attempts: "18446744073709551615" };
+    await flushPromises();
+    expect(wrapper.text()).toContain("Current error: MQTT connection reset by peer");
+    store.mqttStatus.data = { ...sample, state: "running", error: null, last_published_at_unix: sample.last_connected_at_unix };
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Current error:");
+    expect(wrapper.text()).not.toContain("MQTT connection reset by peer");
+    expect(wrapper.find(".status-chip").attributes("data-color")).toBe("success");
+    expect(wrapper.findAll(".status-chip")).toHaveLength(1);
+    expect(wrapper.text()).not.toContain("Last broker acknowledgment");
+    expect(store.mqttStatus.data.last_failure).toEqual(sample.last_failure);
+    store.mqttStatus.data = { ...sample, state: "disabled", enabled: false, error: null };
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Current error:");
+    expect(wrapper.text()).not.toContain("MQTT connection reset by peer");
+    expect(wrapper.find(".status-chip").attributes("data-color")).toBe("default");
+    store.mqttStatus.stale = true; store.mqttStatus.error = "HTTP 403: state.read required";
+    await flushPromises();
+    expect(wrapper.text()).toContain("Stale");
+    expect(wrapper.text()).toContain("HTTP 403: state.read required");
+    expect(store.draft).toBeNull(); expect(cloneConfig(store.state.data!.desired)).toEqual(desired);
+    wrapper.unmount();
+  });
+  it("keeps MQTT history hidden and renders current errors only as text", async () => {
+    const wrapper = await render(HomeAssistantView, "/settings/mqtt-streaming"), store = useControllerStore();
+    expect(wrapper.find(".mqtt-diagnostics").exists()).toBe(false);
+    const message = '<img src=x onerror="alert(1)">';
+    store.mqttStatus.data = { ...mqttStatus(), state: "running", last_failure: {
+      category: "future_failure", message, os_error_code: null, at_unix: 0,
+    } };
+    await flushPromises();
+    expect(wrapper.text()).not.toContain(message);
+    expect(wrapper.text()).not.toContain("future_failure");
+    expect(wrapper.find("img").exists()).toBe(false);
+    expect(wrapper.find(".status-chip").attributes("data-color")).toBe("success");
+    store.mqttStatus.data = { ...store.mqttStatus.data, state: "error", error: message };
+    await flushPromises();
+    expect(wrapper.text()).toContain(`Current error: ${message}`);
+    expect(wrapper.find("img").exists()).toBe(false);
+    expect(wrapper.find(".status-chip").attributes("data-color")).toBe("error");
+    store.mqttStatus.data = mqttStatus();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Current error:");
+    expect(wrapper.text()).not.toContain("future_failure");
+    store.mqttStatus.data = null; store.mqttStatus.stale = true;
+    await flushPromises();
+    expect(wrapper.find(".mqtt-diagnostics").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Unavailable");
+    wrapper.unmount();
   });
   it("keeps probe details stable while a background refresh is pending and updates on completion", async () => {
     vi.useFakeTimers();
@@ -1114,8 +1205,8 @@ describe("October 17 frontend workflows", () => {
   });
   it("separates physical inventory from dummy interfaces and read-only loopback", async () => {
     useControllerStore().state.data!.desired.interfaces = [];
-    const link = { name: "eth0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: [] as string[], ownership: "unmanaged" as const };
-    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([link, { ...link, name: "dummy0", kind: "dummy" }, { ...link, name: "lo", kind: "loopback", ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] }]);
+    const link = { name: "eth0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: [] as string[], ownership: "unmanaged" as const, role: null, addressing_type: null };
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([link, { ...link, name: "dummy0", kind: "dummy" }, { ...link, name: "lo", kind: "loopback", ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] }]);
     const physical = await render(InterfaceInventory, "/interfaces");
     try {
       expect(physical.findAll("tbody tr").map(row => cellValue(row.find("td")))).toEqual(["eth0"]);
@@ -1128,22 +1219,57 @@ describe("October 17 frontend workflows", () => {
       expect(loopback.text()).toContain("Read-only"); expect(loopback.find("button").exists()).toBe(false);
     } finally { loopbacks.unmount(); }
   });
+  it.each([
+    { up: true, addresses: ["127.0.0.1/8", "::1/128"] },
+    { up: false, addresses: ["127.0.0.1/8"] },
+    { up: true, addresses: [] },
+    { up: false, addresses: [] },
+  ])("keeps kernel loopback labels fixed and read-only with $up admin state and $addresses", async ({ up, addresses }) => {
+    const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
+    store.state.data = null;
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{
+      name: "kernel0", kind: "loopback", ownership: "loopback", index: 1, mac: null, mtu: 65536, up, addresses,
+      role: "loopback", addressing_type: "static",
+    }]);
+    const wrapper = await render(InterfaceInventory, "/loopbacks", { loopbacks: true });
+    try {
+      const cells = wrapper.get("tbody tr").findAll("td").map(cellValue);
+      expect(cells).toEqual(["kernel0", "Loopback", up ? "Up" : "Down", "65536", addresses.join(", ") || "None", "Static", "Read-only"]);
+      expect(wrapper.find("tbody button, tbody select, tbody input").exists()).toBe(false);
+      expect(store.draft).toBeNull();
+      expect(submit).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+  it.each([
+    { kind: "ethernet" }, { kind: "dummy" },
+    { kind: "vlan", vlan: { parent: "lab0", id: 10 } },
+    { kind: "wireguard", wireguard: { key_ref: "wg-key", listen_port: 51820, peers: [] } },
+  ])("never accepts a managed Loopback role on $kind", fields => {
+    const desired = config(), link = { ...desired.interfaces[0]!, ...fields };
+    expect(configSchema.safeParse({ ...desired, interfaces: [{ ...link, role: "wan" }] }).success).toBe(true);
+    const result = configSchema.safeParse({ ...desired, interfaces: [{ ...link, role: "loopback" }] });
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues.map(issue => issue.path.join("."))).toContain("interfaces.0.role");
+  });
   it("edits dummy settings from Loopbacks without copying live addresses or writing to the firewall", async () => {
     const store = useControllerStore(), before = config(), submit = vi.spyOn(api, "submitPackage");
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
-      { name: "lab0", kind: "dummy", index: 2, mac: null, mtu: 1500, up: true, addresses: ["203.0.113.99/32"], ownership: "managed" },
-      { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, addresses: ["127.0.0.1/8", "::1/128"], ownership: "loopback" },
+      { name: "lab0", kind: "dummy", index: 2, mac: null, mtu: 1500, up: true, addresses: ["203.0.113.99/32"], ownership: "managed", role: null, addressing_type: null },
+      { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, addresses: ["127.0.0.1/8", "::1/128"], ownership: "loopback", role: "loopback", addressing_type: "static" },
     ]);
     const wrapper = await render(LoopbacksView, "/loopbacks");
     try {
       expect(wrapper.get("tbody").text()).toContain("203.0.113.99/32");
-      expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Name", "Role", "Admin state", "MTU", "Active Addresses", "Actions"]);
+      expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Name", "Role", "Admin state", "MTU", "Active Addresses", "Mode", "Actions"]);
       expect(wrapper.text()).not.toMatch(/dummy/i);
       const loopback = wrapper.findAll("tbody tr").find(row => cellValue(row.find("td")) === "lo")!;
       expect(loopback.find("button").exists()).toBe(false); expect(loopback.text()).toContain("Read-only");
       await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
       const fields = wrapper.findAllComponents(FieldInput);
       expect(fields.map(field => field.props("field").key)).toEqual(["name", "role", "addresses"]);
+      expect(fields.find(field => field.props("field").key === "role")!.props("field").choices).toEqual([
+        { title: "WAN", value: "wan" }, { title: "LAN", value: "lan" }, { title: "Unassigned", value: "unassigned" },
+      ]);
       expect(cellValue(wrapper.get('[aria-label="Loopback editor"]').findAll("td")[3]!)).toBe("1500");
       expect(wrapper.find('input[type="checkbox"]').exists()).toBe(true);
       expect(wrapper.text()).not.toContain("not carrier readiness");
@@ -1188,7 +1314,7 @@ describe("October 17 frontend workflows", () => {
   });
   it("adopts an unmanaged dummy through Loopbacks without treating live addresses as configuration", async () => {
     const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
-    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "dummy1", kind: "dummy", index: 3, mac: null, mtu: 9000, up: false, addresses: ["203.0.113.99/32"], ownership: "unmanaged" }]);
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "dummy1", kind: "dummy", index: 3, mac: null, mtu: 9000, up: false, addresses: ["203.0.113.99/32"], ownership: "unmanaged", role: null, addressing_type: null }]);
     const wrapper = await render(LoopbacksView, "/loopbacks");
     try {
       await wrapper.findAll("button").find(button => button.text() === "Manage this interface")!.trigger("click");
@@ -1502,8 +1628,8 @@ describe("October 17 frontend workflows", () => {
       { ...base, name: "wg0", kind: "wireguard", wireguard: { key_ref: "key", listen_port: 51820, peers: [] } },
     );
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
-      ...store.state.data!.desired.interfaces.map((link, index) => ({ name: link.name, kind: link.name === "vlan30" ? "unknown" : link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: link.addresses, ownership: "managed" as const })),
-      { name: "unmanaged20", kind: "vlan", index: 20, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged" },
+      ...store.state.data!.desired.interfaces.map((link, index) => ({ name: link.name, kind: link.name === "vlan30" ? "unknown" : link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: link.addresses, ownership: "managed" as const, role: null, addressing_type: null })),
+      { name: "unmanaged20", kind: "vlan", index: 20, mac: null, mtu: 1500, up: true, addresses: [], ownership: "unmanaged", role: null, addressing_type: null },
     ]);
     const wrapper = await render(InterfacesView, "/interfaces");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
@@ -2102,8 +2228,8 @@ describe("October 17 frontend workflows", () => {
   });
   it("explicitly manages a discovered NIC without copying live addresses or writing", async () => {
     const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage");
-    const link = { name: "eth0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:01", mtu: 1500, up: true, addresses: ["192.0.2.99/24"], ownership: "unmanaged" as const };
-    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([link, { ...link, name: "lo", kind: "loopback", ownership: "loopback" }]);
+    const link = { name: "eth0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:01", mtu: 1500, up: true, addresses: ["192.0.2.99/24"], ownership: "unmanaged" as const, role: null, addressing_type: null };
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([link, { ...link, name: "lo", kind: "loopback", ownership: "loopback", role: "loopback", addressing_type: "static" }]);
     const wrapper = await render(InterfacesView, "/interfaces");
     await flushPromises();
     expect(wrapper.findAll('button[aria-label="Manage this interface"]')).toHaveLength(1);
@@ -2126,10 +2252,10 @@ describe("October 17 frontend workflows", () => {
     const store = useControllerStore();
     store.state.data!.desired.interfaces[0] = { ...config().interfaces[0]!, kind: "ethernet", addresses: [], metadata: { display_name: "Office", description: "" } };
     store.state.data!.desired.dhcp_clients = { lab0: { client_id: "", hostname: "", route_metric: 0, use_mtu: false, use_domains: "no" } };
-    const link = { name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: ["192.0.2.99/24", "2001:db8::99/64"], ownership: "managed" as const };
+    const link = { name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: ["192.0.2.99/24", "2001:db8::99/64"], ownership: "managed" as const, role: null, addressing_type: null };
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
       link,
-      { ...link, name: "lo", kind: "loopback", ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] },
+      { ...link, name: "lo", kind: "loopback", ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] },
       { ...link, name: "spare0", ownership: "unmanaged", up: false, addresses: [] },
       { ...link, name: "br0", kind: "bridge", ownership: "unmanaged", addresses: ["198.51.100.1/24"] },
     ]);
@@ -2174,7 +2300,7 @@ describe("October 17 frontend workflows", () => {
     store.state.data!.desired.interfaces[0]!.role = "wan";
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{
       name: "lab0", kind: "dummy", index: 2, mac: null, mtu: 1500, up: true,
-      addresses: ["192.0.2.99/24"], ownership: "managed",
+      addresses: ["192.0.2.99/24"], ownership: "managed", role: null, addressing_type: null,
     }]);
     const wrapper = await render(LoopbacksView, "/loopbacks");
     try {
@@ -2192,7 +2318,7 @@ describe("October 17 frontend workflows", () => {
     const store = useControllerStore();
     store.state.data = null; store.state.error = "Configuration denied";
     store.runtime.data = null; store.runtime.error = "Runtime denied";
-    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] }]);
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] }]);
     const wrapper = await render(LoopbacksView, "/loopbacks");
     expect(wrapper.find("tbody").text()).toContain("::1/128");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
@@ -2514,8 +2640,8 @@ describe("October 17 frontend workflows", () => {
     initial.interfaces = [{ ...original, kind: "ethernet", addresses: original.addresses.filter(address => !address.includes(":")) }];
     store.state.data!.desired = initial;
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([
-      { name: original.name, kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, ownership: "managed", addresses: ["192.0.2.99/24", "fe80::1/64"] },
-      { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", addresses: ["127.0.0.1/8", "::1/128"] },
+      { name: original.name, kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, ownership: "managed", role: null, addressing_type: null, addresses: ["192.0.2.99/24", "fe80::1/64"] },
+      { name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] },
     ]);
     const physical = await render(InterfacesView, "/interfaces");
     expect(physical.findAll("th").map(header => header.text())).not.toContain("IPv6");
@@ -2556,7 +2682,7 @@ describe("October 17 frontend workflows", () => {
     draft.interfaces[0]!.kind = "ethernet";
     draft.interfaces[0]!.addresses = ["10.10.0.1/24"];
     store.stage(draft);
-    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed" }]);
+    vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lab0", kind: "ethernet", index: 2, mac: null, mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed", role: null, addressing_type: null }]);
     const wrapper = await render(InterfacesView, "/interfaces"); await flushPromises();
     expect(wrapper.findAll("table")).toHaveLength(1);
     expect(wrapper.findAll("h1")).toHaveLength(0);

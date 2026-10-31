@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LosslessNumber } from "lossless-json";
 import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
 import { dateVersionSchema } from "@/services/versions";
 import { sandoSchema } from "@/services/sandoState";
@@ -104,6 +105,7 @@ export const interfaceSchema = z.discriminatedUnion("kind", [
 export const discoveredInterfacesSchema = z.array(z.object({
   name: z.string(), kind: z.string(), index: integer.nullable(), mac: z.string().nullable(),
   mtu: integer, up: z.boolean(), addresses: z.array(z.string()), ownership: z.enum(["managed", "unmanaged", "loopback"]),
+  role: z.literal("loopback").nullable(), addressing_type: z.literal("static").nullable(),
 }));
 export type DiscoveredInterface = z.infer<typeof discoveredInterfacesSchema>[number];
 export const dhcpRetrySchema = z.object({ interface: z.string(), status: z.literal("retrying") }).strict();
@@ -241,11 +243,20 @@ export const mqttSchema = z.object({
 }).strict();
 export type MqttConfig = z.infer<typeof mqttSchema>;
 export const mqttPasswordReferenceSchema = z.object({ password_ref: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
+const mqttCountSchema = z.union([integer.nonnegative(), z.instanceof(LosslessNumber)])
+  .transform(value => value.toString())
+  .refine(value => /^(0|[1-9]\d*)$/.test(value) && BigInt(value) <= 18446744073709551615n, "Use an unsigned 64-bit integer count");
 export const mqttStatusSchema = z.object({
   device_id: z.string(), enabled: z.boolean(),
   state: z.string(),
   error: z.string().nullable(), last_published_at_unix: integer.nonnegative().nullable(),
+  connection_attempts: mqttCountSchema, reconnect_count: mqttCountSchema,
+  last_connected_at_unix: integer.nonnegative().nullable(),
+  last_failure: z.object({
+    category: z.string(), message: z.string(), os_error_code: integer.nullable(), at_unix: integer.nonnegative(),
+  }).strict().nullable(),
 }).strict();
+export type MqttStatus = z.infer<typeof mqttStatusSchema>;
 export const dynamicDnsSchema = z.object({
   ...annotation,
   name: z.string(), enabled: z.boolean(), source_interface: z.string(), address_source: z.enum(["interface", "public_ip"]),

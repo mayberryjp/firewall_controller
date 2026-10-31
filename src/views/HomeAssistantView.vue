@@ -5,8 +5,6 @@ import { isInitialLoad } from "@/services/datasets";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import { uploadMqttPassword } from "@/services/netcontrol";
 import { mqttSchema } from "@/types/domain";
-import { useTimestamps } from "@/composables/useTimestamps";
-const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.desired);
@@ -92,13 +90,7 @@ async function stage(): Promise<void> {
             v-if="store.mqttStatus.error || publisher?.error"
             class="setting-desc"
           >
-            {{ store.mqttStatus.error || publisher?.error }}
-          </p>
-          <p
-            v-if="publisher?.last_published_at_unix != null"
-            class="setting-desc"
-          >
-            Last broker acknowledgment ({{ timeZone }}): {{ formatTimestamp(publisher.last_published_at_unix * 1000) }}
+            {{ store.mqttStatus.error ? store.mqttStatus.error : `Current error: ${publisher?.error}` }}
           </p>
         </div>
       </div>
