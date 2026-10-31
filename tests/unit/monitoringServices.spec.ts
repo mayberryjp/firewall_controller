@@ -3,7 +3,42 @@ import { configSchema, gatewayMonitorSchema, gatewayStatisticsPageSchema, gatewa
 import { decodeJson, encodeJson } from "@/services/json";
 import { differences, equalConfig, requiredPermissions, serviceRepairPermissions, validateConfig, validateServerHost } from "@/services/configuration";
 import { gatewayHealth, gatewayMetricIndicator, gatewaySampleState, formatMetric } from "@/services/gatewayHealth";
-import { config, gatewayStatistics, monitor, runtime, statistics } from "../fixtures";
+import { config, gatewayStatistics, monitor, runtime, statistics, trafficStatistics } from "../fixtures";
+
+describe("aggregate host uptime contract", () => {
+  it("preserves zero and fractional host measurements independently of network scope and summed idle", () => {
+    for (const seconds of [0, 86400.5]) {
+      const sample = trafficStatistics();
+      sample.uptime.data = { uptime_seconds: seconds, idle_seconds: 999999999.25 };
+      const parsed = statisticsSchema.parse(sample);
+      expect(parsed.uptime).toEqual(sample.uptime);
+      expect(parsed.sample.scope).toBe("managed:test");
+    }
+  });
+  it("preserves networking statistics when uptime is unavailable or simulated", () => {
+    const sample = trafficStatistics();
+    sample.sample.status = "partial";
+    sample.uptime = { scope: "host", collected_at: sample.sample.collected_at, status: "unavailable", data: null, error: "Malformed /proc/uptime" };
+    const parsed = statisticsSchema.parse(sample);
+    expect(parsed.uptime.data).toBeNull();
+    expect(parsed.uptime.error).toBe("Malformed /proc/uptime");
+    expect(parsed.interfaces).toEqual(sample.interfaces);
+    expect(statisticsSchema.parse(statistics()).uptime).toEqual(statistics().uptime);
+  });
+  it.each([-1, NaN, Infinity, -Infinity, "123", null])("rejects invalid uptime or idle measurement %s", value => {
+    const sample = trafficStatistics();
+    for (const key of ["uptime_seconds", "idle_seconds"]) {
+      expect(statisticsSchema.safeParse({
+        ...sample, uptime: { ...sample.uptime, data: { ...sample.uptime.data, [key]: value } },
+      }).success).toBe(false);
+    }
+  });
+  it("requires the aggregate uptime object", () => {
+    const sample: Record<string, unknown> = { ...statistics() };
+    delete sample.uptime;
+    expect(statisticsSchema.safeParse(sample).success).toBe(false);
+  });
+});
 
 describe("gateway numeric and configuration contracts", () => {
   it.each([

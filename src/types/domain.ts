@@ -539,6 +539,16 @@ const decimal = z.string().regex(/^-?\d+$/);
 export const statisticsSchema = z.object({
   bgp: bgpStatusSchema.optional(),
   sample: sampleSchema,
+  uptime: z.object({
+    scope: z.enum(["host", "simulator"]),
+    collected_at: timestamp.nullable(),
+    status: z.enum(["available", "unavailable", "simulated"]),
+    data: z.object({
+      uptime_seconds: z.number().finite().nonnegative(),
+      idle_seconds: z.number().finite().nonnegative(),
+    }).nullable(),
+    error: z.string().nullable(),
+  }),
   link_diagnostics: linkDiagnosticsSchema.optional(),
   gateways: list(gatewayStatisticsSchema).optional(),
   interfaces: list(z.object({

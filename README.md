@@ -504,6 +504,15 @@ the API's per-request `started_at` is a collection timestamp, not a counter-rese
 identifier. Simulated samples are not shown as measured traffic. Leaving the page stops its
 traffic polling and discards its chart history. Chart times use the saved system timezone.
 
+The Overview System stats box starts with host uptime from aggregate statistics
+`uptime.data.uptime_seconds` and the current appliance version from
+`desired.software.version`. Initial reads show loading; missing readings show
+Unavailable, and failed refreshes retain the last known value with the read
+error in its tooltip. Uptime uses existing statistics polling, accepts zero
+and fractional seconds, and never substitutes daemon uptime or simulated
+host measurements. Deploy a backend supporting the required aggregate
+`uptime` object; the separate host-health API still supplies resource metrics.
+
 On Overview, click a system metric name to open its inline live ApexChart
 (CPU, memory, swap, load, temperature or fan); uptime and filesystem remain
 plain text. Charts retain the latest 120 host-health samples while the widget

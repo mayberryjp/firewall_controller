@@ -6,7 +6,7 @@ import type { ApexOptions } from "apexcharts";
 import OverviewSystem from "@/components/feature/OverviewSystem.vue";
 import OverviewCounters from "@/components/feature/OverviewCounters.vue";
 import { useControllerStore } from "@/stores/controller";
-import { healthSnapshot, state, statistics } from "../fixtures";
+import { healthSnapshot, state, statistics, trafficStatistics } from "../fixtures";
 
 vi.mock("vue3-apexcharts", () => ({ default: {
   name: "ResourceChart", props: ["options", "series"], template: '<div class="apex-chart-stub" />',
@@ -22,6 +22,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   const store = useControllerStore();
   store.hostHealth.data = healthSnapshot(); store.hostHealth.stale = false;
+  store.statistics.data = trafficStatistics(); store.statistics.stale = false;
 });
 afterEach(() => wrapper?.unmount());
 function system() { wrapper = mount(OverviewSystem, { global: { stubs } }); }
@@ -38,6 +39,85 @@ async function sample(uptime: number) {
 }
 
 describe("Overview live views", () => {
+  it("shows aggregate host uptime and the running software version first as plain text", async () => {
+    const store = useControllerStore();
+    store.state.data = state(); store.state.stale = false;
+    store.statistics.data = trafficStatistics(89961);
+    system();
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows.slice(0, 3).map(row => row.get("th").text())).toEqual(["Host uptime", "Current version", "CPU usage"]);
+    expect(rows[0]!.get(".metric-value").text()).toBe("1d 1h 1m");
+    expect(rows[1]!.get(".metric-value").text()).toBe(store.state.data.desired.software!.version);
+    expect(rows.slice(0, 2).every(row => !row.find("button").exists())).toBe(true);
+    expect(wrapper.findAll("tbody th").filter(row => row.text() === "Host uptime")).toHaveLength(1);
+    store.statistics.data = trafficStatistics(3);
+    await sample(103);
+    expect(wrapper.findAll("tbody tr")[0]!.get(".metric-value").text()).toBe("0d 0h 1m");
+  });
+  it("keeps the top fields loading until their initial reads succeed", async () => {
+    const store = useControllerStore();
+    store.statistics.data = null;
+    system();
+    expect(wrapper.findAll("tbody tr").slice(0, 2).map(row => row.get(".metric-value").text())).toEqual(["Loading...", "Loading..."]);
+    store.state.data = state(); store.state.stale = false;
+    store.statistics.data = trafficStatistics(3);
+    await sample(103);
+    expect(wrapper.findAll("tbody tr").slice(0, 2).map(row => row.get(".metric-value").text())).toEqual(["0d 0h 1m", store.state.data.desired.software!.version]);
+  });
+  it("shows unavailable fields and read errors after initial failures", async () => {
+    const store = useControllerStore();
+    store.statistics.data = null;
+    system();
+    store.statistics.error = "Statistics unavailable";
+    store.state.error = "State unavailable";
+    await flushPromises();
+    const rows = wrapper.findAll("tbody tr").slice(0, 2);
+    expect(rows.map(row => row.get(".metric-value").text())).toEqual(["Unavailable", "Unavailable"]);
+    expect(rows[1]!.attributes("title")).toBe("State unavailable");
+    expect(rows[0]!.attributes("title")).toBe("Statistics unavailable");
+  });
+  it("does not fabricate missing uptime or software metadata and identifies stale versions", async () => {
+    const store = useControllerStore();
+    store.state.data = state(); store.state.stale = false;
+    delete store.state.data.desired.software;
+    store.statistics.data!.sample.status = "partial";
+    store.statistics.data!.uptime = { scope: "host", collected_at: store.statistics.data!.sample.collected_at, status: "unavailable", data: null, error: "Uptime not supported" };
+    system();
+    expect(wrapper.findAll("tbody tr").slice(0, 2).map(row => row.get(".metric-value").text())).toEqual(["Unavailable", "Unavailable"]);
+    expect(wrapper.findAll("tbody tr")[0]!.attributes("title")).toBe("Uptime not supported");
+    expect(wrapper.findAll("tbody tr").find(row => row.get("th").text() === "Memory")!.get(".metric-value").text()).not.toBe("Unavailable");
+    store.state.data = state(); store.state.stale = true;
+    await flushPromises();
+    expect(wrapper.findAll("tbody tr")[1]!.attributes("title")).toBe("Last known value");
+    store.state.error = "State refresh failed";
+    await flushPromises();
+    expect(wrapper.findAll("tbody tr")[1]!.attributes("title")).toBe("State refresh failed");
+    expect(wrapper.findAll("tbody tr")[1]!.get(".metric-value").text()).toBe(store.state.data.desired.software!.version);
+  });
+  it("accepts zero and fractional uptime without using summed idle or host-health uptime", async () => {
+    const store = useControllerStore();
+    system();
+    for (const [seconds, expected] of [[0, "0d 0h 0m"], [86400.5, "1d 0h 0m"]] as const) {
+      store.statistics.data = trafficStatistics();
+      store.statistics.data.uptime.data = { uptime_seconds: seconds, idle_seconds: 999999999.25 };
+      await flushPromises();
+      expect(wrapper.findAll("tbody tr")[0]!.get(".metric-value").text()).toBe(expected);
+    }
+    store.statistics.stale = true; store.statistics.error = "Statistics refresh failed";
+    await flushPromises();
+    expect(wrapper.findAll("tbody tr")[0]!.get(".metric-value").text()).toBe("1d 0h 0m");
+    expect(wrapper.findAll("tbody tr")[0]!.attributes("title")).toBe("Statistics refresh failed");
+  });
+  it("never falls back to measured host-health uptime for simulated aggregate readings", async () => {
+    const store = useControllerStore();
+    store.statistics.data = statistics();
+    system();
+    expect(wrapper.findAll("tbody tr")[0]!.get(".metric-value").text()).toBe("Unavailable");
+    expect(wrapper.findAll("tbody tr")[0]!.attributes("title")).toBe("Simulated host uptime is unavailable");
+    store.statistics.data.uptime.data = { uptime_seconds: 123, idle_seconds: 456 };
+    await flushPromises();
+    expect(wrapper.findAll("tbody tr")[0]!.get(".metric-value").text()).toBe("Unavailable");
+  });
   it("makes only the six resource names clickable and toggles an inline chart", async () => {
     system();
     expect(wrapper.findAll("th button").map(button => button.text())).toEqual([

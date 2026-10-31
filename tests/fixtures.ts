@@ -149,6 +149,7 @@ export function wireguardDns(): WireGuardDNS {
 export function statistics(): Statistics {
   return {
     sample: { scope: "simulator:test", started_at: new Date().toISOString(), collected_at: new Date().toISOString(), status: "simulated" },
+    uptime: { scope: "simulator", collected_at: null, status: "simulated", data: null, error: "Simulated host uptime is unavailable" },
     interfaces: [{ name: "lab0", kind: "dummy", ownership: "managed", mtu: 1500, admin_up: true, oper_state: "UNKNOWN", status: "simulated", counters: { rx_bytes: "18446744073709551615", tx_bytes: "0" } }],
     protocols: [{ name: "snmp", status: "available", groups: { Tcp: { MaxConn: "-1" } } }],
   };
@@ -158,6 +159,10 @@ export function trafficStatistics(seconds = 0, increment = 0n): Statistics {
     sample: {
       scope: "managed:test", started_at: new Date(Date.UTC(2026, 9, 27, 12, 0, seconds)).toISOString(),
       collected_at: new Date(Date.UTC(2026, 9, 27, 12, 0, seconds, 123)).toISOString(), status: "available",
+    },
+    uptime: {
+      scope: "host", collected_at: new Date(Date.UTC(2026, 9, 27, 12, 0, seconds, 123)).toISOString(),
+      status: "available", data: { uptime_seconds: 100 + seconds, idle_seconds: 200 + seconds }, error: null,
     },
     interfaces: ["eth0", "eth1"].map((name, index) => ({
       name, index: index + 1, kind: "ethernet", ownership: "managed", mtu: 1500,

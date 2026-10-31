@@ -21,7 +21,9 @@ const detail = computed(() => store.hostHealth.error ?? (snapshot.value ? `${sna
 const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const rows = computed(() => {
   const sections = snapshot.value?.sections;
-  const memory = sections?.memory.data, load = sections?.load.data, uptime = sections?.uptime.data;
+  const memory = sections?.memory.data, load = sections?.load.data;
+  const uptime = store.statistics.data?.uptime;
+  const uptimeData = uptime?.scope === "host" && uptime.status === "available" && store.statistics.data?.sample.status !== "simulated" ? uptime.data : null;
   const root = sections?.filesystems.data?.find(item => item.mount_point === "/")?.usage.data;
   const temperatures = [
     ...(sections?.thermal.data ?? []).flatMap(item => item.data ? [{ label: item.data.type, value: item.data.temperature_millicelsius }] : []),
@@ -32,11 +34,12 @@ const rows = computed(() => {
   const swap = memory ? usagePercent(memory.swap_used_bytes, memory.bytes.SwapTotal) : null;
   const disk = root ? usagePercent(root.used_bytes, root.total_bytes) : null;
   return [
+    { name: "Host uptime", value: uptimeData ? formatUptime(uptimeData.uptime_seconds) : isInitialLoad(store.statistics) ? "Loading..." : "Unavailable", percent: null, detail: store.statistics.error ?? uptime?.error ?? (store.statistics.data && store.statistics.stale ? "Last known value" : undefined) },
+    { name: "Current version", value: store.state.data?.desired.software?.version ?? (isInitialLoad(store.state) ? "Loading..." : "Unavailable"), percent: null, detail: store.state.error ?? (store.state.data && store.state.stale ? "Last known value" : undefined) },
     { name: "CPU usage", chart: { unit: "%", values: [cpu.value] }, value: cpu.value === null ? (sections?.cpu.data ? "Collecting" : "Unavailable") : "Busy time", percent: cpu.value, detail: "Approximate busy time; excludes idle and I/O wait. Green <70%, amber 70-89.99%, red >=90%." },
     { name: "Memory", chart: { unit: "%", values: [used] }, value: memory ? `${formatBytes(memory.used_bytes)} / ${formatBytes(memory.bytes.MemTotal)}` : "Unavailable", percent: used, detail: "Used = total minus available memory; reclaimable cache remains available." },
     { name: "Swap", chart: { unit: "%", values: [swap] }, value: memory ? (memory.bytes.SwapTotal === "0" ? "Not configured" : `${formatBytes(memory.swap_used_bytes)} / ${formatBytes(memory.bytes.SwapTotal)}`) : "Unavailable", percent: swap },
     { name: "Load (1 / 5 / 15 min)", chart: { unit: "Load", values: [load?.one ?? null, load?.five ?? null, load?.fifteen ?? null], names: ["1 min", "5 min", "15 min"] }, value: load ? [load.one, load.five, load.fifteen].map(value => number.format(value)).join(" / ") : "Unavailable", percent: null },
-    { name: "Uptime", value: uptime ? formatUptime(uptime.uptime_seconds) : "Unavailable", percent: null },
     { name: "Root filesystem", value: root ? `${formatBytes(root.used_bytes)} / ${formatBytes(root.total_bytes)}` : "Unavailable", percent: disk, detail: root ? `${formatBytes(root.available_bytes)} available (excludes reserved space)${root.read_only ? "; read-only" : ""}` : sections?.filesystems.error ?? undefined },
     { name: "Temperature (highest)", chart: { unit: "\u00b0C", values: [temperatures[0] ? temperatures[0].value / 1000 : null] }, value: temperatures[0] ? `${number.format(temperatures[0].value / 1000)} \u00b0C` : "Unavailable", percent: null, detail: temperatures[0]?.label },
     { name: "Fan", chart: { unit: "RPM", values: [fan?.data?.value ?? null] }, value: fan?.data ? `${number.format(fan.data.value)} RPM` : "Unavailable", percent: null, detail: fan?.data?.label ?? fan?.chip },
