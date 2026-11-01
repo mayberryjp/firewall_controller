@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { configSchema, mdnsSchema, mdnsStatusPageSchema, runtimeSchema, revisionDetailSchema, transactionSchema } from "@/types/domain";
 import { differenceContext, differences, equalConfig, importConfig, normalize, requiredPermissions, serviceRepairPermissions, validateConfig } from "@/services/configuration";
-import { mdnsInterfaces } from "@/services/mdns";
+import { mdnsInterfaces, mdnsPresets, normalizeMDNSFilter } from "@/services/mdns";
 import { decodeJson, encodeJson } from "@/services/json";
 import { config, mdnsStatus, runtime, transaction } from "../fixtures";
 
@@ -18,6 +18,27 @@ function candidate() {
 const issues = (value: ReturnType<typeof candidate>) => validateConfig(value).filter(issue => issue.path.startsWith("mdns."));
 
 describe("mDNS configuration and runtime contracts", () => {
+  it("provides the deduplicated screenshot service union as valid absolute local filters", () => {
+    const filters = mdnsPresets.map(preset => preset.value);
+    expect(filters).toEqual([
+      "_googlecast._tcp.local.", "_home-assistant._tcp.local.", "_hap._tcp.local.",
+      "_udp._govee-lan._udp.local.", "_esphomelib._tcp.local.", "_http._tcp.local.",
+      "_airplay._tcp.local.", "_raop._tcp.local.", "_bambu._tcp.local.",
+      "_https._tcp.local.", "_ipp._tcp.local.", "_printer._tcp.local.", "_hue._tcp.local.",
+    ]);
+    expect(new Set(filters).size).toBe(filters.length);
+    const value = candidate(); value.mdns!.reflection.filters = filters;
+    expect(issues(value)).toEqual([]);
+  });
+  it.each([
+    [" _HTTP._TCP ", "_http._tcp.local."],
+    ["_http._tcp.LOCAL", "_http._tcp.local."],
+    ["_http._tcp.local.", "_http._tcp.local."],
+    ["_udp._govee-lan._udp", "_udp._govee-lan._udp.local."],
+    ["printer.local", "printer.local."],
+  ])("normalizes filter %s without changing its identity", (input, expected) => {
+    expect(normalizeMDNSFilter(input)).toBe(expected);
+  });
   it("uses safe disabled defaults without inventing configuration on older backends", () => {
     expect(mdnsSchema.parse({})).toEqual({
       enabled: false, interface_mode: "allow", interfaces: [], ipv4: true, ipv6: true,

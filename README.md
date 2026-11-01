@@ -120,6 +120,11 @@ listed links; deny mode includes all eligible links except those listed, includi
 newly eligible links. SAVE highlights membership expansion. Reflection requires
 2..32 effective links; publishing alone requires 1..32. Filters are unique absolute
 local service/subtype/provider names (up to 64), with trailing dots and no patterns.
+The mDNS Presets menu adds Google Cast, Home Assistant, HomeKit, Govee, ESPHome,
+HTTP, AirPlay, RAOP, Bambu Lab, HTTPS, IPP, Printer and Philips Hue entries to the
+unsent service list in absolute `.local.` format. Existing entries, including
+case-insensitive shorthand equivalents, cannot be added again through the menu.
+Custom services remain editable; Stage changes and SAVE use the existing review flow.
 Publishing is separate and opt-in; HINFO exposes Linux/architecture and workstation
 publishing uses port 9. Empty publishing hostname uses configured `system.hostname`,
 not ambient host state. Global IPv6 off suppresses IPv6 and all local AAAA publishing

@@ -5,6 +5,7 @@ import MDNSView from "@/views/MDNSView.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
+import { mdnsPresets } from "@/services/mdns";
 import { mdnsSchema } from "@/types/domain";
 import { mdnsStatus, state, transaction } from "../fixtures";
 
@@ -21,6 +22,12 @@ const global = { stubs: {
   VAlert: box, VTable: { template: "<table><slot /></table>" }, VProgressLinear: true,
   VForm: { props: ["disabled"], emits: ["submit"], template: '<form @submit.prevent="$emit(\'submit\', $event)"><slot /></form>' },
   VBtn: { props: ["disabled", "type"], template: '<button :type="type || \'button\'" :disabled="disabled"><slot /></button>' },
+  VMenu: { template: '<div><slot name="activator" :props="{}" /><slot /></div>' },
+  VList: box,
+  VListItem: {
+    props: ["title", "subtitle", "disabled"],
+    template: '<button :disabled="disabled" :aria-label="title">{{ title }}<span>{{ subtitle }}</span></button>',
+  },
   VCheckbox: checkbox, VTextField: input,
   VTextarea: {
     props: ["modelValue", "label"], emits: ["update:modelValue"],
@@ -53,6 +60,84 @@ beforeEach(() => {
 });
 
 describe("mDNS / Discovery", () => {
+  it("adds presets only to unsent edits, preserves custom entries and stages through the shared draft without popups", async () => {
+    const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
+    store.stage(desired); store.draft!.ntp = { enabled: true, servers: ["time.example.com"] };
+    const stage = vi.spyOn(store, "stage"), apply = vi.spyOn(store, "apply");
+    const confirm = vi.spyOn(window, "confirm"), alert = vi.spyOn(window, "alert");
+    const wrapper = mount(MDNSView, { global });
+    await setServices(wrapper, "_custom._udp");
+    for (const preset of mdnsPresets) {
+      const button = wrapper.get(`button[aria-label="${preset.title}"]`);
+      expect(button.text()).toContain(preset.value);
+      await button.trigger("click");
+      expect(button.attributes("disabled")).toBeDefined();
+    }
+    expect(wrapper.findAll('input[aria-label^="Service "]')).toHaveLength(14);
+    expect(store.editorDirty).toBe(true); expect(stage).not.toHaveBeenCalled();
+    expect(store.draft!.mdns).toEqual(desired.mdns);
+    await wrapper.get("form").trigger("submit");
+    expect(stage).toHaveBeenCalledTimes(1); expect(apply).not.toHaveBeenCalled();
+    expect(store.draft!.mdns!.reflection.filters).toEqual(["_custom._udp.local.", ...mdnsPresets.map(preset => preset.value)].sort());
+    expect(store.draft!.ntp.servers).toEqual(["time.example.com"]);
+    expect(store.draft!.mdns!.metadata).toEqual(desired.mdns!.metadata);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(desired);
+    expect(confirm).not.toHaveBeenCalled(); expect(alert).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("disables shorthand-equivalent presets and restores availability after deletion or cancel", async () => {
+    const store = useControllerStore(), wrapper = mount(MDNSView, { global });
+    const http = wrapper.get('button[aria-label="HTTP"]');
+    for (const entry of [" _HTTP._TCP ", "_http._tcp.LOCAL", "_http._tcp.local."]) {
+      await setServices(wrapper, entry);
+      expect(http.attributes("disabled")).toBeDefined();
+      await http.trigger("click");
+      expect(wrapper.findAll('input[aria-label^="Service "]')).toHaveLength(1);
+    }
+    await wrapper.get('[aria-label="Delete service 1"]').trigger("click");
+    expect(http.attributes("disabled")).toBeUndefined();
+    await http.trigger("click");
+    expect(wrapper.get<HTMLInputElement>('input[aria-label="Service 1"]').element.value).toBe("_http._tcp.local.");
+    await click(wrapper, "Cancel edits");
+    expect(wrapper.findAll('input[aria-label^="Service "]')).toHaveLength(0);
+    expect(http.attributes("disabled")).toBeUndefined();
+    expect(store.editorDirty).toBe(false); expect(store.draft).toBeNull();
+    wrapper.unmount();
+  });
+  it("disables presets at the 64-filter limit", () => {
+    const store = useControllerStore();
+    store.state.data!.desired.mdns!.reflection.filters = Array.from({ length: 64 }, (_, index) => `_custom${index}._tcp.local.`);
+    const wrapper = mount(MDNSView, { global });
+    expect(wrapper.findAll("button").find(button => button.text() === "Presets")!.attributes("disabled")).toBeDefined();
+    for (const preset of mdnsPresets) expect(wrapper.get(`button[aria-label="${preset.title}"]`).attributes("disabled")).toBeDefined();
+    wrapper.unmount();
+  });
+  it.each(["success", "failure"])("keeps presets disabled during initialization and handles pending-to-%s reads", async outcome => {
+    const store = useControllerStore(), loaded = store.state.data;
+    store.state.data = null; store.state.loading = true;
+    const wrapper = mount(MDNSView, { global });
+    const googleCast = wrapper.get('button[aria-label="Google Cast"]');
+    expect(googleCast.attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).not.toContain("unavailable");
+    expect(wrapper.text()).not.toContain("unsupported");
+    await googleCast.trigger("click");
+    expect(store.editorDirty).toBe(false);
+    store.state.loading = false;
+    if (outcome === "success") store.state.data = loaded;
+    else store.state.error = "HTTP 503: configuration read failed";
+    await flushPromises();
+    if (outcome === "success") {
+      expect(googleCast.attributes("disabled")).toBeUndefined();
+      await googleCast.trigger("click");
+      expect(wrapper.get<HTMLInputElement>('input[aria-label="Service 1"]').element.value).toBe("_googlecast._tcp.local.");
+      expect(store.editorDirty).toBe(true);
+    } else {
+      expect(googleCast.attributes("disabled")).toBeDefined();
+      expect(wrapper.text()).toContain("HTTP 503: configuration read failed");
+      expect(store.editorDirty).toBe(false);
+    }
+    wrapper.unmount();
+  });
   it("colors service trash icons red", async () => {
     const wrapper = mount(MDNSView, { global });
     await setServices(wrapper, "_ipp._tcp", "_googlecast._tcp");
@@ -79,7 +164,9 @@ describe("mDNS / Discovery", () => {
     store.mdnsStatus.data = { instances: [sample], error: "" };
     store.mdnsStatus.stale = true;
     const wrapper = mount(MDNSView, { global });
-    expect(wrapper.get("form > div:last-child").findAll("button").map(button => button.text())).toEqual(["Add service", "Stage changes", "Cancel edits"]);
+    expect(wrapper.get("form > div:last-child").findAll("button").map(button => button.text())).toEqual([
+      "Add service", "Presets", ...mdnsPresets.map(preset => `${preset.title}${preset.value}`), "Stage changes", "Cancel edits",
+    ]);
     await setServices(wrapper, "printer.local.");
     expect(store.refreshMDNSStatus).not.toHaveBeenCalled();
     expect(wrapper.text()).not.toContain("Applied discovery status");

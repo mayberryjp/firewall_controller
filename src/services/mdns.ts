@@ -3,6 +3,27 @@ import type { ValidationIssue } from "@/services/configuration";
 
 const asciiLower = (value: string) => value.replace(/[A-Z]/g, letter => letter.toLowerCase());
 
+export const mdnsPresets = [
+  { title: "Google Cast", value: "_googlecast._tcp.local." },
+  { title: "Home Assistant", value: "_home-assistant._tcp.local." },
+  { title: "HomeKit", value: "_hap._tcp.local." },
+  { title: "Govee", value: "_udp._govee-lan._udp.local." },
+  { title: "ESPHome", value: "_esphomelib._tcp.local." },
+  { title: "HTTP", value: "_http._tcp.local." },
+  { title: "AirPlay", value: "_airplay._tcp.local." },
+  { title: "AirPlay audio (RAOP)", value: "_raop._tcp.local." },
+  { title: "Bambu Lab", value: "_bambu._tcp.local." },
+  { title: "HTTPS", value: "_https._tcp.local." },
+  { title: "IPP printing", value: "_ipp._tcp.local." },
+  { title: "Printer", value: "_printer._tcp.local." },
+  { title: "Philips Hue", value: "_hue._tcp.local." },
+];
+
+export function normalizeMDNSFilter(value: string): string {
+  const name = asciiLower(value.trim()).replace(/\.$/, "");
+  return /(?:^|\.)local$/.test(name) ? `${name}.` : `${name}.local.`;
+}
+
 export function eligibleMDNSInterface(config: Config, link: ManagedInterface): boolean {
   if (!link.up || (link.kind !== "ethernet" && link.kind !== "vlan")) return false;
   return link.role === "lan" || (link.kind === "vlan" && config.interfaces.some(parent =>

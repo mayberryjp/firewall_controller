@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
-import { eligibleMDNSInterface, mdnsInterfaces, normalizeMDNS } from "@/services/mdns";
+import { eligibleMDNSInterface, mdnsInterfaces, mdnsPresets, normalizeMDNS, normalizeMDNSFilter } from "@/services/mdns";
 import { mdnsSchema, type MDNSConfig } from "@/types/domain";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 
@@ -23,6 +23,13 @@ watch(editing, () => { if (!store.editorDirty) reset(); }, { immediate: true });
 watch(form, () => { store.editorDirty = snapshot() !== initial.value; }, { deep: true, flush: "sync" });
 onUnmounted(() => { store.editorDirty = false; });
 const blocked = computed(() => Boolean(store.readOnlyReason) || !editing.value);
+const existingFilters = computed(() => new Set(form.value.reflection.filters.filter(value => value.trim()).map(normalizeMDNSFilter)));
+function presetBlocked(value: string): boolean {
+  return blocked.value || form.value.reflection.filters.length >= 64 || existingFilters.value.has(value);
+}
+function addPreset(value: string): void {
+  if (!presetBlocked(value)) form.value.reflection.filters.push(value);
+}
 const choices = computed(() => (editing.value?.interfaces ?? [])
   .filter(link => eligibleMDNSInterface(editing.value!, link))
   .map(link => link.name));
@@ -32,10 +39,7 @@ function stage(): void {
     if (blocked.value || !editing.value) throw new Error(store.readOnlyReason || "Committed configuration is unavailable.");
     if (stableJson(editing.value.mdns) !== sourceSettings.value) throw new Error("mDNS settings changed while editing. Cancel edits to load current settings before staging.");
     const candidate = cloneConfig(editing.value);
-    const filters = form.value.reflection.filters.map(value => value.trim()).filter(Boolean).map(value => {
-      const name = value.replace(/\.$/, "");
-      return /(?:^|\.)local$/i.test(name) ? `${name}.` : `${name}.local.`;
-    });
+    const filters = form.value.reflection.filters.map(value => value.trim()).filter(Boolean).map(normalizeMDNSFilter);
     candidate.mdns = mdnsSchema.parse({
       ...form.value,
       enabled: filters.length > 0,
@@ -119,6 +123,27 @@ function stage(): void {
         >
           Add service
         </v-btn>
+        <v-menu>
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              prepend-icon="mdi-playlist-plus"
+              :disabled="blocked || form.reflection.filters.length >= 64"
+            >
+              Presets
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item
+              v-for="preset in mdnsPresets"
+              :key="preset.value"
+              :title="preset.title"
+              :subtitle="preset.value"
+              :disabled="presetBlocked(preset.value)"
+              @click="addPreset(preset.value)"
+            />
+          </v-list>
+        </v-menu>
         <v-btn
           type="submit"
           prepend-icon="mdi-check"

@@ -29,8 +29,10 @@ test("mDNS stages discovery, reviews and confirms a full package on desktop and 
   await view.getByLabel("Service 1", { exact: true }).fill("_IPP._TCP");
   await view.getByRole("button", { name: "Add service", exact: true }).click();
   await view.getByLabel("Service 2", { exact: true }).fill("printer.local.");
-  await view.getByRole("button", { name: "Add service", exact: true }).click();
-  await view.getByLabel("Service 3", { exact: true }).fill("_udp._govee-lan._udp.local.");
+  await view.getByRole("button", { name: "Presets", exact: true }).click();
+  await page.getByText("Govee", { exact: true }).click();
+  await expect(view.getByLabel("Service 3", { exact: true })).toHaveValue("_udp._govee-lan._udp.local.");
+  expect(backend.writes).toEqual([]); expect(dialogs).toEqual([]);
   await view.getByRole("button", { name: "Stage changes", exact: true }).click();
   await expect(view.getByLabel("Service 1", { exact: true })).toHaveValue("_ipp._tcp.local.");
   await expect(view.getByLabel("Service 2", { exact: true })).toHaveValue("_udp._govee-lan._udp.local.");
