@@ -181,4 +181,18 @@ describe("mDNS configuration and runtime contracts", () => {
       expect(runtimeSchema.safeParse({ ...runtime(), appliance_services: [bad] }).success).toBe(false);
     }
   });
+  it("requires per-filter counters in dedicated and heterogeneous status and rejects malformed entry values", () => {
+    const entry = { filter: "_ipp._tcp.local.", matched_packets: "9007199254740993", transmitted_packets: "18446744073709551615", last_used_at: "2026-11-01T23:20:00.987Z", last_transmitted_at: null };
+    const row = { ...mdnsStatus(), filter_counters: [entry] };
+    expect(mdnsStatusPageSchema.parse({ instances: [row], error: "" }).instances[0]!.filter_counters).toEqual([entry]);
+    expect(runtimeSchema.parse({ ...runtime(), appliance_services: [row] }).appliance_services[0]).toEqual(row);
+    for (const filter_counters of [
+      undefined, null, [{ ...entry, matched_packets: 42 }], [{ ...entry, transmitted_packets: "01" }],
+      [{ ...entry, matched_packets: "-1" }], [{ ...entry, last_used_at: undefined }],
+    ]) {
+      const bad = { ...row, filter_counters };
+      expect(mdnsStatusPageSchema.safeParse({ instances: [bad], error: "" }).success).toBe(false);
+      expect(runtimeSchema.safeParse({ ...runtime(), appliance_services: [bad] }).success).toBe(false);
+    }
+  });
 });

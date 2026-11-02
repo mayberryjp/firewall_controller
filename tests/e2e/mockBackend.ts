@@ -35,6 +35,9 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     const settings = activeConfig().mdns;
     return {
       ...mdnsStatus(), enabled: settings?.enabled ?? false, state: settings?.enabled ? "simulated" : "disabled",
+      filter_counters: (settings?.reflection.filters ?? []).map(filter => ({
+        filter, matched_packets: "0", transmitted_packets: "0", last_used_at: null, last_transmitted_at: null,
+      })),
       effective_interfaces: settings?.enabled ? mdnsInterfaces(activeConfig()) : [],
       effective_families: settings?.enabled ? [
         ...(settings.ipv4 ? ["ipv4"] : []),

@@ -41,9 +41,10 @@ export const useControllerStore = defineStore("controller", () => {
   const bgpAdvertisedRoutes = dataset<BGPAdvertisedRoutes>();
   const bgpRouteDirection = ref<"received" | "advertised">("received"), bgpAdvertisedRoutesExpired = ref(true);
   const udpRelayStatus = dataset<z.infer<typeof udpRelayStatusPageSchema>>(), udpRelayExpired = ref(true);
+  const mdnsStatus = dataset<z.infer<typeof mdnsStatusPageSchema>>(), mdnsExpired = ref(true);
   const bgpUnsupported = ref(false);
   const bgpExpired = ref(true), bgpRoutesExpired = ref(true), bgpMonitoring = ref(false);
-  for (const [query, expired] of [[bgpStatus, bgpExpired], [bgpRoutes, bgpRoutesExpired], [bgpAdvertisedRoutes, bgpAdvertisedRoutesExpired], [udpRelayStatus, udpRelayExpired]] as const) {
+  for (const [query, expired] of [[bgpStatus, bgpExpired], [bgpRoutes, bgpRoutesExpired], [bgpAdvertisedRoutes, bgpAdvertisedRoutesExpired], [udpRelayStatus, udpRelayExpired], [mdnsStatus, mdnsExpired]] as const) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     watch(() => query.lastSuccess, time => {
       clearTimeout(timer);
@@ -58,6 +59,13 @@ export const useControllerStore = defineStore("controller", () => {
   const bgpAdvertisedRoutesCurrent = computed(() => connected.value && !bgpAdvertisedRoutesExpired.value &&
     !bgpAdvertisedRoutes.stale && !bgpAdvertisedRoutes.error && !bgpAdvertisedRoutes.data?.error && bgpAdvertisedRoutes.data?.state === "running");
   const udpRelayStatusCurrent = computed(() => connected.value && !udpRelayExpired.value && !udpRelayStatus.stale && !udpRelayStatus.error && !udpRelayStatus.data?.error);
+  const mdnsStatusCurrent = computed(() => connected.value && !mdnsExpired.value && !mdnsStatus.stale && !mdnsStatus.error && !mdnsStatus.data?.error);
+  watch(() => {
+    const config = state.data?.active_transaction?.candidate ?? state.data?.desired;
+    return stableJson([config?.mdns, config?.ipv6_enabled, config?.interfaces, config?.system?.hostname]);
+  }, () => { mdnsStatus.stale = true; }, { flush: "sync" });
+  watch(() => stableJson((state.data?.active_transaction?.candidate ?? state.data?.desired)?.udp_broadcast_relay),
+    () => { udpRelayStatus.stale = true; }, { flush: "sync" });
   watch(() => stableJson((state.data?.active_transaction?.candidate ?? state.data?.desired)?.bgp), () => {
     bgpStatus.stale = true; bgpRoutes.stale = true; bgpAdvertisedRoutes.stale = true;
   }, { flush: "sync" });
@@ -96,7 +104,6 @@ export const useControllerStore = defineStore("controller", () => {
   const hostHealth = dataset<HostHealth>(), mqttStatus = dataset<z.infer<typeof mqttStatusSchema>>();
   const vnstatReporting = dataset<VnStatReporting>();
   const dynamicDnsStatus = dataset<z.infer<typeof dynamicDnsStatusSchema>>();
-  const mdnsStatus = dataset<z.infer<typeof mdnsStatusPageSchema>>();
   const upgrade = dataset<UpgradeStatus>();
   const upgradePending = ref(false), upgradeUncertain = ref(false), upgradeNeedsRefresh = ref(false);
   const acceptedUpgradeID = ref(""), requestedUpgradeVersion = ref(""), previousUpgradeID = ref("");
@@ -720,7 +727,7 @@ export const useControllerStore = defineStore("controller", () => {
     refreshUpgrade, checkMaintenance, startUpgrade, supportsDhcpGatewayMonitors,
     checkSoftwareRelease, softwareCheckPending, softwareCheckDenied, softwareCheckError, softwareCheckNotice,
     connect, disconnect, refresh, refreshState, refreshRuntime, refreshTransactions, refreshStatistics, refreshGatewayStatistics,
-    refreshHostHealth, refreshMqttStatus, dynamicDnsStatus, refreshDynamicDnsStatus, mdnsStatus, refreshMDNSStatus,
+    refreshHostHealth, refreshMqttStatus, dynamicDnsStatus, refreshDynamicDnsStatus, mdnsStatus, mdnsStatusCurrent, refreshMDNSStatus,
     vnstatReporting, refreshVnStatReporting,
     refreshRevisions, loadRevision, compareRevision, clearComparison, stage, discardDraft, restartDraft, apply, lifecycle, restore, reconcile,
     readTransaction, resolveUncertainty, deleteFirewallHostsAndRules, firewallDeletionBlockedReason, firewallDeletionNotice,

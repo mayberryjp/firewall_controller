@@ -103,6 +103,7 @@ export function mdnsStatus(): MDNSStatus {
     started_at: "2026-10-25T12:00:00.123456Z", collected_at: "2026-10-25T12:00:01.987654Z", error: null,
     effective_interfaces: ["lan0", "lan1"], effective_families: ["ipv4"],
     reflection_enabled: true, publishing_enabled: false,
+    filter_counters: [],
     received_packets: "9007199254740993", transmitted_packets: "18446744073709551615",
     received_bytes: "0", transmitted_bytes: "0", malformed_packets: "0", hop_limit_drops: "0",
     policy_drops: "0", duplicate_drops: "0", rate_limit_drops: "0", queue_drops: "0",

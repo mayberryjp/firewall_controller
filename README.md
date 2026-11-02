@@ -130,9 +130,19 @@ publishing uses port 9. Empty publishing hostname uses configured `system.hostna
 not ambient host state. Global IPv6 off suppresses IPv6 and all local AAAA publishing
 while retaining preferences.
 
-The page separates configured/draft membership from applied/provisional status,
-polls status without overlapping requests every 3 seconds (failure backoff capped
-at 5 seconds), and shows exact decimal counters, loss warnings and system-timezone sample times.
+Following the [November 1 usage-counter handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-01.md),
+each mDNS filter shows Matched / Forwarded / Last used, joined by its canonical
+applied name. Last used displays in the saved system timezone. UDP relay instances
+show Received / Forwarded, joined by instance ID and applied configuration; UDP
+does not provide a last-used timestamp. Both use exact decimal strings and poll
+without overlapping requests every 3 seconds (failure backoff capped at 5 seconds).
+Changed draft entries/links do not inherit applied usage. Missing, stale (over
+15 seconds), disabled, simulated and failed observations are not displayed as
+measured zeroes. Counts reset per worker/socket run, not lifetime history; query
+matches are not discovered devices, and successful sends do not prove delivery.
+Users can remove entries through the existing delete / Stage / SAVE flow.
+Deploy a backend with mandatory `MDNSStatus.filter_counters`; older status shapes
+are reported as incompatible, not silently replaced with zero counts.
 Status failures retain local edits and do not globally lock configuration.
 Repair uses committed/pending settings, never the draft, and requires `mdns.write`
 for enabled mDNS even through another service's aggregate repair endpoint.

@@ -1,6 +1,6 @@
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import MDNSView from "@/views/MDNSView.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import { useControllerStore } from "@/stores/controller";
@@ -48,6 +48,22 @@ async function setServices(wrapper: VueWrapper, ...services: string[]) {
     await wrapper.get(`input[aria-label="Service ${index + 1}"]`).setValue(service);
   }
 }
+function observedUsage() {
+  const store = useControllerStore(), settings = store.state.data!.desired.mdns!;
+  settings.enabled = true; settings.ipv6 = false;
+  settings.reflection.filters = ["_ipp._tcp.local.", "_http._tcp.local."];
+  store.state.data = { ...store.state.data! };
+  const sample = {
+    ...mdnsStatus(), statistics_complete: true,
+    filter_counters: [
+      { filter: "_http._tcp.local.", matched_packets: "0", transmitted_packets: "0", last_used_at: null, last_transmitted_at: null },
+      { filter: "_ipp._tcp.local.", matched_packets: "9007199254740993", transmitted_packets: "18446744073709551615", last_used_at: "2026-01-02T03:04:05.987+02:00", last_transmitted_at: "2026-01-02T03:04:05.987+02:00" },
+    ],
+  };
+  store.mdnsStatus.data = { instances: [sample], error: "" };
+  store.mdnsStatus.lastSuccess = Date.now(); store.mdnsStatus.stale = false;
+  return sample;
+}
 beforeEach(() => {
   setActivePinia(createPinia());
   const store = useControllerStore(); store.connected = true; store.state.data = state();
@@ -58,8 +74,132 @@ beforeEach(() => {
   store.state.data.desired.mdns = mdnsSchema.parse({ interfaces: ["lan0", "lan1"], reflection: { enabled: true }, metadata: { display_name: "Discovery", description: "Keep me" } });
   vi.spyOn(store, "refreshMDNSStatus").mockResolvedValue();
 });
+afterEach(() => { useControllerStore().$dispose(); vi.useRealTimers(); });
 
 describe("mDNS / Discovery", () => {
+  it("joins exact counters by canonical filter, shows current-run zeroes and formats last used in the saved timezone", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.system = { hostname: "", domain: "", timezone: "America/Los_Angeles" };
+    const sample = observedUsage(), original = structuredClone(sample);
+    const wrapper = mount(MDNSView, { global });
+    const ipp = wrapper.get('[aria-label="Usage for service 1"]'), http = wrapper.get('[aria-label="Usage for service 2"]');
+    expect(ipp.text()).toContain("Matched: 9007199254740993");
+    expect(ipp.text()).toContain("Forwarded: 18446744073709551615");
+    expect(ipp.text()).toContain("Last used (America/Los_Angeles): 2026-01-01 17:04:05");
+    expect(http.text()).toContain("Matched: 0"); expect(http.text()).toContain("Not yet observed");
+    store.stage(cloneConfig(store.state.data!.desired));
+    store.draft!.system!.timezone = "Asia/Kolkata";
+    await flushPromises();
+    expect(ipp.text()).toContain("2026-01-01 17:04:05");
+    store.state.data = { ...store.state.data!, desired: { ...store.state.data!.desired, system: { ...store.state.data!.desired.system!, timezone: "Asia/Kolkata" } } };
+    await flushPromises();
+    expect(ipp.text()).toContain("Last used (Asia/Kolkata): 2026-01-02 06:34:05");
+    expect(sample).toEqual(original);
+    expect(wrapper.text()).toContain("zero is not lifetime non-use");
+    wrapper.unmount();
+  });
+  it("never attaches applied counters to renamed services or changed links and preserves deletes in the normal draft", async () => {
+    const store = useControllerStore(); observedUsage();
+    const wrapper = mount(MDNSView, { global });
+    await wrapper.get('input[aria-label="Service 1"]').setValue(" _IPP._TCP ");
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toContain("9007199254740993");
+    await wrapper.get('input[aria-label="Service 1"]').setValue("_googlecast._tcp");
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toBe("Not applied");
+    expect(wrapper.get('[aria-label="Usage for service 2"]').text()).toContain("Matched: 0");
+    await wrapper.get('select[aria-label="LAN links"]').setValue(["lan0"]);
+    expect(wrapper.get('[aria-label="Usage for service 2"]').text()).toBe("Not applied");
+    await click(wrapper, "Cancel edits");
+    await wrapper.get('[aria-label="Delete service 2"]').trigger("click");
+    await wrapper.get("form").trigger("submit");
+    expect(store.draft!.mdns!.reflection.filters).toEqual(["_ipp._tcp.local."]);
+    expect(store.state.data!.desired.mdns!.reflection.filters).toHaveLength(2);
+    wrapper.unmount();
+  });
+  it.each(["success", "failure"])("shows neutral pending usage then a real %s without discarding edits", async outcome => {
+    const store = useControllerStore(), sample = observedUsage();
+    store.mdnsStatus.data = null; store.mdnsStatus.lastSuccess = null; store.mdnsStatus.loading = true;
+    const wrapper = mount(MDNSView, { global });
+    const entry = wrapper.get('[aria-label="Usage for service 1"]');
+    expect(entry.text()).toBe("Loading");
+    expect(wrapper.text()).not.toContain("Unavailable");
+    await setServices(wrapper, "_ipp._tcp");
+    store.mdnsStatus.loading = false;
+    if (outcome === "success") {
+      store.mdnsStatus.data = { instances: [sample], error: "" };
+      store.mdnsStatus.lastSuccess = Date.now(); store.mdnsStatus.stale = false;
+    } else {
+      store.mdnsStatus.error = "HTTP 503: usage read failed"; store.mdnsStatus.stale = true;
+    }
+    await flushPromises();
+    expect(entry.text()).toContain(outcome === "success" ? "9007199254740993" : "Unavailable");
+    if (outcome === "failure") expect(wrapper.text()).toContain("HTTP 503: usage read failed");
+    expect(store.editorDirty).toBe(true); expect(store.readOnlyReason).toBe("");
+    wrapper.unmount();
+  });
+  it.each([
+    ["simulated", "Simulated (unmeasured)"], ["disabled", "Disabled (unmeasured)"],
+    ["stopped", "Stopped (unmeasured)"], ["error", "Unavailable"],
+  ] as const)("does not present %s values as measured inactivity", (state, expected) => {
+    observedUsage(); const store = useControllerStore();
+    store.mdnsStatus.data!.instances[0]!.state = state;
+    const wrapper = mount(MDNSView, { global });
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toBe(expected);
+    wrapper.unmount();
+  });
+  it("expires stale usage, surfaces worker failures and shows reset counters after a fresh worker sample", async () => {
+    vi.useFakeTimers(); const sample = observedUsage(), store = useControllerStore();
+    const wrapper = mount(MDNSView, { global });
+    await vi.advanceTimersByTimeAsync(15001);
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toBe("Stale");
+    store.mdnsStatus.data = { instances: [{ ...sample, error: "Bind failed", retrying: true }], error: "" };
+    store.mdnsStatus.lastSuccess = Date.now();
+    await flushPromises();
+    expect(wrapper.text()).toContain("Bind failed");
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toBe("Unavailable");
+    store.mdnsStatus.data = { instances: [{ ...sample, started_at: "2026-11-01T23:00:00Z", filter_counters: sample.filter_counters.map(row => ({
+      ...row, matched_packets: "0", transmitted_packets: "0", last_used_at: null, last_transmitted_at: null,
+    })) }], error: "" };
+    await flushPromises();
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toContain("Matched: 0");
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toContain("Not yet observed");
+    wrapper.unmount();
+  });
+  it("does not measure reflection-off or retrying samples, and rejects counters from different applied membership", async () => {
+    const sample = observedUsage(), store = useControllerStore();
+    const wrapper = mount(MDNSView, { global });
+    const entry = wrapper.get('[aria-label="Usage for service 1"]');
+    store.mdnsStatus.data = { instances: [{ ...sample, reflection_enabled: false }], error: "" };
+    await flushPromises();
+    expect(entry.text()).toBe("Disabled (unmeasured)");
+    store.mdnsStatus.data = { instances: [{ ...sample, retrying: true }], error: "" };
+    await flushPromises();
+    expect(entry.text()).toBe("Retrying (unmeasured)");
+    store.mdnsStatus.data = { instances: [{ ...sample, filter_counters: sample.filter_counters.slice(1) }], error: "" };
+    await flushPromises();
+    expect(entry.text()).toBe("Not applied");
+    wrapper.unmount();
+  });
+  it("invalidates usage on applied replacement and joins fresh provisional counters without borrowing removed entry counts", async () => {
+    const sample = observedUsage(), store = useControllerStore();
+    const wrapper = mount(MDNSView, { global });
+    const pending = transaction();
+    pending.candidate = cloneConfig(store.state.data!.desired);
+    pending.candidate.mdns!.reflection.filters = ["_googlecast._tcp.local."];
+    store.state.data = { ...store.state.data!, active_transaction: pending };
+    await flushPromises();
+    expect(wrapper.get<HTMLInputElement>('input[aria-label="Service 1"]').element.value).toBe("_googlecast._tcp.local.");
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toBe("Stale");
+    store.mdnsStatus.data = { instances: [sample], error: "" };
+    store.mdnsStatus.stale = false; store.mdnsStatus.lastSuccess = Date.now();
+    await flushPromises();
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toBe("Not applied");
+    store.mdnsStatus.data = { instances: [{ ...sample, filter_counters: [{
+      filter: "_googlecast._tcp.local.", matched_packets: "3", transmitted_packets: "6", last_used_at: null, last_transmitted_at: null,
+    }] }], error: "" };
+    await flushPromises();
+    expect(wrapper.get('[aria-label="Usage for service 1"]').text()).toContain("Matched: 3");
+    wrapper.unmount();
+  });
   it("adds presets only to unsent edits, preserves custom entries and stages through the shared draft without popups", async () => {
     const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
     store.stage(desired); store.draft!.ntp = { enabled: true, servers: ["time.example.com"] };
@@ -168,7 +308,7 @@ describe("mDNS / Discovery", () => {
       "Add service", "Presets", ...mdnsPresets.map(preset => `${preset.title}${preset.value}`), "Stage changes", "Cancel edits",
     ]);
     await setServices(wrapper, "printer.local.");
-    expect(store.refreshMDNSStatus).not.toHaveBeenCalled();
+    expect(store.refreshMDNSStatus).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).not.toContain("Applied discovery status");
     expect(wrapper.text()).not.toContain("membership:");
     expect(wrapper.text()).not.toContain("Applied families:");
@@ -260,7 +400,7 @@ describe("mDNS / Discovery", () => {
     expect(wrapper.text()).not.toContain("Statistics are incomplete");
     expect(store.mdnsStatus.data.instances[0]).toEqual(original);
   });
-  it("does not show runtime request failures or block configuration edits", async () => {
+  it("shows usage request failures without showing unrelated diagnostics or blocking configuration edits", async () => {
     const store = useControllerStore(), row = { ...mdnsStatus(), state: "error" as const, error: "UDP 5353 is owned", started_at: null, collected_at: "invalid" };
     store.mdnsStatus.data = { instances: [row], error: "" }; store.mdnsStatus.error = "HTTP 503: status unavailable";
     store.mdnsStatus.incompatible = true; store.mdnsStatus.stale = true;
@@ -268,9 +408,9 @@ describe("mDNS / Discovery", () => {
     store.runtime.incompatible = true; store.runtime.stale = true;
     const wrapper = mount(MDNSView, { global });
     expect(store.readOnlyReason).toBe("");
-    expect(wrapper.text()).not.toContain("UDP 5353 is owned");
+    expect(wrapper.text()).toContain("UDP 5353 is owned");
     expect(wrapper.find('[title*="UDP 5353 is owned"]').exists()).toBe(false);
-    expect(wrapper.text()).not.toContain("HTTP 503");
+    expect(wrapper.text()).toContain("HTTP 503");
     expect(wrapper.text()).not.toContain("Invalid timestamp");
     expect(wrapper.text()).not.toContain("Stale last-known state");
     expect(wrapper.findAll("button").find(button => button.text() === "Stage changes")!.attributes("disabled")).toBeUndefined();

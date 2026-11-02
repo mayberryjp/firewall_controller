@@ -79,6 +79,17 @@ function current(row: UDPRelayInstance): boolean {
     identity(row, relay.value?.enabled === true) === identity(active, applied.value?.udp_broadcast_relay?.enabled === true) &&
     identity(row, relay.value?.enabled === true) === identity({ ...status, id: status.instance_id }, true));
 }
+function usageReason(row: UDPRelayInstance): string {
+  const status = observation(row.id);
+  if (!store.udpRelayStatus.data) return store.udpRelayStatus.error ? "Unavailable" : "Loading";
+  if (!store.udpRelayStatusCurrent) return store.udpRelayStatus.error || store.udpRelayStatus.data.error ? "Unavailable" : "Stale";
+  if (!status || !current(row)) return "Not applied";
+  if (status.state === "simulated") return "Simulated (unmeasured)";
+  if (status.state === "error" || status.error) return "Unavailable";
+  if (status.retrying) return "Retrying (unmeasured)";
+  if (!status.enabled || status.state === "disabled") return "Disabled (unmeasured)";
+  return status.state === "running" ? "" : "Stopped (unmeasured)";
+}
 function restartBlocked(id: number): string {
   const row = rows.value.find(value => value.id === id), status = observation(id);
   if (!row || !current(row) || !status?.enabled || status.state === "simulated") return "A current, applied native instance is required.";
@@ -222,14 +233,14 @@ async function restart(): Promise<void> {
       label="Relay status"
     />
     <p
-      v-if="store.udpRelayStatus.data?.error"
+      v-if="store.udpRelayStatus.data?.error || store.udpRelayStatus.data?.instances.some(row => row.error)"
       role="alert"
       class="text-error mb-3"
     >
-      {{ store.udpRelayStatus.data.error }}
+      {{ store.udpRelayStatus.data?.error || store.udpRelayStatus.data?.instances.filter(row => row.error).map(row => `Relay ${row.instance_id}: ${row.error}`).join('; ') }}
     </p>
     <v-table class="inline-table relay-table">
-      <thead><tr><th>Instance</th><th>Enabled</th><th>UDP port</th><th>Interfaces</th><th>Multicast Address</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Instance</th><th>Enabled</th><th>UDP port</th><th>Interfaces</th><th>Multicast Address</th><th>Usage</th><th>Actions</th></tr></thead>
       <tbody>
         <template
           v-for="row in rows"
@@ -258,6 +269,17 @@ async function restart(): Promise<void> {
             <td><span class="relay-mobile-label">UDP port</span>{{ row.port }}</td>
             <td><span class="relay-mobile-label">Interfaces</span>{{ row.interfaces.join(', ') }}</td>
             <td><span class="relay-mobile-label">Multicast Address</span>{{ row.multicast_address || 'Broadcast only' }}</td>
+            <td :aria-label="`Usage for relay ${row.id}`">
+              <span class="relay-mobile-label">Usage</span>
+              <span v-if="usageReason(row)">{{ usageReason(row) }}</span>
+              <div
+                v-else
+                class="relay-usage text-caption"
+              >
+                <span>Received: {{ observation(row.id)?.received_packets }}</span>
+                <span>Forwarded: {{ observation(row.id)?.transmitted_packets }}</span>
+              </div>
+            </td>
             <td class="relay-actions">
               <v-btn
                 icon="mdi-pencil-outline"
@@ -291,12 +313,20 @@ async function restart(): Promise<void> {
           </tr>
         </template>
         <tr v-if="!rows.length">
-          <td colspan="6">
+          <td colspan="7">
             No relay instances.
           </td>
         </tr>
       </tbody>
     </v-table>
+    <p
+      v-if="rows.length"
+      class="text-caption text-medium-emphasis mt-3"
+    >
+      Applied usage only, since the current socket started. Restarts reset counts; zero is not lifetime non-use.
+      One receive can forward to multiple links; forwarded packets do not prove delivery.
+      <span v-if="rows.some(row => !usageReason(row) && observation(row.id)?.statistics_complete === false)">Receive loss is unknown; counts may be incomplete.</span>
+    </p>
     <p
       v-if="store.restartError"
       role="alert"
@@ -358,6 +388,7 @@ async function restart(): Promise<void> {
 .relay-table :deep(td) { white-space: normal; overflow-wrap: anywhere; }
 .relay-table :deep(td:nth-child(5)) { white-space: nowrap; }
 .relay-actions { min-width: 126px; white-space: nowrap !important; }
+.relay-usage { display: flex; flex-direction: column; font-variant-numeric: tabular-nums; }
 .relay-mobile-label { display: none; }
 .relay-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 24px; padding-block: 12px; }
 .relay-metrics dt { font-size: 0.75rem; color: rgb(var(--v-theme-on-surface-variant)); }

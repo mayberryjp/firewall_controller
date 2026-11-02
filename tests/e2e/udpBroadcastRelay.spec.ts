@@ -22,7 +22,7 @@ test("UDP Broadcast Relay stages presets and confirms a complete package on desk
   const view = page.getByRole("region", { name: "UDP Broadcast Relay", exact: true });
   await expect(view).toBeVisible();
   await expect(page.getByRole("tab", { name: "UDP BROADCAST RELAY", exact: true })).toBeVisible();
-  await expect(view.locator("thead th")).toHaveText(["Instance", "Enabled", "UDP port", "Interfaces", "Multicast Address", "Actions"]);
+  await expect(view.locator("thead th")).toHaveText(["Instance", "Enabled", "UDP port", "Interfaces", "Multicast Address", "Usage", "Actions"]);
   await expect(view.getByRole("button", { name: "Edit service metadata", exact: true })).toHaveCount(0);
   await expect(view.getByRole("checkbox", { name: "UDP Broadcast Relay enabled", exact: true })).toHaveCount(0);
   await view.getByRole("button", { name: "Presets", exact: true }).click();

@@ -460,6 +460,12 @@ export const udpRelayStatusSchema = z.object({
 });
 export const udpRelayStatusPageSchema = z.object({ instances: z.array(udpRelayStatusSchema), error: z.string() });
 export type UDPRelayStatus = z.infer<typeof udpRelayStatusSchema>;
+export const mdnsFilterCountersSchema = z.object({
+  filter: z.string(),
+  matched_packets: decimalCounter, transmitted_packets: decimalCounter,
+  last_used_at: timestamp.nullable(), last_transmitted_at: timestamp.nullable(),
+});
+export type MDNSFilterCounters = z.infer<typeof mdnsFilterCountersSchema>;
 export const mdnsStatusSchema = z.object({
   ...supervisionFields,
   name: z.literal("mdns"), scope: z.literal("managed"), enabled: z.boolean(),
@@ -467,6 +473,7 @@ export const mdnsStatusSchema = z.object({
   started_at: timestamp.nullable(), collected_at: timestamp.nullable(), error: z.string().nullable().default(null),
   effective_interfaces: z.array(z.string()), effective_families: z.array(z.enum(["ipv4", "ipv6"])),
   reflection_enabled: z.boolean(), publishing_enabled: z.boolean(),
+  filter_counters: z.array(mdnsFilterCountersSchema),
   received_packets: decimalCounter, transmitted_packets: decimalCounter,
   received_bytes: decimalCounter, transmitted_bytes: decimalCounter,
   malformed_packets: decimalCounter, hop_limit_drops: decimalCounter,
