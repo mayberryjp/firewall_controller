@@ -25,8 +25,8 @@ const config = computed(() => store.state.data === excludedState.value ? undefin
   store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
 const ports = computed(() => flowPorts(config.value, sample.value, frame.value, capabilities.value));
 const zones = computed(() => ([
-  { role: "wan" as const, label: "WAN", caption: "EXTERNAL NETWORK", nodes: ports.value.filter(port => port.role === "wan") },
-  { role: "lan" as const, label: "LAN", caption: "INTERNAL NETWORK", nodes: ports.value.filter(port => port.role === "lan") },
+  { role: "wan" as const, label: "WAN", nodes: ports.value.filter(port => port.role === "wan") },
+  { role: "lan" as const, label: "LAN", nodes: ports.value.filter(port => port.role === "lan") },
 ]));
 const largestGroup = computed(() => Math.max(1, ...zones.value.map(zone => zone.nodes.length)));
 const boardWidth = computed(() => Math.max(400, largestGroup.value * 168, viewportWidth.value));
@@ -160,9 +160,6 @@ onUnmounted(() => {
             :class="`flow-zone--${zone.role}`"
             :aria-label="`${zone.label} interfaces`"
           >
-            <header class="zone-heading">
-              <span>{{ zone.label }}</span><span>{{ zone.caption }}</span>
-            </header>
             <div
               class="flow-nodes"
               :style="{ gridTemplateColumns: `repeat(${Math.max(1, zone.nodes.length)}, minmax(0, 1fr))` }"
@@ -173,6 +170,9 @@ onUnmounted(() => {
                 class="flow-node"
                 :aria-label="`${port.name} interface counters`"
               >
+                <p class="node-role">
+                  {{ zone.label }}
+                </p>
                 <header class="node-heading">
                   <router-link
                     :to="{ name: 'real-time-traffic', query: { interface: port.name } }"
@@ -404,7 +404,7 @@ onUnmounted(() => {
                 font-family="inherit"
                 font-weight="700"
                 letter-spacing="3"
-              >FIREWALL</text>
+              >MODAN</text>
               <text
                 x="110"
                 y="134"
@@ -412,7 +412,7 @@ onUnmounted(() => {
                 font-size="8"
                 font-family="inherit"
                 letter-spacing="2"
-              >TRAFFIC GATEWAY</text>
+              >KNOW YOUR NETWORK</text>
               <g
                 v-for="socket in 8"
                 :key="socket"
@@ -507,15 +507,13 @@ onUnmounted(() => {
 .flow-board { display: flex; flex-direction: column; flex-shrink: 0; margin: 0 auto; }
 .flow-zone { display: flex; flex-direction: column; flex: 1; }
 .flow-zone--lan { flex-direction: column-reverse; }
-.zone-heading { display: flex; justify-content: center; align-items: center; gap: 12px; margin: 0 12px 6px; font-size: 9px; line-height: 16px; letter-spacing: 2px; color: var(--flow-muted); }
-.zone-heading span:first-child { color: var(--text-primary); font-size: 12px; font-weight: 700; }
-.flow-zone--lan .zone-heading { margin-top: 6px; margin-bottom: 0; }
 .flow-nodes { display: grid; align-items: stretch; width: 100%; }
 .flow-node {
   position: relative; z-index: 1; justify-self: center; width: calc(100% - 24px); max-width: 315px;
   padding: 8px 10px; border: 1px solid var(--border-light); border-radius: 12px;
   background: var(--bg-elevated);
 }
+.node-role { margin-bottom: 4px; text-align: center; color: var(--text-primary); font-size: 12px; line-height: 16px; font-weight: 700; letter-spacing: 2px; }
 .node-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .node-heading a { color: var(--text-primary); font-weight: 650; font-size: 14px; line-height: 18px; text-decoration: none; overflow-wrap: anywhere; min-width: 0; }
 .node-heading a:hover { color: rgb(var(--v-theme-primary)); text-decoration: underline; }

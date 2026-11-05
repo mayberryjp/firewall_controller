@@ -707,6 +707,8 @@ describe("October 17 frontend workflows", () => {
       expect(editor.props("form").probe_interval_ms).toBe(mode === "add" ? 1000 : 1500);
       await toggle.trigger("click");
       expect((options.element as HTMLElement).style.display).not.toBe("none");
+      expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("metadata");
+      expect(options.text()).not.toMatch(/Labels|Display name|Description/);
       expect(toggle.text()).toBe("Hide advanced");
       expect(toggle.attributes("append-icon")).toBe("mdi-chevron-up");
       const interval = editor.findAllComponents(FieldInput).find(field => field.props("field").key === "probe_interval_ms")!;
@@ -1233,7 +1235,7 @@ describe("October 17 frontend workflows", () => {
   });
   it("saves edited gateway monitors in table 254 without a routing table control", async () => {
     const store = useControllerStore();
-    store.state.data!.desired.gateway_monitors = [monitor()];
+    store.state.data!.desired.gateway_monitors = [{ ...monitor(), metadata: { display_name: "Office uplink", description: "Retained monitor notes" } }];
     store.state.data!.desired.routes.push({ ...store.state.data!.desired.routes[0]!, table: 254 });
     const before = cloneConfig(store.state.data!.desired);
     expect(before.gateway_monitors[0]!.routing_table).toBe(10000);
@@ -1241,6 +1243,7 @@ describe("October 17 frontend workflows", () => {
     await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
     const editor = wrapper.getComponent(ResourceRowEditor);
     expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("routing_table");
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("metadata");
     expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Routing table");
     editor.vm.$emit("change", "routing_table", 10001);
     editor.vm.$emit("change", "latency_threshold_ms", 175);
@@ -1248,6 +1251,7 @@ describe("October 17 frontend workflows", () => {
     await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
     expect(store.draft?.gateway_monitors).toEqual([{ ...before.gateway_monitors[0], routing_table: 254, latency_threshold_ms: 175 }]);
+    expect(store.draft?.gateway_monitors[0]?.metadata).toEqual(before.gateway_monitors[0]!.metadata);
     expect(store.draft?.routes).toEqual(before.routes);
     expect(cloneConfig(store.state.data!.desired)).toEqual(before);
     wrapper.unmount();

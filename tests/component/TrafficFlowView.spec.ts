@@ -82,6 +82,10 @@ describe("Traffic flow appliance view", () => {
     wrapper = render(); await publish(); await publish(3, 3000000n);
     expect(wrapper.find('[aria-label="WAN interfaces"] [aria-label="wan0 interface counters"]').exists()).toBe(true);
     expect(wrapper.find('[aria-label="LAN interfaces"]').findAll("article")).toHaveLength(3);
+    expect(wrapper.get('[aria-label="wan0 interface counters"] .node-role').text()).toBe("WAN");
+    expect(wrapper.get('[aria-label="LAN interfaces"]').findAll("article .node-role").map(label => label.text())).toEqual(["LAN", "LAN", "LAN"]);
+    expect(wrapper.find(".zone-heading").exists()).toBe(false);
+    expect(wrapper.text()).not.toMatch(/EXTERNAL|INTERNAL/);
     const board = wrapper.get(".flow-board").element;
     expect(wrapper.find(".overview-dashboard").exists()).toBe(false);
     expect(wrapper.find('[aria-label="Customize layout"]').exists()).toBe(false);
@@ -99,6 +103,10 @@ describe("Traffic flow appliance view", () => {
     expect(logo.attributes("stroke")).toBe("#D5FF38");
     expect(logo.attributes("transform")).toBe("translate(80 111)");
     expect(logo.findAll("circle")).toHaveLength(2);
+    expect(wrapper.get(".appliance svg").text()).toContain("MODAN");
+    expect(wrapper.get(".appliance svg").text()).not.toContain("FIREWALL");
+    expect(wrapper.get(".appliance svg").text()).toContain("KNOW YOUR NETWORK");
+    expect(wrapper.get(".appliance svg").text()).not.toContain("TRAFFIC GATEWAY");
     expect(wrapper.find('path[d="M 121 51 l 13 -7 l 13 7 v 12 l -13 7 l -13 -7 Z"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("1 TB");
     expect(wrapper.text()).toContain("1,000 pps");
@@ -222,6 +230,7 @@ describe("Traffic flow appliance view", () => {
     draft.system!.timezone = "America/Los_Angeles"; store.draft = draft;
     await flushPromises();
     expect(wrapper.get('[aria-label="WAN interfaces"]').text()).toContain("wan0");
+    expect(wrapper.get('[aria-label="wan0 interface counters"] .node-role').text()).toBe("WAN");
     expect(wrapper.find("footer").exists()).toBe(false);
     expect(wrapper.find("h1").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("NETWORK IN MOTION");
@@ -231,6 +240,7 @@ describe("Traffic flow appliance view", () => {
     await flushPromises();
     expect(wrapper.get('[aria-label="WAN interfaces"]').findAll("article")).toHaveLength(0);
     expect(wrapper.get('[aria-label="LAN interfaces"]').findAll("article")).toHaveLength(4);
+    expect(wrapper.get('[aria-label="wan0 interface counters"] .node-role').text()).toBe("LAN");
   });
   it("does not recenter the user's map pan on every statistics update", async () => {
     wrapper = render(); await publish();

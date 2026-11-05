@@ -131,6 +131,11 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
   await expect(map.locator(".appliance-logo")).toBeVisible();
   await expect(map.locator(".flow-stream.is-moving")).toHaveCount(8, { timeout: 12000 });
   await expect(map.getByRole("article", { name: "wan0 interface counters", exact: true })).toContainText("8 Mb/s");
+  await expect(map.getByRole("article", { name: "wan0 interface counters", exact: true }).locator(".node-role")).toHaveText("WAN");
+  await expect(map.getByRole("region", { name: "LAN interfaces", exact: true }).locator("article .node-role")).toHaveText(["LAN", "LAN", "LAN"]);
+  await expect(map.locator(".zone-heading")).toHaveCount(0);
+  await expect(map).not.toContainText("EXTERNAL");
+  await expect(map).not.toContainText("INTERNAL");
   await expect(map.locator(".node-rates").first().locator("div").last()).toHaveCSS("text-align", "right");
   await expect(map.getByRole("region", { name: "LAN interfaces", exact: true }).getByRole("article")).toHaveCount(3);
   await expect(map).toContainText("edge-fw-01");

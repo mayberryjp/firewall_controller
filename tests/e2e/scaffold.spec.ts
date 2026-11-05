@@ -1245,7 +1245,7 @@ test("static route Status stages only enabled and preserves the path through con
   const backend = await mockBackend(page, { initialConfig: initial });
   await connect(page); await navigate(page, "Static Routes");
   const routes = page.getByRole("region", { name: "Static Routes", exact: true });
-  await expect(routes.getByRole("columnheader")).toHaveText(["Destination", "Interface", "Metric", "Status", "Actions"]);
+  await expect(routes.getByRole("columnheader")).toHaveText(["Destination", "Interface", "Gateway type", "Gateway", "Metric", "Status", "Actions"]);
   const enabled = routes.getByRole("checkbox", { name: "Route enabled for 198.51.100.0/24", exact: true });
   await expect(enabled).toBeChecked();
   const popupMessages: string[] = [];
@@ -1281,7 +1281,7 @@ test("static route Status stages only enabled and preserves the path through con
 });
 
 test("routing pages add and edit inline without overflow", async ({ page }, testInfo) => {
-  const initial = config(); initial.gateway_monitors = [monitor()];
+  const initial = config(); initial.gateway_monitors = [{ ...monitor(), metadata: { display_name: "Office uplink", description: "Retained monitor notes" } }];
   initial.routes.push({ ...initial.routes[0]!, table: 254 });
   const backend = await mockBackend(page, { initialConfig: initial });
   await connect(page); await navigate(page, "Static Routes");
@@ -1321,6 +1321,10 @@ test("routing pages add and edit inline without overflow", async ({ page }, test
   expect(advancedBounds!.y).toBeLessThan(targetBounds!.y + targetBounds!.height);
   expect(advancedBounds!.y + advancedBounds!.height).toBeGreaterThan(targetBounds!.y);
   await page.getByRole("button", { name: "Show advanced", exact: true }).click();
+  const options = page.getByRole("row", { name: "Gateway monitor options", exact: true });
+  await expect(options.getByLabel("Display name", { exact: true })).toHaveCount(0);
+  await expect(options.getByLabel("Description", { exact: true })).toHaveCount(0);
+  await expect(options.locator("legend")).toHaveCount(0);
   await page.getByLabel("Mean RTT degradation threshold (ms)", { exact: true }).fill("175");
   await page.getByLabel("Failure hold (ms)", { exact: true }).fill("5000");
   await page.getByRole("button", { name: "Hide advanced", exact: true }).click();
@@ -1405,7 +1409,7 @@ test("monitor editor keeps usable fields and compact actions when adding beside 
 });
 
 test("shared route draft preserves other subsystems and requires explicit apply and confirmation", async ({ page }, testInfo) => {
-  const backend = await mockBackend(page);
+  const initial = config(), backend = await mockBackend(page, { initialConfig: initial });
   await connect(page);
   await expect(page.getByRole("button", { name: "Connected", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
@@ -1439,8 +1443,9 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("confirm-in-push-dialog.png"), fullPage: true, animations: "disabled" });
   expect(backend.writes.filter(write => write.path === "/transactions")).toHaveLength(1);
+  const expected = structuredClone(initial); expected.routes[0]!.metric = 42;
   expect(backend.writes[0]?.body).toMatchObject({
-    base_revision: "2026.10.29.1", description: "Update office route", config: { routes: [{ table: 254, metric: 42 }], interfaces: [{ name: "lab0" }], softflowd: [{ name: "capture" }], kernel: { namespace: { "net.ipv4.tcp_syncookies": "1" } } },
+    base_revision: "2026.10.29.1", description: "Update office route", config: expected,
   });
   expect(backend.writes.some(write => write.path.endsWith("/confirm"))).toBe(false);
   await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
@@ -1540,7 +1545,8 @@ test("an expired registry cookie requires login instead of reconnecting", async 
 test("keyboard skip link, unknown routes, and exact statistics values", async ({ page }) => {
   await mockBackend(page);
   await connect(page);
-  await expect(page.getByRole("cell", { name: "18.45 EB", exact: true })).toHaveAttribute("title", "18446744073709551615");
+  await navigate(page, "SYSTEM OVERVIEW");
+  await expect(page.getByRole("region", { name: "Interface counters", exact: true }).getByRole("cell", { name: "18.45 EB", exact: true })).toHaveAttribute("title", "18446744073709551615");
   await page.goto("/unknown-controller-page");
   await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
   await page.keyboard.press("Tab");
@@ -1626,7 +1632,6 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   await expect(page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   const expected = structuredClone(initial);
   expected.routes[0]!.metric = 42;
-  expected.routes[0]!.table = 254;
   expected.firewall.input!.interfaces[0]!.rules[0]!.destination_ports = [68, 67];
   expect(backend.writes).toHaveLength(1);
   expect(backend.writes[0]?.body).toMatchObject({ config: expected });
@@ -1799,7 +1804,7 @@ test("failed monitor push preserves long causes, operator prerequisites and the 
   const cause = `apply failed: ${"native apply context: ".repeat(300)}gateway probes require explicit allow_gateway_monitoring opt-in; rollback detail retained`;
   const backend = await mockBackend(page, { initialConfig: initial, applyError: { message: cause, outcome: "rolled_back" } });
   await connect(page); await navigate(page, "Gateway monitors");
-  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await page.getByRole("region", { name: "Gateway monitors", exact: true }).getByRole("button", { name: "Edit / stage", exact: true }).click();
   const editor = page.getByRole("row", { name: "Gateway monitor editor", exact: true });
   await editor.getByLabel("Probe Target", { exact: true }).fill("198.51.100.2");
   await editor.getByRole("button", { name: "Save", exact: true }).click();

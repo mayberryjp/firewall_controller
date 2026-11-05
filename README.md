@@ -692,7 +692,8 @@ traffic polling and discards its chart history. Chart times use the saved system
 **Overview** opens the compact high-level appliance layout with WAN links above and
 LAN links below. Roles come from server-reported state (including an active
 candidate), never unsaved drafts or interface-name guesses. Unassigned interfaces
-are not silently treated as LAN. Each card shows separate RX/TX bit rates and
+are not silently treated as LAN. WAN/LAN labels appear inside each interface card,
+without external/internal captions. Each card shows separate RX/TX bit rates and
 packet rates, cumulative byte counters and drop counts; selecting its interface
 opens the existing traffic-history view. VLAN and parent-interface counters are
 not summed into a claimed aggregate throughput.
@@ -707,7 +708,8 @@ The diagram stretches from below the app header to the bottom of the viewport,
 expanding its traffic connectors on taller screens instead of leaving unused space.
 Its flat surfaces, text, borders, status indicators and appliance illustration use
 the app's shared theme colors; rainbow accents are reserved for traffic streams.
-The appliance's front label carries the lime Modan mark beside FIREWALL.
+The appliance's front label carries the lime Modan mark beside MODAN,
+with KNOW YOUR NETWORK beneath it.
 The caption beside the pause control shows the configured hostname and domain.
 Full Interfaces, Gateways, WireGuard, BGP peers, System stats and Interface counters
 cards live in **Diagnostics > SYSTEM OVERVIEW**, which remains the default
@@ -1627,7 +1629,8 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
 - Probe timing and health thresholds are hidden by default when adding or editing
   a monitor. Use **Show advanced** to reveal them and **Hide advanced** to collapse
   them without discarding values. Validation errors in these settings reveal them
-  automatically.
+  automatically. Display name and Description fields are omitted from this editor;
+  existing saved labels and descriptions are preserved when staging monitor changes.
 - The interface is the probe egress, not just a physical-link check.
   Explicit mode requires a configured source address and explicit route.
   IPv4 probes automatically follow DHCP when the selected managed interface is

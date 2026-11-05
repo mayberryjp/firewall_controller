@@ -22,7 +22,7 @@ export function metadataFields(fields: Field[], include = true): Field[] {
 export function resourceFields(...args: Parameters<typeof baseResourceFields>): Field[] {
   // Route Status owns enabled; labels stay preserved in the row but are not edited here.
   if (args[0] === "routes") return baseResourceFields(...args).filter(field => field.key !== "enabled");
-  const fields = metadataFields(baseResourceFields(...args), !["nat", "softflowd"].includes(args[0]) && (!args[7] || args[8] !== false));
+  const fields = metadataFields(baseResourceFields(...args), !["nat", "softflowd", "gateway_monitors"].includes(args[0]) && (!args[7] || args[8] !== false));
   return args[0] === "interfaces" ? fields.map(field => field.key === "metadata"
     ? { ...field, fields: field.fields?.filter(child => child.key !== "description") } : field) : fields;
 }
