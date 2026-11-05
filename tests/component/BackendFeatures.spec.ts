@@ -40,7 +40,7 @@ import JsonPanel from "@/components/base/JsonPanel.vue";
 import * as api from "@/services/netcontrol";
 import { ApiFailure } from "@/services/api";
 import { useControllerStore } from "@/stores/controller";
-import { configSchema, runtimeSchema } from "@/types/domain";
+import { configSchema, dhcpClientSchema, runtimeSchema } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
 import { cloneConfig, differences, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns, mqttStatus } from "../fixtures";
@@ -851,7 +851,7 @@ describe("October 17 frontend workflows", () => {
     store.state.data!.desired.routes = [{ ...base, destination: "198.51.100.0/24" }, { ...base, destination: "203.0.113.0/24", enabled: false }, { ...base, destination: "2001:db8:1::/48" }];
     store.runtime.data = { ...runtime(), dhcp_clients: { leases: {}, errors: { lab0: "no offers" } } }; store.runtime.stale = false; store.runtime.lastSuccess = Date.now();
     const wrapper = await render(RoutesView, "/routes");
-    const waiting = () => wrapper.findAll("tbody tr").map(row => row.text().includes("Waiting for DHCP"));
+    const waiting = () => wrapper.findAll("tbody tr").map(row => row.text().includes("DHCP error"));
     expect(waiting()).toEqual([true, false, false]);
     expect(wrapper.find('[title*="no offers"]').exists()).toBe(true);
     const lease = { client: store.state.data!.desired.dhcp_clients!.lab0!, address: "192.0.2.10/24", server: "192.0.2.1", acquired_at: Math.floor(Date.now() / 1000), lifetime: 3600, renewal: 1800, rebinding: 3000, routes: [], dns: [], domain: "", mtu: null };
@@ -860,19 +860,159 @@ describe("October 17 frontend workflows", () => {
     expect(store.state.data!.desired.routes[0]!.enabled).toBe(true);
     wrapper.unmount();
   });
-  it("infers a new static route's next hop from the interface's default gateway but not for connected networks", async () => {
+  it("keeps Direct routes direct instead of silently pinning an inferred default gateway", async () => {
     const store = useControllerStore();
     store.state.data!.desired.routes = [{ ...config().routes[0]!, destination: "0.0.0.0/0", gateway: "192.0.2.1", table: 254, metric: 100 }];
     const wrapper = await render(RoutesView, "/routes");
-    for (const [destination, gateway] of [["20.243.160.145/32", "192.0.2.1"], ["192.0.2.128/25", undefined]] as const) {
+    for (const destination of ["20.243.160.145/32", "192.0.2.128/25"]) {
       await wrapper.findAll("button").find(button => button.text().startsWith("Add "))!.trigger("click");
       const editor = wrapper.getComponent(ResourceRowEditor);
       editor.vm.$emit("change", "destination", destination); editor.vm.$emit("change", "interface", "lab0"); editor.vm.$emit("change", "metric", 1);
       await flushPromises();
       await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
-      expect(store.draft?.routes.find(route => route.destination === destination)?.gateway).toBe(gateway);
+      expect(store.draft?.routes.find(route => route.destination === destination)?.gateway).toBeUndefined();
       store.discardDraft();
     }
+    wrapper.unmount();
+  });
+  it("explicitly converts a pinned route to DHCP while preserving its table, metric and metadata without a live write", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces[0] = { ...desired.interfaces[0]!, kind: "ethernet", addresses: [] };
+    desired.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+    desired.routes[0] = { ...desired.routes[0]!, gateway: "172.16.6.1", metric: 77, enabled: false,
+      metadata: { display_name: "VPN endpoint", description: "Preserve" } };
+    const before = cloneConfig(desired), submit = vi.spyOn(api, "submitPackage");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const wrapper = await render(RoutesView, "/routes");
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    expect(editor.props("form").gateway_mode).toBe("static");
+    const mode = editor.findAllComponents(FieldInput).find(input => input.props("field").key === "gateway_mode")!;
+    await mode.get("select").setValue("dhcp");
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.routes[0]).toEqual({ ...before.routes[0], gateway: "dhcp" });
+    expect(wrapper.text()).toContain("DHCP gateway");
+    expect(desired.routes).toEqual(before.routes);
+    expect(submit).not.toHaveBeenCalled(); expect(confirm).not.toHaveBeenCalled();
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    expect(wrapper.getComponent(ResourceRowEditor).props("form").gateway_mode).toBe("dhcp");
+    await wrapper.getComponent(ResourceRowEditor).findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(store.draft?.routes[0]).toEqual({ ...before.routes[0], gateway: "dhcp" });
+    wrapper.unmount();
+  });
+  it.each([["destination", "interface"], ["interface", "destination"]])(
+    "defaults new DHCP routes automatically with input order %j", async (first, second) => {
+      const store = useControllerStore(), desired = store.state.data!.desired;
+      desired.interfaces[0] = { ...desired.interfaces[0]!, kind: "ethernet", addresses: [] };
+      desired.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+      desired.routes = [];
+      const submit = vi.spyOn(api, "submitPackage");
+      const wrapper = await render(RoutesView, "/routes");
+      await wrapper.findAll("button").find(button => button.text().startsWith("Add "))!.trigger("click");
+      const editor = wrapper.getComponent(ResourceRowEditor);
+      const values: Record<string, string> = { destination: "203.0.113.1/32", interface: "lab0" };
+      editor.vm.$emit("change", first!, values[first!]);
+      editor.vm.$emit("change", second!, values[second!]);
+      await flushPromises();
+      expect(editor.props("form").gateway_mode).toBe("dhcp");
+      expect(editor.props("form").gateway).toBe("dhcp");
+      expect(wrapper.get('tr[aria-label="Route editor"]').findAll("select")).toHaveLength(2);
+      expect(wrapper.find('[aria-label="Route options"]').exists()).toBe(false);
+      expect(editor.findAllComponents(FieldInput).find(field => field.props("field").key === "gateway")!.props("field").disabled).toBe(true);
+      await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft?.routes).toEqual([{ enabled: true, destination: "203.0.113.1/32", interface: "lab0", gateway: "dhcp", table: 254, metric: 1 }]);
+      expect(submit).not.toHaveBeenCalled(); expect(desired.routes).toEqual([]);
+      wrapper.unmount();
+    },
+  );
+  it("derives and displays each saved gateway type without persisting an extra type field", async () => {
+    const store = useControllerStore(), base = config().routes[0]!;
+    store.state.data!.desired.routes = [
+      { ...base, metric: 1 }, { ...base, metric: 2, gateway: "172.16.6.1" }, { ...base, metric: 3, gateway: "dhcp" },
+    ];
+    const before = cloneConfig(store.state.data!.desired);
+    const wrapper = await render(RoutesView, "/routes");
+    const headers = wrapper.findAll("th").map(header => header.text()), column = headers.indexOf("Gateway type");
+    expect(column).toBeGreaterThan(-1);
+    expect(wrapper.findAll("tbody tr").map(row => cellValue(row.findAll("td")[column]!))).toEqual(["Direct", "Static address", "DHCP gateway"]);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(before); expect(store.draft).toBeNull();
+    wrapper.unmount();
+  });
+  it("retains an explicit inline type override but derives a new default when the interface changes", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces[0] = { ...desired.interfaces[0]!, kind: "ethernet", addresses: [] };
+    desired.interfaces.push({ ...desired.interfaces[0], name: "wan1" });
+    desired.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+    const wrapper = await render(RoutesView, "/routes");
+    await wrapper.findAll("button").find(button => button.text().startsWith("Add "))!.trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    editor.vm.$emit("change", "interface", "lab0");
+    editor.vm.$emit("change", "destination", "203.0.113.1/32"); await flushPromises();
+    expect(editor.props("form").gateway_mode).toBe("dhcp");
+    const mode = editor.findAllComponents(FieldInput).find(input => input.props("field").key === "gateway_mode")!;
+    await mode.get("select").setValue("direct");
+    editor.vm.$emit("change", "destination", "203.0.113.2/32"); await flushPromises();
+    expect(editor.props("form").gateway_mode).toBe("direct");
+    expect(editor.props("form").gateway).toBeUndefined();
+    editor.vm.$emit("change", "interface", "wan1"); await flushPromises();
+    expect(editor.props("form").gateway_mode).toBe("direct");
+    editor.vm.$emit("change", "interface", "lab0"); await flushPromises();
+    expect(editor.props("form").gateway_mode).toBe("dhcp");
+    editor.vm.$emit("change", "destination", "2001:db8::/32"); await flushPromises();
+    expect(editor.props("form").gateway_mode).toBe("direct");
+    expect(editor.props("form").gateway).toBeUndefined();
+    wrapper.unmount();
+  });
+  it("offers DHCP gateways only for draft Ethernet DHCP interfaces and IPv4, retaining invalid selections for inline correction", async () => {
+    const store = useControllerStore();
+    store.draft = cloneConfig(store.state.data!.desired);
+    store.draft.interfaces[0] = { ...store.draft.interfaces[0]!, kind: "ethernet", addresses: [] };
+    store.draft.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+    const wrapper = await render(RoutesView, "/routes");
+    await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+    const editor = wrapper.getComponent(ResourceRowEditor);
+    const choices = () => editor.props("fields").find(field => field.key === "gateway_mode")!.choices;
+    expect(choices()).toContainEqual({ title: "DHCP gateway", value: "dhcp" });
+    editor.vm.$emit("change", "destination", "2001:db8::/32"); await flushPromises();
+    expect(choices()?.some(choice => choice.value === "dhcp")).toBe(false);
+    editor.vm.$emit("change", "destination", "203.0.113.1/32"); await flushPromises();
+    delete store.draft.dhcp_clients; await flushPromises();
+    expect(choices()?.some(choice => choice.value === "dhcp")).toBe(false);
+    editor.vm.$emit("change", "gateway_mode", "dhcp"); await flushPromises();
+    await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+    expect(wrapper.get('[role="alert"]').text()).toContain("DHCPv4 on the selected managed Ethernet");
+    expect(editor.props("form").gateway).toBe("dhcp");
+    expect(store.draft.routes[0]!.gateway).toBeUndefined();
+    wrapper.unmount();
+  });
+  it("distinguishes initial DHCP loading, waiting, errors, expiry and recovery without rewriting a route", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces[0] = { ...desired.interfaces[0]!, kind: "ethernet", addresses: [] };
+    desired.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+    desired.routes[0]!.gateway = "dhcp";
+    const before = cloneConfig(desired);
+    store.runtime.data = null; store.runtime.loading = true;
+    const wrapper = await render(RoutesView, "/routes");
+    const feedback = () => wrapper.findAll(".status-chip").filter(chip => /Waiting for DHCP|DHCP error/.test(chip.text()));
+    expect(feedback()).toHaveLength(0);
+    store.runtime.loading = false; store.runtime.error = "HTTP 503: runtime unavailable"; await flushPromises();
+    expect(feedback()[0]!.attributes("title")).toContain("runtime unavailable");
+    store.runtime.error = null; store.runtime.data = { ...runtime(), dhcp_clients: { leases: {}, errors: {} } };
+    store.runtime.stale = false; await flushPromises();
+    expect(feedback()[0]!.text()).toBe("Waiting for DHCP");
+    const lease = { client: desired.dhcp_clients.lab0!, address: "10.4.50.70/24", server: "10.4.40.40",
+      acquired_at: Math.floor(Date.now() / 1000), lifetime: 3600, renewal: 1800, rebinding: 3000,
+      routes: [], dns: [], domain: "", mtu: null };
+    store.runtime.data = { ...runtime(), dhcp_clients: { leases: { lab0: lease }, errors: {} } }; await flushPromises();
+    expect(feedback()).toHaveLength(0);
+    store.runtime.data = { ...runtime(), dhcp_clients: { leases: { lab0: lease }, errors: { lab0: "No usable DHCP default gateway" } } }; await flushPromises();
+    expect(feedback()[0]!.text()).toBe("DHCP error");
+    expect(feedback()[0]!.attributes("title")).toContain("No usable DHCP default gateway");
+    store.runtime.data = { ...runtime(), dhcp_clients: { leases: { lab0: { ...lease, acquired_at: 0 } }, errors: {} } }; await flushPromises();
+    expect(feedback()[0]!.text()).toBe("Waiting for DHCP");
+    store.runtime.data = { ...runtime(), dhcp_clients: { leases: { lab0: { ...lease, address: "172.16.6.20/24" } }, errors: {} } }; await flushPromises();
+    expect(feedback()).toHaveLength(0);
+    expect(cloneConfig(desired)).toEqual(before); expect(store.draft).toBeNull();
     wrapper.unmount();
   });
   it.each([
@@ -899,7 +1039,7 @@ describe("October 17 frontend workflows", () => {
       expect(editor.props("form").enabled).toBe(true);
     }
     if (section === "routes") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("table");
-    if (section === "routes") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("gateway");
+    if (section === "routes") expect(editor.findAllComponents(FieldInput).find(field => field.props("field").key === "gateway")!.props("field").disabled).toBe(true);
     for (const [key, value] of Object.entries(values)) editor.vm.$emit("change", key, value);
     editor.vm.$emit("change", invalid, -1);
     await flushPromises();
@@ -928,7 +1068,7 @@ describe("October 17 frontend workflows", () => {
       expect(store.draft?.gateway_monitors.slice(0, -1)).toEqual(before.gateway_monitors);
     }
     if (section === "routes") {
-      expect(store.draft?.routes.at(-1)?.table).toBe(254);
+      expect(store.draft?.routes.at(-1)?.table).toBe(10000);
       expect(store.draft?.routes.at(-1)?.gateway).toBeUndefined();
       expect(store.draft?.routes.slice(0, -1)).toEqual(before.routes);
     }
@@ -1071,7 +1211,7 @@ describe("October 17 frontend workflows", () => {
       expect(wrapper.get('[aria-label="Edit / stage"]').attributes("disabled")).toBeDefined();
     } finally { wrapper.unmount(); }
   });
-  it("saves edited routes in table 254 regardless of their previous table", async () => {
+  it("preserves edited route tables and pinned gateways unless explicitly changed", async () => {
     const store = useControllerStore();
     store.state.data!.desired.routes[0]!.gateway = "192.0.2.1";
     const before = cloneConfig(store.state.data!.desired);
@@ -1081,14 +1221,13 @@ describe("October 17 frontend workflows", () => {
     const editor = wrapper.getComponent(ResourceRowEditor);
     expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("table");
     expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Table");
-    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("gateway");
-    expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Gateway");
-    editor.vm.$emit("change", "table", 10001);
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).toContain("gateway");
+    expect(wrapper.findAll("th").map(header => header.text())).toContain("Gateway");
     editor.vm.$emit("change", "metric", 42);
     await flushPromises();
     await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
     expect(wrapper.findComponent(ResourceRowEditor).exists()).toBe(false);
-    expect(store.draft?.routes).toEqual([{ ...before.routes[0], table: 254, metric: 42 }, ...before.routes.slice(1)]);
+    expect(store.draft?.routes).toEqual([{ ...before.routes[0], metric: 42 }, ...before.routes.slice(1)]);
     expect(cloneConfig(store.state.data!.desired)).toEqual(before);
     wrapper.unmount();
   });

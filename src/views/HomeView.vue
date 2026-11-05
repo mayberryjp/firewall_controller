@@ -94,7 +94,7 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
   <section
     ref="overview"
     class="overview-page"
-    aria-label="Overview"
+    aria-label="System overview"
   >
     <div
       v-if="editing"
@@ -175,97 +175,100 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
       class="overview-dashboard"
       :class="{ 'overview-dashboard--editing': editing }"
     >
-      <div
+      <template
         v-for="(column, columnIndex) in displayedLayout.columns"
         :key="columnIndex"
-        class="overview-column"
-        :data-column="columnIndex"
-        @dragover="editing && $event.preventDefault()"
-        @drop.prevent="drop(columnIndex, column.length)"
       >
-        <p
-          v-if="editing"
-          class="column-label"
-        >
-          {{ columnIndex === 0 ? "Left column" : "Right column" }}
-        </p>
         <div
-          v-for="(id, index) in column"
-          :key="id"
-          class="overview-box"
-          :data-widget="id"
+          class="overview-column"
+          :data-column="columnIndex"
           @dragover="editing && $event.preventDefault()"
-          @drop.stop.prevent="drop(columnIndex, index)"
+          @drop.prevent="drop(columnIndex, column.length)"
         >
-          <div
+          <p
             v-if="editing"
-            class="layout-controls"
-            role="group"
-            :aria-label="`Arrange ${widgets[id].title}`"
+            class="column-label"
           >
-            <button
-              type="button"
-              class="layout-control layout-drag"
-              :draggable="!saving"
-              :disabled="saving"
-              :aria-label="`Drag ${widgets[id].title}`"
-              title="Drag to move this box"
-              @dragstart="startDrag($event, id)"
-              @dragend="dragging = null"
+            {{ columnIndex === 0 ? "Left column" : "Right column" }}
+          </p>
+          <div
+            v-for="(id, index) in column"
+            :key="id"
+            class="overview-box"
+            :data-widget="id"
+            @dragover="editing && $event.preventDefault()"
+            @drop.stop.prevent="drop(columnIndex, index)"
+          >
+            <div
+              v-if="editing"
+              class="layout-controls"
+              role="group"
+              :aria-label="`Arrange ${widgets[id].title}`"
             >
-              <v-icon icon="mdi-drag" />
-            </button>
-            <span class="layout-box-title">{{ widgets[id].title }}</span>
-            <button
-              type="button"
-              class="layout-control"
-              :aria-label="`Move ${widgets[id].title} up`"
-              title="Move up"
-              :disabled="saving || index === 0"
-              @click="move(id, columnIndex, index - 1)"
-            >
-              <v-icon icon="mdi-arrow-up" />
-            </button>
-            <button
-              type="button"
-              class="layout-control"
-              :aria-label="`Move ${widgets[id].title} down`"
-              title="Move down"
-              :disabled="saving || index === column.length - 1"
-              @click="move(id, columnIndex, index + 1)"
-            >
-              <v-icon icon="mdi-arrow-down" />
-            </button>
-            <button
-              type="button"
-              class="layout-control"
-              :aria-label="`Move ${widgets[id].title} to ${columnIndex === 0 ? 'right' : 'left'} column`"
-              :title="`Move to ${columnIndex === 0 ? 'right' : 'left'} column`"
-              :disabled="saving"
-              @click="move(id, 1 - columnIndex, draft.columns[1 - columnIndex]!.length)"
-            >
-              <v-icon :icon="columnIndex === 0 ? 'mdi-arrow-right' : 'mdi-arrow-left'" />
-            </button>
-            <button
-              type="button"
-              class="layout-control"
-              :aria-label="`Hide ${widgets[id].title}`"
-              title="Hide box"
-              :disabled="saving"
-              @click="hide(id)"
-            >
-              <v-icon icon="mdi-close" />
-            </button>
+              <button
+                type="button"
+                class="layout-control layout-drag"
+                :draggable="!saving"
+                :disabled="saving"
+                :aria-label="`Drag ${widgets[id].title}`"
+                title="Drag to move this box"
+                @dragstart="startDrag($event, id)"
+                @dragend="dragging = null"
+              >
+                <v-icon icon="mdi-drag" />
+              </button>
+              <span class="layout-box-title">{{ widgets[id].title }}</span>
+              <button
+                type="button"
+                class="layout-control"
+                :aria-label="`Move ${widgets[id].title} up`"
+                title="Move up"
+                :disabled="saving || index === 0"
+                @click="move(id, columnIndex, index - 1)"
+              >
+                <v-icon icon="mdi-arrow-up" />
+              </button>
+              <button
+                type="button"
+                class="layout-control"
+                :aria-label="`Move ${widgets[id].title} down`"
+                title="Move down"
+                :disabled="saving || index === column.length - 1"
+                @click="move(id, columnIndex, index + 1)"
+              >
+                <v-icon icon="mdi-arrow-down" />
+              </button>
+              <button
+                type="button"
+                class="layout-control"
+                :aria-label="`Move ${widgets[id].title} to ${columnIndex === 0 ? 'right' : 'left'} column`"
+                :title="`Move to ${columnIndex === 0 ? 'right' : 'left'} column`"
+                :disabled="saving"
+                @click="move(id, 1 - columnIndex, draft.columns[1 - columnIndex]!.length)"
+              >
+                <v-icon :icon="columnIndex === 0 ? 'mdi-arrow-right' : 'mdi-arrow-left'" />
+              </button>
+              <button
+                type="button"
+                class="layout-control"
+                :aria-label="`Hide ${widgets[id].title}`"
+                title="Hide box"
+                :disabled="saving"
+                @click="hide(id)"
+              >
+                <v-icon icon="mdi-close" />
+              </button>
+            </div>
+            <component :is="widgets[id].component" />
           </div>
-          <component :is="widgets[id].component" />
+          <p
+            v-if="editing && !column.length"
+            class="layout-empty"
+          >
+            Drop a box here or use a move button.
+          </p>
         </div>
-        <p
-          v-if="editing && !column.length"
-          class="layout-empty"
-        >
-          Drop a box here or use a move button.
-        </p>
-      </div>
+      </template>
     </div>
     <div
       v-if="!editing"
@@ -286,7 +289,7 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
 
 <style scoped>
 .overview-page { scroll-margin-top: calc(var(--v-layout-top, 64px) + 16px); }
-.overview-footer { display: flex; justify-content: flex-end; margin-top: 8px; }
+.overview-footer { display: flex; justify-content: center; margin-top: 8px; }
 .overview-heading { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 8px; }
 .layout-settings { margin-bottom: 16px; font-size: 13px; color: var(--text-secondary); }
 .layout-restore { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -311,6 +314,8 @@ onUnmounted(() => { store.gatewayMonitoring = false; });
   gap: 16px;
   min-width: 0;
 }
+.overview-page :deep(.overview-widget) { border: 1px solid var(--border-light) !important; border-radius: 12px !important; background: var(--bg-elevated); }
+.overview-page :deep(.overview-widget .v-table) { background: transparent; }
 @media (max-width: 959px) {
   .overview-dashboard {
     grid-template-columns: minmax(0, 1fr);

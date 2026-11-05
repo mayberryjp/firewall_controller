@@ -32,7 +32,9 @@ test("BGP peers and DNAT stage inline, preserve the complete package, and surviv
   await page.getByLabel("Registry admin password").fill("registry-test-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  const overview = page.getByRole("region", { name: "Overview", exact: true });
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await navigate(page, "SYSTEM OVERVIEW");
+  const overview = page.getByRole("region", { name: "System overview", exact: true });
   await expect(overview).toBeVisible();
   await expect(overview.getByRole("region", { name: "BGP peers", exact: true })).toContainText("Established");
   await navigate(page, "BGP PROCESS");

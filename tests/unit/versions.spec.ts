@@ -4,8 +4,16 @@ import { decodeJson, encodeJson } from "@/services/json";
 import { cloneConfig, equalConfig, importConfig } from "@/services/configuration";
 import { softwareMetadataSchema, transactionSchema } from "@/types/domain";
 import { transaction, software, state } from "../fixtures";
+import { interfaceCapabilitySnapshot } from "../diagnosticsFixtures";
 
 describe("calendar software versions and revision IDs", () => {
+  it.each(["01", "0a", "10", null])("keeps PCI hardware revision %j separate from configuration revisions in both JSON directions", revision => {
+    const snapshot = interfaceCapabilitySnapshot();
+    snapshot.inventory.interfaces[0]!.hardware!.revision = revision;
+    const value = { revision: state().revision, snapshot };
+    expect(decodeJson(JSON.stringify(value))).toEqual(value);
+    expect(JSON.parse(encodeJson(value))).toEqual(value);
+  });
   it.each(["0001.01.01.1", "2000.02.29.1", "2024.02.29.10", "9999.12.31.4294967295"])("accepts canonical %s", value => {
     expect(dateVersionSchema.parse(value)).toBe(value);
   });

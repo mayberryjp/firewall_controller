@@ -1,10 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { configSchema, mqttSchema, blackholeSchema, revisionSchema, statisticsSchema, transactionSchema } from "@/types/domain";
+import { configSchema, dhcpClientSchema, mqttSchema, blackholeSchema, revisionSchema, statisticsSchema, transactionSchema } from "@/types/domain";
 import { decodeJson, encodeJson, utf8Size } from "@/services/json";
 import { differenceContext, differences, endpoint, equalConfig, importConfig, normalize, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, statistics, transaction } from "../fixtures";
 
 describe("lossless boundary and import", () => {
+  it.each([true, false])("preserves DHCP route gateways with enabled=%s across imports, transactions and normalization", enabled => {
+    const before = config(), candidate = config();
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet", addresses: [] };
+    candidate.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+    candidate.routes[0] = { ...candidate.routes[0]!, enabled, gateway: "dhcp", metric: 77 };
+    expect(validateConfig(candidate)).toEqual([]);
+    expect(importConfig(encodeJson(candidate)).routes).toEqual(candidate.routes);
+    const pending = transaction(); pending.previous = candidate; pending.candidate = candidate;
+    const parsed = transactionSchema.parse(decodeJson(encodeJson(pending)));
+    expect(parsed.previous.routes).toEqual(candidate.routes);
+    expect(parsed.candidate.routes).toEqual(candidate.routes);
+    expect(normalize(candidate).routes).toEqual(candidate.routes);
+    const pinned = structuredClone(candidate); pinned.routes[0]!.gateway = "192.0.2.1";
+    expect(equalConfig(candidate, pinned)).toBe(false);
+    expect(requiredPermissions(differences(pinned, candidate))).toEqual(["transactions.write", "routes.write"]);
+    expect(before.routes[0]!.gateway).toBeUndefined();
+  });
+  it.each(["ipv6", "no-client", "dummy", "blackhole", "DHCP", "dhcp ", "null"] as const)(
+    "rejects invalid DHCP route configuration: %s, including disabled routes", invalid => {
+      const candidate = config();
+      candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet", addresses: [] };
+      candidate.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+      candidate.routes[0] = { ...candidate.routes[0]!, gateway: "dhcp", enabled: false };
+      if (invalid === "ipv6") candidate.routes[0]!.destination = "2001:db8::/32";
+      if (invalid === "no-client") delete candidate.dhcp_clients;
+      if (invalid === "dummy") candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "dummy" };
+      if (invalid === "blackhole") {
+        candidate.blackhole = blackholeSchema.parse({ name: "drop0" });
+        candidate.routes[0]!.interface = "drop0";
+      }
+      if (invalid === "DHCP" || invalid === "dhcp ") candidate.routes[0]!.gateway = invalid;
+      if (invalid === "null") {
+        expect(configSchema.safeParse({ ...candidate, routes: [{ ...candidate.routes[0], gateway: null }] }).success).toBe(false);
+      } else expect(validateConfig(candidate).some(issue => issue.path.startsWith("routes.0"))).toBe(true);
+    },
+  );
   it.each([null, "192.0.2.10:9999", "[2001:db8::10]:9999"])("preserves vnStat collector %s across import, transactions and export with its owning permission", collector => {
     const before = config(), after = config();
     after.vnstat = { enabled: true, collector, metadata: { display_name: "Accounting", description: "Saved notes" } };

@@ -5,6 +5,8 @@ import { normalizeMDNS, validateMDNS } from "@/services/mdns";
 import { validateUDPRelay } from "@/services/udpBroadcastRelay";
 import { sandoSchema } from "@/services/sandoState";
 import { firewallProtocolFamily, parseFirewallPorts, supportsFirewallPorts } from "@/services/firewallProtocols";
+import { rpsMaskCpus, rpsTarget } from "@/services/rps";
+import { validateTuning } from "@/services/tuning";
 
 export const cloneConfig = (config: Config): Config => {
   const editable = JSON.parse(JSON.stringify(config)) as Config;
@@ -23,6 +25,9 @@ export function stableJson(value: unknown): string {
 export function normalize(config: Config): Config {
   const parsed = configSchema.safeParse(config);
   const result = cloneConfig(parsed.success ? parsed.data : config);
+  if (result.kernel && !Object.keys(result.kernel.rps ?? {}).length) delete result.kernel.rps;
+  if (result.kernel && !Object.keys(result.kernel.offloads ?? {}).length) delete result.kernel.offloads;
+  if (result.kernel?.rfs === null) delete result.kernel.rfs;
   if (result.sando && stableJson(result.sando) === stableJson(sandoSchema.parse({}))) delete result.sando;
   if (result.ipv6_enabled === true) delete result.ipv6_enabled;
   if (result.mqtt && stableJson(result.mqtt) === stableJson(mqttSchema.parse({}))) delete result.mqtt;
@@ -208,7 +213,7 @@ export function differences(before: Config, after: Config): Difference[] {
   ordered("nat", old.firewall.nat.masquerade, next.firewall.nat.masquerade);
   ordered("dnat", old.firewall.nat.destination_rewrite ?? [], next.firewall.nat.destination_rewrite ?? []);
   if (stableJson(old.kernel) !== stableJson(next.kernel)) result.push({
-    area: "kernel", identity: "preserved settings", kind: "modified", before: old.kernel, after: next.kernel,
+    area: "kernel", identity: "settings", kind: "modified", before: old.kernel, after: next.kernel,
   });
   return result;
 }
@@ -667,11 +672,17 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     const path = `routes.${index}`, page = "/routes";
     check(`${path}.destination`, page, () => {
       const destination = prefix(route.destination, true);
-      if (route.gateway && numericAddress(route.gateway).kind() !== destination.family) throw new Error("Gateway family must match destination");
+      if (route.gateway === "dhcp") {
+        if (destination.family !== "ipv4") throw new Error("DHCP gateways require an IPv4 destination");
+      } else if (route.gateway && numericAddress(route.gateway).kind() !== destination.family) throw new Error("Gateway family must match destination");
     });
     const toBlackhole = Boolean(blackholeName) && route.interface === blackholeName;
     if (!interfaces.has(route.interface) && !toBlackhole) issue(`${path}.interface`, "Select a gateway interface", page);
     if (toBlackhole && route.gateway) issue(`${path}.gateway`, "A blackhole route cannot have a gateway", page);
+    if (route.gateway === "dhcp" && (config.interfaces.find(link => link.name === route.interface)?.kind !== "ethernet" ||
+      !config.dhcp_clients?.[route.interface])) {
+      issue(`${path}.gateway`, "DHCP gateways require DHCPv4 on the selected managed Ethernet interface", page);
+    }
     if (route.table !== 254) bound(route.table, 10000, 19999, `${path}.table`, page);
     bound(route.metric, 1, 2147483647, `${path}.metric`, page);
     const key = `${route.table}/${route.destination}/${route.metric}`;
@@ -771,7 +782,24 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       if (seconds !== undefined) bound(seconds, name === "general" ? 1 : 0, 604800, `${path}.timeouts.${name}`, page);
     });
   });
-  if (baseline && stableJson(config.kernel) !== stableJson(baseline.kernel)) issue("kernel", "Kernel settings must be preserved unchanged; this spec does not define a kernel editor", "/config/changes");
+  if (baseline && (["namespace", "host"] as const).some(scope =>
+    stableJson(config.kernel?.[scope] ?? {}) !== stableJson(baseline.kernel?.[scope] ?? {}))) {
+    issue("kernel", "Namespace and host kernel settings must be preserved unchanged; only RPS, RFS and NIC offloads can be edited", "/config/changes");
+  }
+  const rps = Object.entries(config.kernel?.rps ?? {}), rpsPage = "/diagnostics/rps";
+  if (rps.length > 64) issue("kernel.rps", "At most 64 RPS queue settings", rpsPage);
+  for (const [target, mask] of rps) {
+    check(`kernel.rps.${target}`, rpsPage, () => {
+      const { interface: name } = rpsTarget(target);
+      if (!config.interfaces.some(link => link.name === name && (link.kind === "ethernet" || link.kind === "wireguard"))) {
+        throw new Error("RPS requires a managed Ethernet or WireGuard interface, not a VLAN, other tunnel or dummy interface");
+      }
+      rpsMaskCpus(mask);
+    });
+  }
+  for (const problem of validateTuning(config.kernel, new Set(config.interfaces.filter(link => link.kind === "ethernet").map(link => link.name)))) {
+    issue(problem.path, problem.message, problem.path.startsWith("kernel.offloads") ? "/diagnostics/nic-offloads" : "/config/editor");
+  }
   if (config.firewall.policies && config.firewall.rules.length) issue("firewall.rules", "Host/interface policy mode cannot be combined with legacy forwarding rules", "/firewall");
   const policies = config.firewall.policies;
   if (policies) {
@@ -868,6 +896,13 @@ export function requiredPermissions(diff: Difference[]): string[] {
         const before: unknown = change.before && typeof change.before === "object" && scope in change.before ? Reflect.get(change.before, scope) : {};
         const after: unknown = change.after && typeof change.after === "object" && scope in change.after ? Reflect.get(change.after, scope) : {};
         if (stableJson(before) !== stableJson(after)) permissions.add(`kernel.${scope}.write`);
+      }
+      for (const key of ["rps", "rfs", "offloads"] as const) {
+        const before: unknown = change.before && typeof change.before === "object" && key in change.before ? Reflect.get(change.before, key) : undefined;
+        const after: unknown = change.after && typeof change.after === "object" && key in change.after ? Reflect.get(change.after, key) : undefined;
+        if (stableJson(before ?? (key === "rfs" ? null : {})) !== stableJson(after ?? (key === "rfs" ? null : {}))) {
+          permissions.add("interfaces.write"); permissions.add("kernel.host.write");
+        }
       }
     }
   }

@@ -6,7 +6,7 @@ import { dhcpClientSchema, dnsConfigSchema, objectMetadataSchema, timeoutNames, 
 import { record, type Field } from "@/types/forms";
 import { preset, resourceFields, type Section } from "@/services/resourceForms";
 import { cloneConfig, numericAddress, prefix, stableJson, validateConfig } from "@/services/configuration";
-import { interfaceChoice, resourceItems, replaceResourceItems } from "@/services/resourceCollections";
+import { interfaceChoice, resourceItems, replaceResourceItems, routeGatewayMode } from "@/services/resourceCollections";
 import { supportsFirewallPorts, parseFirewallPorts } from "@/services/firewallProtocols";
 
 export function useResourceEditor(section: Section, wireguard = false, vlan = false, loopbacks = false) {
@@ -15,6 +15,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
   const original = ref<unknown>(), editingIndex = ref(-1), renameAcknowledged = ref(false);
   const formStart = ref(""), errors = ref<Record<string, string[]>>({}), formError = ref("");
   const deletion = ref<{ index: number; value: unknown } | null>(null);
+  let routeGatewayChosen = false;
   const editingConfig = computed(() => store.draft ?? store.state.data?.desired);
   const editingBlocked = computed(() => Boolean(store.readOnlyReason) || (section === "firewall" && Boolean(editingConfig.value?.firewall.policies)));
   const allManaged = computed(() => editingConfig.value?.interfaces.map(link => link.name) ?? []);
@@ -32,13 +33,25 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     try { return prefix(address, false).family === form.value.family; } catch { return false; }
   })).map(interfaceChoice) ?? []);
   const immutable = computed(() => Boolean(original.value && store.state.data?.desired.interfaces.some(link => link.name === record(original.value).name)));
+  function usesDhcpGateway(value: Record<string, unknown>): boolean {
+    const config = editingConfig.value;
+    if (!config?.interfaces.some(link => link.name === value.interface && link.kind === "ethernet") ||
+      !config.dhcp_clients?.[String(value.interface)]) return false;
+    try { return prefix(String(value.destination), true).family === "ipv4"; }
+    catch { return false; }
+  }
   const fields = computed(() => {
     const result: Field[] = resourceFields(section, section === "interfaces" ? parentOptions.value : interfaceOptions.value,
       adopted.value, immutable.value, form.value.kind, form.value.family, familyInterfaces.value, wireguard, editingIndex.value < 0, vlan)
       .map(field => loopbacks && field.key === "kind" ? { ...field, disabled: true, choices: [{ title: "Loopback", value: "dummy" }] } :
         field.key === "family" && !store.ipv6Enabled ? { ...field, choices: field.choices?.filter(choice => choice.value !== "ipv6") } :
           section === "firewall" && field.key === "destination_ports" ? { ...field, disabled: !supportsFirewallPorts(form.value.protocol) } : field);
-    return result;
+    if (section !== "routes") return result;
+    return result.map(field => field.key === "gateway" ? { ...field, disabled: form.value.gateway_mode !== "static" } :
+      field.key === "gateway_mode" ? {
+        ...field, choices: field.choices?.filter(choice => choice.value !== "dhcp" ||
+          form.value.gateway_mode === "dhcp" || usesDhcpGateway(form.value)),
+      } : field);
   });
   function dependencies(name: unknown): string[] {
     if (!editingConfig.value || section !== "interfaces") return [];
@@ -74,25 +87,6 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       const gateways = new Set(routes.filter(route => route.prefix === best.prefix && route.metric === best.metric).map(route => route.gateway));
       return gateways.size === 1 ? best.gateway : retained;
     } catch { return ""; }
-  }
-  function inferRouteGateway(value: Record<string, unknown>): string {
-    const parse = (text: string) => { try { return ipaddr.parseCIDR(text); } catch { return null; } };
-    const destination = parse(String(value.destination));
-    const name = String(value.interface), config = editingConfig.value;
-    if (!destination || !config || name === config.blackhole?.name) return "";
-    const lease = store.runtime.data?.dhcp_clients?.leases[name];
-    const local = [...(config.interfaces.find(link => link.name === name)?.addresses ?? []), ...(lease ? [lease.address] : [])]
-      .flatMap(address => { const cidr = parse(address); return cidr ? [cidr] : []; });
-    // A destination inside a connected subnet is reached directly and needs no next hop.
-    if (local.some(network => network[0].kind() === destination[0].kind() && destination[0].match(network))) return "";
-    const isDefault = (text: string) => ["0.0.0.0/0", "::/0"].includes(text);
-    const candidates = (routes: Array<{ destination: string; gateway?: string }>) => [...new Set(routes.flatMap(route => {
-      try { return isDefault(route.destination) && route.gateway && numericAddress(route.gateway).kind() === destination[0].kind() ? [route.gateway] : []; } catch { return []; }
-    }))];
-    const fromLease = candidates(lease?.routes ?? []);
-    if (fromLease.length === 1) return fromLease[0]!;
-    const fromConfig = candidates(config.routes.filter(route => route.enabled !== false && route.table === 254 && route.interface === name));
-    return fromLease.length === 0 && fromConfig.length === 1 ? fromConfig[0]! : "";
   }
   function monitorSource(value: Record<string, unknown>): string {
     let family: string | undefined;
@@ -132,6 +126,10 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
     if (value !== undefined && editingIndex.value < 0) { formError.value = "This record no longer exists in the current configuration."; return; }
     const initial = editingIndex.value >= 0 ? resourceItems(editingConfig.value, section)[editingIndex.value] : preset(section, wireguard);
     form.value = record(JSON.parse(JSON.stringify(initial)));
+    if (section === "routes") {
+      form.value.gateway_mode = routeGatewayMode(form.value.gateway);
+      routeGatewayChosen = editingIndex.value >= 0;
+    }
     if (section === "gateway_monitors") form.value = inferMonitor(form.value);
     if (section === "softflowd") {
       const timeouts = record(form.value.timeouts);
@@ -168,6 +166,19 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
   }
   function change(key: string, value: unknown): void {
     let next = { ...form.value, [key]: value };
+    if (section === "routes" && key === "gateway_mode") {
+      routeGatewayChosen = true;
+      if (value === "dhcp") next.gateway = "dhcp";
+      else if (value === "direct" || next.gateway === "dhcp") delete next.gateway;
+    }
+    if (section === "routes" && ["interface", "destination"].includes(key)) {
+      if (key === "interface" && value !== form.value.interface) routeGatewayChosen = false;
+      if (!routeGatewayChosen) {
+        next.gateway_mode = usesDhcpGateway(next) ? "dhcp" : "direct";
+        if (next.gateway_mode === "dhcp") next.gateway = "dhcp";
+        else delete next.gateway;
+      }
+    }
     if (section === "firewall" && key === "protocol" && !supportsFirewallPorts(value)) next.destination_ports = "";
     if (section === "gateway_monitors" && ["interface", "target"].includes(key)) {
       next = inferMonitor(next);
@@ -198,10 +209,13 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
         if (value.protocol === "") delete value.protocol;
       }
       if (section === "routes") {
-        value.table = 254;
-        if (record(original.value).interface !== value.interface) delete value.gateway;
-        if (!value.gateway) { const gateway = inferRouteGateway(value); if (gateway) value.gateway = gateway; else delete value.gateway; }
-        if (value.interface === editingConfig.value.blackhole?.name) delete value.gateway;
+        if (value.gateway_mode === "dhcp") value.gateway = "dhcp";
+        else if (value.gateway_mode === "direct") delete value.gateway;
+        else if (value.gateway_mode !== "static" || !value.gateway || value.gateway === "dhcp") {
+          errors.value["editor.gateway"] = ["Enter a static gateway IP address."];
+          throw new Error("Enter a static gateway IP address.");
+        }
+        delete value.gateway_mode;
       }
       if (section === "gateway_monitors") value = inferMonitor(value);
       if (section === "gateway_monitors" && value.mode === "dhcp") {

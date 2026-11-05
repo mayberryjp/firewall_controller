@@ -23,6 +23,8 @@ test("overview interface labels stay compact without table overflow or wrapping"
   await page.getByLabel("Registry admin password").fill("registry-test-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await page.goto("/diagnostics/system-overview");
 
   for (const title of ["Interfaces", "Interface counters"]) {
     const widget = page.getByRole("region", { name: title, exact: true });

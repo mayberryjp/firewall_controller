@@ -87,13 +87,34 @@ describe("compact overview dashboard", () => {
   function button(wrapper: ReturnType<typeof dashboard>, text: string) {
     return wrapper.findAll("a, button").find(item => (item.attributes("aria-label") || item.text()) === text)!;
   }
+  it("preserves the full saved widget columns and customization on System overview", async () => {
+    const saved: OverviewLayout = { version: 1, columns: [["interfaces", "gateways"], ["system", "counters"]] };
+    vi.mocked(registry.getOverviewLayout).mockResolvedValue(saved);
+    const store = useControllerStore(), wrapper = dashboard();
+    try {
+      await flushPromises();
+      expect([...wrapper.get(".overview-dashboard").element.children].map(element => element.className)).toEqual([
+        "overview-column", "overview-column",
+      ]);
+      expect(wrapper.get('[data-column="0"]').findAll("[data-widget]").map(box => box.attributes("data-widget"))).toEqual(saved.columns[0]);
+      expect(wrapper.get('[data-column="1"]').findAll("[data-widget]").map(box => box.attributes("data-widget"))).toEqual(saved.columns[1]);
+      await button(wrapper, "Customize layout").trigger("click");
+      await wrapper.get('[aria-label="Hide Interfaces"]').trigger("click");
+      expect(wrapper.find('[data-widget="interfaces"]').exists()).toBe(false);
+      await button(wrapper, "Save layout").trigger("click"); await flushPromises();
+      expect(registry.saveOverviewLayout).toHaveBeenCalledWith({ version: 1, columns: [["gateways"], ["system", "counters"]] });
+      expect(store.draft).toBeNull();
+      expect(store.gatewayMonitoring).toBe(true);
+    } finally { wrapper.unmount(); }
+    expect(store.gatewayMonitoring).toBe(false);
+  });
   it("uses an accessible pencil control without a visible page heading", async () => {
     const wrapper = dashboard();
     try {
       expect(button(wrapper, "Customize layout").attributes("disabled")).toBe("true");
       await flushPromises();
       expect(wrapper.find("h1").exists()).toBe(false);
-      expect(wrapper.find('section[aria-label="Overview"]').exists()).toBe(true);
+      expect(wrapper.find('section[aria-label="System overview"]').exists()).toBe(true);
       const customize = button(wrapper, "Customize layout");
       expect(customize.text()).toBe("");
       expect(customize.attributes("icon")).toBe("mdi-pencil-outline");

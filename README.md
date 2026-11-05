@@ -464,7 +464,8 @@ or appliance acceptance.
 | Browser route | Purpose |
 | --- | --- |
 | `/connect` | Registry sign-in, persistent firewall list, encrypted key storage and controller-proxied device connection |
-| `/overview` | Customizable system, interface, gateway and WireGuard status widgets; exact interface counters with one interface per row. WireGuard shows Peer, Last handshake, Received and Sent with one row per enabled peer, using the WireGuard page's handshake colors. The Peer column shows the configured endpoint or falls back to the runtime endpoint, with a dash if neither is known. Missing peer samples show Unavailable without hiding other peers' metrics; tunnels without enabled peers produce no rows. Stale runtime samples are labeled and use neutral handshake colors. |
+| `/overview` | Appliance traffic visualization: WAN above, LAN below, directional rainbow streams, interface counters and compact host metrics. Full dashboard cards live in Diagnostics > SYSTEM OVERVIEW. Disabled and observed-down diagram interfaces are hidden. |
+| `/diagnostics`, `/diagnostics/system-overview` | SYSTEM OVERVIEW: the default Diagnostics page and first navigation link; the original customizable system, interface, gateway and WireGuard dashboard, preserving its shared saved layout. WireGuard shows Peer, Last handshake, Received and Sent for enabled peers, using the WireGuard page's handshake colors. Endpoints prefer configuration, then runtime; missing samples remain Unavailable and stale runtime uses neutral colors. |
 | `/interfaces`, `/interfaces/:name` | Physical interfaces inventory and active IPv4/IPv6 addresses, excluding dummy/loopback links; inline NIC editing and explicit management/release |
 | `/loopbacks` | Loopback creation, editing and explicit adoption; built-in `lo` and other system loopback links remain read-only |
 | `/blackhole` | The single deviceless drop target (`config.blackhole`: name and drop/unreachable/prohibit action) that static routes can use as their interface; routes only, needs `routes.write`, no drop counters |
@@ -487,11 +488,169 @@ or appliance acceptance.
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
 | `/services/maintenance` | Explicit all-managed-services repair and a link to Config / Upgrade |
-| `/diagnostics`, `/diagnostics/traffic` | REAL TIME TRAFFIC: live bytes/second and packets/second ApexCharts, with one combined inbound + outbound line per interface |
+| `/diagnostics/traffic` | REAL TIME TRAFFIC: live bytes/second and packets/second ApexCharts, with one combined inbound + outbound line per interface |
+| `/diagnostics/traffic-flow` | Compatibility redirect to `/overview` |
 | `/diagnostics/process-health` | Read-only daemon/component health, recovery states, collection freshness and active alerts |
+| `/diagnostics/interface-capabilities` | Saved per-interface performance capabilities shown as color-coded chips: green Enabled, amber Disabled, blue Supported (activation unknown), red Unsupported, and neutral Unknown or N/A. Hover a chip for its separate support and enabled states. No Details controls or collection-error lists. **Refresh capabilities** explicitly scans hardware and saves observations; opening the page only reads the saved snapshot. No automatic scans, tuning, retries or configuration edits. Unknown and simulated results are not treated as measured support; partial results replace older evidence and failed requests retain the previous snapshot marked stale with an inline request error. Collection time uses the saved system timezone. |
+| `/diagnostics/api` | GET API explorer; most endpoints are read-only, but interface-capability refresh explicitly scans hardware and saves. Focus the response box and use Ctrl+A (Cmd+A on macOS) to select only its body, or use its copy icon to copy the displayed response with full numeric precision. Clipboard access requires browser support and HTTPS or localhost; errors appear inline. |
+| `/diagnostics/rps` | RPS Configuration: CPU steering for managed Ethernet and kernel WireGuard RX queues, staged through the shared SAVE flow. No NIC inventory snapshot is required. |
+| `/diagnostics/nic-offloads` | NIC Offloads: one interface at a time in the General settings layout, with separate Configuration and cached Status views. Choose Checksums, Sending, Receiving or VLAN tags; settings use plain-English labels with Linux names on hover. |
+| `/diagnostics/path-tests` | Path MTU/MSS: explicitly approved two-firewall packet-size and TCP MSS tests, temporary MTU/permission changes, live progress, directional measurements, cancellation and restoration. Requires a native backend with the path-test API; unsupported older backends stay disabled. |
 | `/config/changes` | Staged changes, unified diff, Commit & push |
 | `/config/commits`, `/config/commits/:id` | Commits: independent recovery discovery and explicit lifecycle actions |
 | `/config/revisions`, `/config/revisions/:revision` | Cursor-paginated committed archive, comparison/export/provisional restore |
+
+The explorer registers `GET /api/v1/interface-capabilities` (saved snapshot or
+`null`, requiring `state.read`) and `GET /api/v1/interface-capabilities/refresh`
+(one hardware scan and durable save, requiring `state.read` and `interfaces.write`).
+Refresh is visibly labeled **Scans hardware and saves**, runs only through the
+explicit **GET: Scan & save** action, sends no body/query, and never polls,
+prefetches, caches or retries automatically. Deploy the matching GET-refresh
+backend; POST is no longer supported. A 403 disables further refresh attempts for
+the current firewall session; the backend remains the permission authority because
+the client is not given a credential-scope inventory.
+Successful responses retain raw snapshot timestamps, scope, partial/unknown
+evidence and diagnostics without schema pruning. Failed capability reads/scans
+retain the previous displayed snapshot explicitly marked stale and show the
+current error. Capability snapshots never enter configuration drafts or revisions.
+Hardware identity revision strings are preserved as reported, not interpreted as
+configuration revision IDs.
+
+Diagnostics > **RPS Configuration** provides controls for observed,
+managed physical Ethernet and kernel WireGuard RX queues. Receive Packet Steering
+(RPS) distributes incoming packet processing across selected CPUs. WireGuard targets come
+from live performance evidence, not physical NIC inventory or IRQ recommendations.
+RPS steers post-decryption RX processing, not WireGuard crypto workers. Deploy a
+backend with WireGuard RPS support before using the extended targets; older
+backends without observed WireGuard queues do not gain inferred queue support.
+Enable a queue, select a whole-number
+**CPU count** from 0 to the number of online CPUs, review the selected CPU IDs,
+then **STAGE CHANGES**. Counts use the lowest-numbered online CPU
+IDs, including nonconsecutive IDs; 0 explicitly disables RPS. The **RPS Advanced CPU
+Mask** toggle exposes the canonical lowercase hexadecimal input for a custom
+CPU selection. Existing masks are preserved until edited, including custom
+selections that are not a lowest-ID prefix. Enabling a previously unmanaged
+queue does not select a count automatically. Switching off stages `0` (explicitly
+disabled). To restore the backend-captured original mask, remove the queue's
+`kernel.rps` entry in the configuration editor and review it in SAVE. Other queue
+settings and namespace/host kernel maps are preserved.
+For a newly configured WireGuard tunnel already staged in the shared draft, select
+its interface and enter an explicit canonical `rx-N` queue (0..4095) using
+**Add WireGuard queue**. No queue or CPU mask is chosen automatically. These rows
+are marked **unverified until apply**: native creation verifies queue support and
+rolls back on missing or unwritable controls. Creation and RPS remain in the same
+complete reviewed candidate. Remove its RPS entries explicitly before deleting a
+tunnel; stale references fail validation rather than being silently dropped.
+The controls read `GET /api/v1/statistics/performance` (also registered in API
+Explorer) and recheck prerequisites before staging. Updated native host-mode
+backends automatically acquire exclusive tuning ownership without a startup
+opt-in; acquiring ownership does not tune anything or grant API permissions.
+`tuning_available` reports ownership, not hardware support or caller permission.
+Read failures disable editing and retain stale observations. Known eligible
+controls remain visible but disabled when prerequisites are unmet. RPS additionally
+requires verified online CPUs and stable CPU/boot identity.
+
+**RFS** no longer has configuration controls in the performance pages. Existing
+saved RFS settings are preserved unchanged when staging RPS or offload edits.
+RFS remains physical-Ethernet-only; null per-queue flow-count evidence is never
+treated as zero. Imported or raw-editor RFS settings still require explicit global
+and per-queue table sizes: zero or powers of two
+up to 1048576, at most 64 queues, and a queue total within the global budget.
+Positive queue counts require an explicitly configured nonzero RPS mask on that
+queue. No RFS counts or RPS dependencies are added automatically. RFS benefits
+local socket consumers, not general forwarding, and global
+table changes affect other applications.
+
+Diagnostics > **NIC Offloads** uses exact allowlisted Linux feature names on managed
+physical Ethernet interfaces (at most 32). Select one interface and category:
+**Checksums** handles packet-integrity calculations, **Sending** handles segmentation
+and memory-buffer support, **Receiving** handles packet aggregation, and **VLAN tags**
+handles hardware tag parsing/insertion. Only the selected category is displayed,
+using the same labeled rows and short descriptions as General settings.
+**Configuration** uses **Original / On / Off** (LRO omits On); **Status** is read-only
+cached evidence with its collection time in the saved timezone, not live readback.
+Linux feature names remain available on label hover. Switching interfaces,
+categories or views preserves unsubmitted edits and never stages automatically.
+Missing category evidence is explicit, never invented support. Cached chips and hover evidence are
+separate from desired settings and fresh performance observations. Refresh
+capabilities to rescan; unsupported/unknown or stale evidence cannot enable a
+feature. The backend freshly verifies support, fixed bits, identity, requested
+bits and coherent dependencies during push. Dependent features are never edited
+automatically. **LRO can only be disabled.** Off owns an explicit false setting;
+**Original** restores captured active/requested bits and releases the feature.
+Releasing every feature restores the NIC's captured state. Offloads can alter
+packet capture/accounting granularity. Backend errors retain the ordinary review/
+recovery flow; a response that drops or changes requested tuning is not confirmed.
+Offload controls require the updated diagnostic fields; older backends
+retain RPS support without inventing evidence for the newer controls.
+The backend remains the authority for `transactions.write`, `interfaces.write`
+and `kernel.host.write`. Use the existing **SAVE**, push, explicit confirmation
+and rollback flow; verify management/VLAN/WireGuard connectivity and performance
+before confirming. RSS, XPS, XDP and AF_XDP remain read-only; traffic shaping is
+not implemented by the backend. Capability
+support alone does not demonstrate a bottleneck or a performance improvement.
+
+### Paired path MTU/MSS diagnostics
+
+Open Diagnostics > **Path MTU/MSS** on both firewalls. Select an actual live
+interface and an address currently assigned to it, enter the peer's IP and an
+explicit maximum MTU in bytes, and match the UDP/TCP port (default 49872).
+The peer uses inverse source/peer IPs. Physical, VLAN and other tunnel interfaces
+are selectable without a physical-NIC or MAC requirement. IPv6 link-local is
+unsupported; IPv6 requires committed enablement.
+
+Approve only known ancestor interfaces individually, with their own explicit
+maxima. Current live MTUs and the exact approved changes appear before Start;
+no uplinks or tunnel underlays are inferred or approved automatically. Maxima
+cannot lower current MTUs. Read the disruption warning: raising MTU can affect
+unrelated traffic and management on every selected/approved interface.
+
+Generate a one-time secret (32 cryptographically random bytes encoded as hex)
+and transfer it to the other operator using **Copy one-time secret** over a
+trusted channel, or paste the peer's secret. It is write-only, never added to
+configuration, URL, browser storage or logs, and cleared on submission,
+navigation and firewall change. Use HTTPS or trusted management connectivity.
+Press **Start paired test** on both ends within 30 seconds; timing alone is not
+authentication. Direct reachability is required; NAT traversal is not provided.
+
+The client uses `POST /api/v1/diagnostics/path-tests` to start and
+`POST /api/v1/diagnostics/path-tests/{id}/cancel` to cancel, requiring
+`diagnostics.run`, `interfaces.write` and `firewall.write` together (not
+`transactions.write`). Only `GET /api/v1/diagnostics/path-tests`, requiring
+`state.read`, is polled, single-flight and across page navigation. Start/Cancel
+are never automatically retried. API Explorer lists the status GET and both
+POST methods; POST actions link to the approved form rather than exposing a
+generic secret-bearing JSON editor or pretending a GET starts/cancels tests.
+
+Status distinguishes arming, pairing, measurements and restoration. Shared
+configuration/operational write gates remain locked while `active:true`,
+including completed measurements and cleanup failures. Cancellation uses the
+native 32-hex ID, never the measurement protocol's session ID; a successful
+cancel response does not imply restored MTUs. Failed reads retain stale status
+and known ownership; uncertain writes trigger only status reads. Cleanup errors,
+identity mismatches and unapproved ancestry context remain explicit.
+
+Measurements have a 30-second budget within a 90-second overall lifetime.
+Temporary firewall permissions are peer/interface/test-port-scoped and expire;
+MTU restoration after daemon death requires daemon restart/recovery, not a
+kernel MTU timer. Permit expiry does not revoke established conntrack acceptance.
+The UI never flushes unrelated connections or overwrites foreign replacements.
+Native preparation may explicitly refuse configured DHCP clients, enabled BGP,
+affected/unresolved dynamic WireGuard DNS paths, unavailable socket controls,
+occupied source ports, unsupported maxima or insufficient privileges. It does
+not disable services to bypass these refusals. The simulator does not fabricate
+successful measurements.
+
+UDP tables preserve directional delivered/sent/loss/RTT evidence and distinguish
+unavailable sender reports from zero. TCP tables show requested versus observed
+sender/receiver MSS, goodput, retransmits, timings and inconclusive errors.
+Interface/route/peer ceilings are separate from verified packet sizes.
+Finite sampling (up to 12 sizes and three MSS trials per direction), capped
+transfer rate, congestion/CPU load, ECMP and route changes limit conclusions.
+Timeouts are not proof a size is too large; inner delivery does not prove no
+outer fragmentation. These endpoint tests do not establish an ideal MTU or
+forwarded-LAN throughput, and never apply persistent MSS clamping or MTU edits.
+Any later saved configuration change still uses SAVE and explicit confirmation.
 
 Services labels the flow exporter **NetFlow/IPFIX**, under `/services/netflow`.
 Its Status enable/disable toggle is immediately to the left of Actions.
@@ -519,7 +678,57 @@ the API's per-request `started_at` is a collection timestamp, not a counter-rese
 identifier. Simulated samples are not shown as measured traffic. Leaving the page stops its
 traffic polling and discards its chart history. Chart times use the saved system timezone.
 
-The Overview System stats box starts with host uptime from aggregate statistics
+**Overview** opens the compact high-level appliance layout with WAN links above and
+LAN links below. Roles come from server-reported state (including an active
+candidate), never unsaved drafts or interface-name guesses. Unassigned interfaces
+are not silently treated as LAN. Each card shows separate RX/TX bit rates and
+packet rates, cumulative byte counters and drop counts; selecting its interface
+opens the existing traffic-history view. VLAN and parent-interface counters are
+not summed into a claimed aggregate throughput.
+
+Administratively disabled interfaces and links successfully observed as down are
+hidden; unknown states and failed reads are not mistaken for down links. Recovered
+links reappear. A compact host-performance strip shows CPU busy time, memory usage,
+one-minute load and host-scoped aggregate uptime as a small row with a subtle theme-colored background beneath
+the appliance, rather than a header or floating card. CPU needs two comparable host-health
+samples; initialization stays neutral and real read failures remain inline.
+The diagram stretches from below the app header to the bottom of the viewport,
+expanding its traffic connectors on taller screens instead of leaving unused space.
+Its flat surfaces, text, borders, status indicators and appliance illustration use
+the app's shared theme colors; rainbow accents are reserved for traffic streams.
+The appliance's front label carries the lime Modan mark beside FIREWALL.
+The caption beside the pause control shows the configured hostname and domain.
+Full Interfaces, Gateways, WireGuard, BGP peers, System stats and Interface counters
+cards live in **Diagnostics > SYSTEM OVERVIEW**, which remains the default
+Diagnostics page. They retain the diagram's rounded cards, theme surfaces and
+borders, live charts, drill-down links and errors, along with the shared saved
+two-column layout and existing move/hide/restore/save controls. The columns use
+the available page width and stack on smaller screens.
+The Overview canvas is dedicated to the firewall graphic and rainbow traffic
+streams, filling the available browser height. With larger interface groups, pan
+or scroll inside the diagram. Interface counter cards remain compact and shrink
+to fit each interface row.
+
+Rainbow streams run in the actual interface-counter direction: WAN RX and LAN TX
+southbound, WAN TX and LAN RX northbound. Each direction's stream speed follows its
+own utilization: measured bytes/second divided by the saved negotiated link speed
+(converted from Mbps), with slower movement at low usage and faster movement up to
+100% usage. VLANs inherit their parent's speed. Speeds are read from the saved
+native capability inventory without triggering a hardware scan; unknown speeds use
+a fixed slow animation rather than inventing a utilization percentage. Failed reads
+remain inline. Stream weight increases with measured activity; zero, missing and
+simulated rates never invent movement.
+This illustrates interface activity, not packet tracing or a claim that WAN
+traffic reaches a particular LAN. Counter resets, changed identity/scope,
+nonincreasing sample times, hidden tabs and session changes break rate baselines.
+Failed, stale or delayed reads retain known evidence with feedback and stop the streams.
+Pause/resume and reduced-motion preferences are supported. Larger layouts pan
+horizontally inside the diagram without overflowing the page or recentering on
+every poll. The view reuses visibility-aware three-second statistics polling and
+five-second state polling, stops those page-specific reads when leaving, and
+does not change networking.
+
+The SYSTEM OVERVIEW System stats box starts with host uptime from aggregate statistics
 `uptime.data.uptime_seconds` and the current appliance version from
 `desired.software.version`. Initial reads show loading; missing readings show
 Unavailable, and failed refreshes retain the last known value with the read
@@ -528,7 +737,7 @@ and fractional seconds, and never substitutes daemon uptime or simulated
 host measurements. Deploy a backend supporting the required aggregate
 `uptime` object; the separate host-health API still supplies resource metrics.
 
-On Overview, click a system metric name to open its inline live ApexChart
+On SYSTEM OVERVIEW, click a system metric name to open its inline live ApexChart
 (CPU, memory, swap, load, temperature or fan); uptime and filesystem remain
 plain text. Charts retain the latest 120 host-health samples while the widget
 is mounted and use system-timezone timestamps. Click the metric again or Close live view
@@ -641,7 +850,7 @@ Unmanaged/down links and unsupported kinds remain visible; unsupported kinds are
 read-only. There is no interface visibility dropdown. Interfaces > Loopbacks contains
 managed loopback interfaces and built-in loopback links such as `lo`, which is always read-only.
 Discovery supplies required nullable `role` and `addressing_type` fields. Actual kernel
-loopbacks show the fixed **Loopback** role and **Static** mode in Overview and the
+loopbacks show the fixed **Loopback** role and **Static** mode in SYSTEM OVERVIEW and the
 Loopbacks inventory, even when down or addressless, and cannot be adopted, edited or
 deleted. Classification follows the backend's kind/ownership, not the interface name.
 Other discovered links return null metadata; their configured role and addressing
@@ -1009,7 +1218,7 @@ Recovery clears the current error without marking a running publisher unhealthy.
 Error messages remain plain text. Broker logs may still be needed to establish
 the cause of resets or missing acknowledgments.
 
-Overview polls `/statistics/host` independently every three seconds while visible;
+Overview and SYSTEM OVERVIEW poll `/statistics/host` independently every three seconds while visible;
 the settings page polls confirmed MQTT status every 7.5 seconds. Reads do not
 overlap and failures back off. System stats describe the daemon-visible host, not
 cgroup limits. CPU usage needs two samples and exact tick deltas, excludes guest
@@ -1070,11 +1279,33 @@ of overwriting a route. Peer edits that change routes also require `routes.write
 
 An enabled IPv4 static route on a DHCP-managed interface is not installed by the
 backend while that interface has no valid lease, and is restored after the lease
-routes. `enabled` stays configured intent: the Static Routes table shows a **Waiting
-for DHCP** chip (with the lease error on hover) instead of changing the toggle or
+routes. `enabled` stays configured intent: the Static Routes table shows **Waiting
+for DHCP** or **DHCP error** (with details on hover) instead of changing the toggle or
 the route, and the page reads runtime every 5 seconds while it is visible. IPv6,
 disabled and other-interface routes are not affected. A lease alone does not prove
 the route's pinned gateway is reachable.
+
+The route editor offers **Direct**, **Static address**, and **DHCP gateway**
+inline in the table; each saved row shows its type derived from its gateway.
+For new routes and interface changes, IPv4 routes on DHCP Ethernet interfaces
+default to DHCP gateway without requiring a type selection. Explicit selections
+are retained while editing the destination; opening an existing route does not
+silently convert its saved gateway.
+DHCP gateway stores the exact `gateway: "dhcp"` token and requires an IPv4
+destination on a managed Ethernet interface with DHCPv4 configured in the draft,
+including disabled routes. It follows that interface's lease gateway across WAN
+changes without changing the saved route, table, metric or revision. Existing
+literal gateways remain pinned until explicitly converted; new Direct routes no
+longer silently copy a current default gateway. Runtime errors remain visible
+even when a lease exists; lease presence alone does not establish route installation.
+
+Deploy the backend implementing the
+[November 4 DHCP route contract](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-04.md#2026-11-04-01-dhcp-following-route-gateways)
+before submitting this mode; older backends do not support it. Imports, history,
+exports and disabled-route edits retain the token. Use the existing SAVE/apply
+and explicit confirmation flow, verifying WAN/WireGuard underlay reachability from
+a local console or independent OS SSH connection. No route, policy rule, table or
+WireGuard AllowedIPs is automatically removed or changed for endpoint-loop prevention.
 
 ### Unknown fields and Azure Dynamic DNS
 
@@ -1421,7 +1652,7 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   Mean RTT threshold: 1..60000 ms; loss threshold: 1..100%; variation threshold:
   0..60000 ms (0 disables); failure/recovery holds: 100..60000 ms.
   The backend's documented omitted/zero timing defaults normalize explicitly.
-- Overview and monitor screens read `/statistics/gateways` independently of
+- SYSTEM OVERVIEW and monitor screens read `/statistics/gateways` independently of
   configuration observation. Visible polling is non-overlapping every 3 seconds,
   with existing hidden-tab pause/backoff. GETs read cached measurements, not new
   probes. Gateway runtime is also decoded from `/runtime`.
@@ -1457,7 +1688,7 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   thresholds are not universal ICMP SLAs. RTT variation and population stddev
   are not one-way/RTP jitter; applying the same spread bands is a display
   heuristic, not a claim of standards compliance.
-  The Overview gateway widget uses the same RTT, standard deviation, and loss
+  The SYSTEM OVERVIEW gateway widget uses the same RTT, standard deviation, and loss
   chip bands, plus a colored status chip. Retained last-measured status keeps
   its existing explanation; old numeric samples remain visible but neutral
   while awaiting fresh measurements.
@@ -1576,7 +1807,7 @@ native readiness or native reboot recovery. Deployment labels stay explicit.
 - Statistics counters/protocol values remain **quoted decimal strings**, including
   values above the JS safe-integer limit and gauges such as `Tcp.MaxConn = "-1"`.
   Missing counters/groups are unavailable, not zero.
-- Overview packet totals below 100,000 use full grouped numbers. Larger totals use
+- SYSTEM OVERVIEW packet totals below 100,000 use full grouped numbers. Larger totals use
   compact K/M/B/T suffixes with two decimal places; hover for the exact total.
   Packet-in/out chips show the change since the previous fresh poll, not a
   per-second rate (including `+0` when unchanged). Large deltas use the same
@@ -1610,9 +1841,10 @@ as readable fields rather than JSON; apply review and safety confirmations are u
 
 State/runtime are independent single-flight datasets with loading, delayed-read,
 error, last-success and stale indicators. Automatic state/runtime refresh runs on
-Overview: state/runtime every 5 seconds, transaction discovery every 10 seconds,
-and interface/gateway statistics every 3 seconds. Active/uncertain transactions
-increase Overview state/discovery polling to 1 second after each read completes.
+Overview and SYSTEM OVERVIEW: state/runtime every 5 seconds, transaction discovery
+every 10 seconds, and interface statistics every 3 seconds. Both pages also poll
+gateway statistics and enabled BGP monitoring while their dashboard is mounted. Active/uncertain transactions
+increase both overview pages' state/discovery polling to 1 second after each read completes.
 Advanced settings and transaction details also poll state/discovery at these
 intervals, so provisional deletions and server rollback outcomes remain visible;
 they do not poll runtime or operational measurements. Connections separately polls
@@ -1623,7 +1855,7 @@ after each read completes, backing off to 30 seconds on failures. Dialog reads p
 while hidden and stop on close or final outcome. Reload the browser or use a page's
 refresh control to update manual pages. Reads performed on entry and fresh-state checks required by explicit writes
 remain enabled. Deadline countdowns do not make network requests.
-Overview polling pauses in hidden tabs and wakes on visibility/online events;
+Both overview pages pause polling in hidden tabs and wake on visibility/online events;
 Connections also pauses in hidden tabs and refreshes on visibility when live;
 these events do not trigger background state/runtime reads on manual pages. Overview transport failures
 back off 1/2/5/10 seconds.
@@ -1666,9 +1898,10 @@ The fetch adapter refuses controller redirects rather than forwarding
 Authorization elsewhere; normal API calls omit cookies and set `cache: no-store`. Session login, restore, and sign-out include the registry cookie. Error
 text redacts the registry session token.
 
-### Overview layout
+### Shared overview layout
 
-On Overview, select the pencil button (**Customize layout**) below the boxes at the bottom right to open the layout editor and drag boxes within or between the two
+On Overview or Diagnostics > SYSTEM OVERVIEW, select the pencil button
+(**Customize layout**) below the boxes to open the layout editor and drag boxes within or between the two
 columns. Move buttons provide keyboard and touch alternatives. Hide unwanted
 boxes, use **Show** to restore them, or **Reset layout** to restore the default
 arrangement. On narrow screens the left column appears above the right column.
@@ -1677,7 +1910,7 @@ database; **Cancel** discards unsaved changes. Hiding a box does not change fire
 configuration or the overview's background polling.
 
 The layout is shared by all browsers, devices, and administrators using the same
-registry, not stored per browser or firewall. It loads when Overview opens; the
+registry, not stored per browser or firewall. It loads when either overview opens; the
 last successful save wins if multiple browsers edit at once. Loading or saving
 failures are shown explicitly and can be retried. The authenticated registry
 endpoints are `GET /api/v1/preferences/overview` and

@@ -29,7 +29,7 @@ registry database. Keep .env private and back up its encryption key securely.
 TERMINAL 1: START THE REGISTRY (EACH SESSION)
 ------------------------------------------
 Get-Content .env | ForEach-Object {
-  if ($_ -match '^(REGISTRY_ADMIN_PASSWORD|REGISTRY_ENCRYPTION_KEY|REGISTRY_UI_ORIGINS)=(.*)$') {
+  if ($_ -match '^(REGISTRY_ADMIN_PASSWORD|REGISTRY_ENCRYPTION_KEY|REGISTRY_UI_ORIGINS|REGISTRY_DB_PATH)=(.*)$') {
     $name = $Matches[1]
     $value = $Matches[2]
     if ($value.Length -ge 2 -and (
@@ -43,13 +43,16 @@ Get-Content .env | ForEach-Object {
 }
 
 $env:REGISTRY_PORT = "3031"
-$env:REGISTRY_DB_PATH = "$PWD\registry-local.sqlite3"
+if (-not $env:REGISTRY_DB_PATH) {
+  $env:REGISTRY_DB_PATH = "$PWD\registry-local.sqlite3"
+}
 
 python registry/server.py
 
 After changing .env or the loader above, stop the registry with Ctrl+C and
 rerun all Terminal 1 commands. Matching outer quotes in .env are not part of
 the password. Enter only the password itself on the sign-in page.
+REGISTRY_DB_PATH in .env selects a different database without replacing the original.
 
 TERMINAL 2: START THE FRONTEND (EACH SESSION)
 ------------------------------------------

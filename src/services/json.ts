@@ -3,9 +3,15 @@ import { legacyRevisionSchema, revisionSchema } from "@/types/domain";
 
 const revisionKeys = new Set(["revision", "base_revision", "committed_revision", "restored_from_revision", "next_before_revision"]);
 
+function isConfigurationRevision(key: string, holder: unknown): boolean {
+  // Hardware identities also have a revision, but it is an opaque string.
+  return revisionKeys.has(key) && !(key === "revision" && holder !== null && typeof holder === "object" &&
+    "vendor_id" in holder && "device_id" in holder);
+}
+
 export function decodeJson(text: string, exactIntegerFields: readonly string[] = []): unknown {
-  return parse(text, (key, value: unknown) => {
-    if (revisionKeys.has(key) && value !== null) {
+  return parse(text, function (this: unknown, key, value: unknown) {
+    if (isConfigurationRevision(key, this) && value !== null) {
       return isLosslessNumber(value) ? legacyRevisionSchema.parse(value.value) : revisionSchema.parse(value);
     }
     if (!isLosslessNumber(value)) return value;
@@ -19,8 +25,8 @@ export function decodeJson(text: string, exactIntegerFields: readonly string[] =
 }
 
 export function encodeJson(value: unknown): string {
-  const result = stringify(value, (key, item: unknown) => {
-    if (revisionKeys.has(key) && item !== null && item !== undefined) {
+  const result = stringify(value, function (this: unknown, key, item: unknown) {
+    if (isConfigurationRevision(key, this) && item !== null && item !== undefined) {
       const revision = revisionSchema.parse(item);
       return legacyRevisionSchema.safeParse(revision).success ? new LosslessNumber(revision) : revision;
     }

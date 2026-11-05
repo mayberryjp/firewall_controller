@@ -4,7 +4,7 @@ import { navigationSections } from "@/constants/navigation";
 
 const sectionPages: Record<string, RouteRecordRaw[]> = {
   "overview-section": [
-    { path: "", name: "home", component: () => import("@/views/HomeView.vue") },
+    { path: "", name: "home", component: () => import("@/views/TrafficFlowView.vue") },
   ],
   "networking-section": [
     { path: "/loopbacks", name: "loopbacks", component: () => import("@/views/LoopbacksView.vue") },
@@ -52,9 +52,15 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   "diagnostics-section": [
     { path: "/diagnostics/firewall-drops", name: "firewall-drops", component: () => import("@/views/FirewallDropsView.vue") },
     { path: "/diagnostics/traffic", name: "real-time-traffic", component: () => import("@/views/RealTimeTrafficView.vue") },
+    { path: "/diagnostics/system-overview", name: "system-overview", component: () => import("@/views/HomeView.vue") },
+    { path: "/diagnostics/traffic-flow", name: "traffic-flow", redirect: { name: "home" } },
     { path: "/diagnostics/process-health", name: "process-health", component: () => import("@/views/ProcessHealthView.vue") },
     { path: "/diagnostics/interface-drops", name: "interface-drops", component: () => import("@/views/InterfaceDropsView.vue") },
     { path: "/diagnostics/qdiscs", name: "qdiscs", component: () => import("@/views/QdiscsView.vue") },
+    { path: "/diagnostics/interface-capabilities", name: "interface-capabilities", component: () => import("@/views/InterfaceCapabilitiesView.vue") },
+    { path: "/diagnostics/rps", name: "rps-configuration", component: () => import("@/views/PerformanceControlsView.vue"), props: { mode: "rps" } },
+    { path: "/diagnostics/nic-offloads", name: "nic-offloads", component: () => import("@/views/PerformanceControlsView.vue"), props: { mode: "offloads" } },
+    { path: "/diagnostics/path-tests", name: "path-tests", component: () => import("@/views/PathTestsView.vue") },
     { path: "/diagnostics/tcp-windowing", name: "tcp-windowing", component: () => import("@/views/TCPWindowingView.vue") },
     { path: "/diagnostics/capture-details", name: "capture-details", component: () => import("@/views/CaptureDetailsView.vue") },
     { path: "/diagnostics/api", name: "api-explorer", component: () => import("@/views/ApiExplorerView.vue") },

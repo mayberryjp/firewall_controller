@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AxiosError, AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
-import api, { ApiFailure, inspectApiPath, onUnauthorized, request, setApiDevice } from "@/services/api";
+import api, { ApiFailure, inspectApiPath, onMutationCheck, onUnauthorized, request, setApiDevice } from "@/services/api";
 import { registryApiBaseUrl, setRegistrySessionToken } from "@/services/registry";
 import * as net from "@/services/netcontrol";
 import { useConfigExport } from "@/composables/useConfigExport";
@@ -10,9 +10,10 @@ import { differences, normalize, requiredPermissions } from "@/services/configur
 import { ruleOwnershipEntries } from "@/services/ruleOwnership";
 import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema } from "@/types/domain";
 import { config, hostPolicyConfig, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus, vnstatReporting, mqttStatus } from "../fixtures";
-import { dnsResponse, linkDiagnostics } from "../diagnosticsFixtures";
+import { dnsResponse, linkDiagnostics, interfaceCapabilitySnapshot, rpsDiagnostics } from "../diagnosticsFixtures";
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
+import { pathTestRequest, pathTestStatus } from "../pathTestFixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -23,8 +24,122 @@ const adapter = vi.fn(async (input: InternalAxiosRequestConfig) => {
 beforeEach(() => {
   vi.clearAllMocks(); status = 200; body = "{}"; captured = undefined; responseHeaders = new AxiosHeaders();
   api.defaults.adapter = adapter; setRegistrySessionToken("registry-test-session"); setApiDevice(deviceId);
+  onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("uses bodyless status GET and explicit typed start/cancel POSTs without automatic retries", async () => {
+    body = encodeJson(pathTestStatus());
+    await net.getPathTests();
+    expect(captured?.method).toBe("get"); expect(captured?.url).toBe("/diagnostics/path-tests");
+    expect(captured?.data).toBeUndefined(); expect(captured?.params).toBeUndefined();
+    status = 202; body = encodeJson(pathTestStatus(true));
+    await net.startPathTest(pathTestRequest());
+    expect(captured?.method).toBe("post"); expect(captured?.url).toBe("/diagnostics/path-tests");
+    expect(decodeJson(String(captured?.data))).toEqual(pathTestRequest());
+    status = 200;
+    await net.cancelPathTest("a".repeat(32));
+    expect(captured?.url).toBe(`/diagnostics/path-tests/${"a".repeat(32)}/cancel`);
+    expect(captured?.data).toBeUndefined(); expect(captured?.params).toBeUndefined();
+    expect(adapter).toHaveBeenCalledTimes(3);
+    expect(() => net.cancelPathTest("protocol-identity")).toThrow("native");
+  });
+  it("never exposes an echoed pairing secret in a start error and rejects success-shaped idle responses", async () => {
+    const secret = pathTestRequest().pairing_secret;
+    status = 503; body = encodeJson({ error: `Configured DHCP client prevents stable ownership; rejected ${secret}` });
+    const failure = await net.startPathTest(pathTestRequest()).catch(error => error);
+    expect(failure).toBeInstanceOf(ApiFailure);
+    expect(failure.message).not.toContain(secret);
+    expect(failure.message).toContain("Configured DHCP client prevents stable ownership");
+    expect(failure.uncertain).toBe(true);
+    status = 202; body = encodeJson(pathTestStatus());
+    await expect(net.startPathTest(pathTestRequest())).rejects.toMatchObject({ uncertain: true, incompatible: true });
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("blocks all conflicting API writes and scan/save GETs while leaving status and native cancellation available", async () => {
+    onMutationCheck(() => "Path-test restoration owns networking");
+    await expect(net.refreshInterfaceCapabilities()).rejects.toThrow("restoration");
+    await expect(net.uploadMqttPassword("synthetic-test-password")).rejects.toMatchObject({ status: 409 });
+    await expect(net.retryDHCP("vlan100")).rejects.toThrow("restoration");
+    await expect(net.startPathTest(pathTestRequest())).rejects.toMatchObject({ status: 409 });
+    await expect(inspectApiPath("/api/v1/interface-capabilities/refresh")).rejects.toThrow("restoration");
+    expect(adapter).not.toHaveBeenCalled();
+    body = encodeJson(pathTestStatus(true));
+    await net.getPathTests(); await net.cancelPathTest("a".repeat(32));
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("reads RPS prerequisites as a bodyless uncached GET and propagates permissions without retries", async () => {
+    const expected = rpsDiagnostics(), controller = new AbortController();
+    body = JSON.stringify(expected);
+    expect(await net.getRpsDiagnostics(controller.signal)).toEqual(expected);
+    expect(captured?.method).toBe("get"); expect(captured?.url).toBe("/statistics/performance");
+    expect(captured?.data).toBeUndefined(); expect(captured?.params).toBeUndefined();
+    expect(captured?.signal).toBe(controller.signal);
+    expect(captured?.fetchOptions).toMatchObject({ cache: "no-store" });
+    status = 403; body = '{"error":"state.read required"}';
+    await expect(net.getRpsDiagnostics()).rejects.toMatchObject({ status: 403 });
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("preserves complete RPS settings in actual state reads and transaction submissions", async () => {
+    const candidate = config();
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet" };
+    candidate.kernel!.rps = { "lab0/rx-0": "c", "lab0/rx-1": "0" };
+    body = encodeJson({ ...state(), desired: candidate, observed: candidate });
+    expect((await net.getState()).desired.kernel?.rps).toEqual(candidate.kernel!.rps);
+    const pending = { ...transaction(), candidate, previous: candidate };
+    body = encodeJson(pending); status = 202;
+    expect((await net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 })).candidate.kernel?.rps).toEqual(candidate.kernel!.rps);
+    expect(decodeJson(String(captured?.data))).toMatchObject({ config: { kernel: { rps: candidate.kernel!.rps } } });
+    const pruned = { ...pending, candidate: { ...candidate, kernel: { ...candidate.kernel!, rps: {} } } };
+    body = encodeJson(pruned);
+    await expect(net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 }))
+      .rejects.toMatchObject({ uncertain: true, incompatible: true, transaction: { id: pending.id } });
+  });
+  it("preserves complete RFS and offload settings through state and transaction API boundaries", async () => {
+    const candidate = config();
+    candidate.kernel!.rfs = { sock_flow_entries: 0, queues: { "lab0/rx-0": 0 } };
+    candidate.kernel!.offloads = { lab0: { "rx-checksum": true, "rx-lro": false } };
+    body = encodeJson({ ...state(), desired: candidate, observed: candidate });
+    expect((await net.getState()).desired.kernel).toEqual(candidate.kernel);
+    const pending = { ...transaction(), candidate, previous: candidate };
+    body = encodeJson(pending); status = 202;
+    expect((await net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 })).candidate.kernel).toEqual(candidate.kernel);
+    expect(decodeJson(String(captured?.data))).toMatchObject({ config: { kernel: candidate.kernel } });
+  });
+  it.each(["rfs", "offloads"] as const)("retains provisional evidence and rejects a successful-looking response that prunes %s", async feature => {
+    const candidate = config();
+    candidate.kernel!.rfs = { sock_flow_entries: 0, queues: {} };
+    candidate.kernel!.offloads = { lab0: { "rx-checksum": false } };
+    const pruned = config(); pruned.kernel = { ...candidate.kernel! }; delete pruned.kernel[feature];
+    const pending = { ...transaction(), candidate: pruned };
+    status = 202; body = encodeJson(pending);
+    await expect(net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 }))
+      .rejects.toMatchObject({ uncertain: true, incompatible: true, transaction: { id: pending.id } });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    [net.getInterfaceCapabilities, "/interface-capabilities"],
+    [net.refreshInterfaceCapabilities, "/interface-capabilities/refresh"],
+  ] as const)("reads typed capability snapshots through %s as uncached bodyless GETs", async (read, path) => {
+    const snapshot = interfaceCapabilitySnapshot(), controller = new AbortController();
+    body = JSON.stringify(snapshot);
+    expect(await read(controller.signal)).toEqual(snapshot);
+    expect(captured?.method).toBe("get"); expect(captured?.url).toBe(path);
+    expect(captured?.data).toBeUndefined(); expect(captured?.params).toBeUndefined();
+    expect(captured?.signal).toBe(controller.signal);
+    expect(captured?.fetchOptions).toMatchObject({ cache: "no-store", credentials: "omit", redirect: "error" });
+    await read(controller.signal);
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("accepts a completed null saved snapshot but rejects a null scan result", async () => {
+    body = "null";
+    expect(await net.getInterfaceCapabilities()).toBeNull();
+    await expect(net.refreshInterfaceCapabilities()).rejects.toMatchObject({ incompatible: true });
+  });
+  it.each([403, 409, 500, 503])("surfaces typed capability failures without retrying HTTP %s", async code => {
+    status = code; body = '{"error":"Capability scan failed"}';
+    await expect(net.refreshInterfaceCapabilities()).rejects.toMatchObject({ status: code, message: `HTTP ${code}: Capability scan failed` });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
   it.each(["0", "1", "9007199254740991", "9007199254740993", "18446744073709551615"])("reads exact MQTT uint64 counters %s", async count => {
     body = JSON.stringify({ ...mqttStatus(), connection_attempts: 0, reconnect_count: 0 })
       .replace('"connection_attempts":0', `"connection_attempts":${count}`)
@@ -194,6 +309,17 @@ describe("controller-proxied API boundary", () => {
   it.each(["https://example.com/api/v1/state", "//example.com/api/v1/state", "/api/v1/../session", "/api/v1/%2e%2e/session", "/api/v1/state#fragment", "/api/v1/\\state", "/api/v1//state", "/state", ""])("rejects unsafe API explorer path %s before sending credentials", async path => {
     await expect(inspectApiPath(path)).rejects.toThrow("Enter an appliance path");
     expect(adapter).not.toHaveBeenCalled();
+  });
+  it.each(["/interface-capabilities", "/interface-capabilities/refresh"])("sends explicit %s requests as uncached GETs without a body or query", async path => {
+    body = path.endsWith("/refresh") ? '{"scope":"simulator","inventory":{"status":"simulated"}}' : "null";
+    await inspectApiPath(`/api/v1${path}`);
+    expect(captured?.method).toBe("get");
+    expect(captured?.url).toBe(path);
+    expect(captured?.data).toBeUndefined();
+    expect(captured?.params).toBeUndefined();
+    expect(captured?.fetchOptions).toMatchObject({ cache: "no-store", credentials: "omit", redirect: "error" });
+    await inspectApiPath(`/api/v1${path}`);
+    expect(adapter).toHaveBeenCalledTimes(2);
   });
   it.each([...Array.from({ length: 32 }, (_, code) => code), 127])("rejects API explorer query control character %i before sending credentials", async code => {
     await expect(inspectApiPath(`/api/v1/state?filter=a${String.fromCharCode(code)}b`)).rejects.toThrow("Enter an appliance path");

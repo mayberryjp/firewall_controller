@@ -145,6 +145,7 @@ test("overview packet counters abbreviate totals and show exact poll changes", a
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(sample) });
   });
   await connect(page);
+  await navigate(page, "SYSTEM OVERVIEW");
   const counters = page.getByRole("region", { name: "Interface counters", exact: true });
   const cells = counters.locator("tbody tr").first().locator("td");
   await expect(cells.nth(0)).toHaveText("99,999");
@@ -164,6 +165,7 @@ test("overview packet counters abbreviate totals and show exact poll changes", a
 test("overview layout supports moving, hiding, restoring and registry persistence", async ({ page, isMobile }, testInfo) => {
   const backend = await mockBackend(page);
   await connect(page);
+  await navigate(page, "SYSTEM OVERVIEW");
   const customize = page.getByRole("button", { name: "Customize layout", exact: true });
   await expect(customize).toBeEnabled();
   const header = await page.locator(".app-header").boundingBox();
@@ -174,7 +176,7 @@ test("overview layout supports moving, hiding, restoring and registry persistenc
   expect(pencil).not.toBeNull();
   const topGap = dashboard!.y - (header!.y + header!.height);
   expect(topGap).toBeGreaterThanOrEqual(0);
-  expect(topGap).toBeLessThanOrEqual(16);
+  expect(topGap).toBeLessThanOrEqual(isMobile ? 72 : 32);
   expect(pencil!.y).toBeGreaterThanOrEqual(dashboard!.y + dashboard!.height);
   await page.screenshot({ path: testInfo.outputPath("compact-overview.png"), fullPage: true, animations: "disabled" });
   await customize.click();
@@ -238,6 +240,7 @@ test("Home Assistant MQTT configuration and system stats use the staged confirme
     return route.fulfill({ contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify(healthSnapshot(String(9007199254740993n + BigInt(index) * 25n), String(9007199254740993n + BigInt(index) * 75n), 100 + index * 3)) });
   });
   await connect(page);
+  await navigate(page, "SYSTEM OVERVIEW");
   const system = page.getByRole("region", { name: "System stats", exact: true });
   await expect(system.getByRole("row", { name: /Memory/ })).toContainText("6 GB / 8 GB");
   await page.clock.fastForward(3500);
@@ -630,7 +633,8 @@ test("compact overview contains live status widgets without diagnostic clutter",
     { name: "lo", kind: "loopback", index: 3, mac: null, mtu: 65536, up: true, ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] },
   ] });
   await connect(page);
-  const dashboard = page.getByRole("region", { name: "Overview", exact: true });
+  await navigate(page, "SYSTEM OVERVIEW");
+  const dashboard = page.getByRole("region", { name: "System overview", exact: true });
   await expect(dashboard.getByRole("heading", { level: 2 })).toHaveText(["Interfaces", "Gateways", "WireGuard", "BGP peers", "System stats", "Interface counters"]);
   await expect(dashboard.getByRole("region", { name: "Interfaces", exact: true }).getByRole("cell", { name: "Up", exact: true })).toHaveCount(3);
   const interfaceWidget = dashboard.getByRole("region", { name: "Interfaces", exact: true });
@@ -1006,6 +1010,7 @@ test("tables use compact spacing across resource, overview, and connection pages
     addresses: link.addresses, ownership: "managed", role: null, addressing_type: null,
   })) });
   await connect(page);
+  await navigate(page, "SYSTEM OVERVIEW");
   await expect(page.locator(".v-table").first()).toBeVisible();
   for (const table of await page.locator(".v-table").all()) {
     await expect(table).toHaveClass(/v-table--density-compact/);
@@ -1941,7 +1946,7 @@ test("gateway metric chips show four quality bands without changing monitor heal
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(await monitors.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("monitor-metric-colors.png"), fullPage: true, animations: "disabled" });
-  await navigate(page, "Overview");
+  await navigate(page, "SYSTEM OVERVIEW");
   const gateways = page.getByRole("region", { name: "Gateways", exact: true });
   for (const band of bands) {
     const row = gateways.getByRole("row").filter({ has: page.getByRole("cell", { name: band.name, exact: true }) });

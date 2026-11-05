@@ -26,12 +26,15 @@ export const resourceDescriptions: Record<Section, string> = {
 };
 export const resourceColumns: Record<Section, string[]> = {
   interfaces: ["name", "kind", "role", "up", "mtu", "addresses"],
-  routes: ["destination", "interface", "metric"],
+  routes: ["destination", "interface", "gateway_mode", "gateway", "metric"],
   firewall: ["source", "destination", "protocol", "destination_ports", "action"],
   nat: ["family", "source", "out_interface"],
   softflowd: ["name", "interface", "collector", "export_version"],
   gateway_monitors: ["name", "interface", "target"],
 };
+export function routeGatewayMode(gateway: unknown): "direct" | "static" | "dhcp" {
+  return gateway === "dhcp" ? "dhcp" : gateway ? "static" : "direct";
+}
 export function resourceItems(config: Config, section: Section): unknown[] {
   if (section === "firewall") return config.firewall.rules;
   if (section === "nat") return config.firewall.nat.masquerade;
@@ -48,6 +51,7 @@ export function replaceResourceItems(config: Config, section: Section, values: u
   }
 }
 export function displayResourceValue(value: unknown, key: string): string {
+  if (key === "gateway" && value === "dhcp") return "DHCP gateway";
   if (key === "protocol" && (typeof value === "string" || value === undefined)) return formatFirewallProtocol(value);
   if (key === "destination_ports" && (value === undefined || value === "" || Array.isArray(value) && !value.length)) return "Any";
   if (value === undefined || value === null || value === "") return ["source", "destination"].includes(key) ? "Any" : key === "gateway" ? "Direct" : "—";

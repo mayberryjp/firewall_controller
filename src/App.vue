@@ -9,12 +9,12 @@ usePolling();
 watch(() => store.connected
   ? [store.state.data?.desired.system?.hostname, store.state.data?.desired.system?.domain].filter(Boolean).join(".")
   : "", (name) => { document.title = name || "Firewall Controller"; }, { immediate: true });
-watch(() => route.path, (path) => { store.monitoring = path === "/overview" || path.startsWith("/interfaces/"); }, { immediate: true });
+watch(() => route.path, (path) => { store.monitoring = ["/overview", "/diagnostics/system-overview"].includes(path) || path.startsWith("/interfaces/"); }, { immediate: true });
 watch(() => store.connected, (connected) => {
   if (!connected && route.path !== "/connect") void router.replace({ name: "connect", query: { redirect: route.fullPath } });
 });
 function warnUnload(event: BeforeUnloadEvent): void {
-  if (store.editorDirty || store.draft || store.busy || store.uncertain) { event.preventDefault(); event.returnValue = ""; }
+  if (store.editorDirty || store.draft || store.busy || store.uncertain || store.pathTestWriteBlockedReason) { event.preventDefault(); event.returnValue = ""; }
 }
 window.addEventListener("beforeunload", warnUnload);
 onUnmounted(() => window.removeEventListener("beforeunload", warnUnload));

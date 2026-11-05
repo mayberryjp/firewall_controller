@@ -160,6 +160,10 @@ body {
   padding-top: calc(var(--app-space) * 2);
 }
 
+.app-content:has(.traffic-flow) {
+  padding-block: 12px;
+}
+
 @media (min-width: 900px) {
   .app-content:has(.host-policy-page) {
     height: calc(100dvh - var(--v-layout-top, 0px) - var(--v-layout-bottom, 0px));

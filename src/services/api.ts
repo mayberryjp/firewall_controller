@@ -7,6 +7,13 @@ import { transactionSchema, type Transaction } from "@/types/domain";
 let selectedDeviceId = "";
 let unauthorized: () => void = () => {};
 export function onUnauthorized(callback: () => void): void { unauthorized = callback; }
+let mutationBlock: (path: string) => string = () => "";
+export function onMutationCheck(callback: (path: string) => string): void { mutationBlock = callback; }
+function checkMutation(path: string): void {
+  if (/^\/diagnostics\/path-tests\/[0-9a-f]{32}\/cancel$/.test(path)) return;
+  const reason = mutationBlock(path);
+  if (reason) throw new ApiFailure(reason, 409);
+}
 
 export function setApiDevice(deviceId: string): void {
   const value = deviceId.trim();
@@ -83,6 +90,7 @@ export async function request<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const writing = method !== "GET";
+  if (writing || path === "/interface-capabilities/refresh") checkMutation(path);
   const requestCredential = getRegistrySessionToken();
   const serialized = body === undefined ? undefined : encodeJson(body);
   if (serialized !== undefined && utf8Size(serialized) > 1_048_576) {
@@ -138,6 +146,7 @@ export async function request<T>(
 export async function inspectApiPath(input: string, signal?: AbortSignal): Promise<{ status: number; body: string }> {
   const path = input.trim();
   const pathname = path.split("?")[0]!;
+  if (pathname === "/api/v1/interface-capabilities/refresh") checkMutation("/interface-capabilities/refresh");
   if (!/^\/api\/v1\/[A-Za-z0-9_~:@/.-]+$/.test(pathname) ||
       pathname.slice(8).split("/").some(segment => !segment || segment === "." || segment === "..") ||
       /[\s\\#]/.test(path) ||

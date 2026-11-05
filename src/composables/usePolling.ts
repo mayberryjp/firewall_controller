@@ -5,13 +5,14 @@ import { useControllerStore } from "@/stores/controller";
 export function usePolling(): void {
   const store = useControllerStore();
   const route = useRoute();
+  const overview = () => ["/overview", "/diagnostics/system-overview"].includes(route.path);
   const stops: Array<() => void> = [];
   function schedule(action: () => Promise<void>, interval: () => number, failed: () => boolean, enabled = () => true, allRoutes = false, maxBackoff = 10000): void {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false, running = false, failures = 0;
     async function run(): Promise<void> {
       if (stopped || running) return;
-      if (store.connected && (allRoutes || route.path === "/overview") && document.visibilityState !== "hidden" && enabled()) {
+      if (store.connected && (allRoutes || overview()) && document.visibilityState !== "hidden" && enabled()) {
         running = true;
         try { await action(); } finally { running = false; }
         failures = failed() ? Math.min(failures + 1, 4) : 0;
@@ -30,11 +31,13 @@ export function usePolling(): void {
     });
   }
   onMounted(() => {
+    schedule(store.refreshPathTests, () => store.pathTests.data?.active || store.pathTestUncertain ? 1000 : 5000,
+      () => Boolean(store.pathTests.error), () => !store.pathTestsUnsupported, true, 5000);
     schedule(store.refreshPlatformStatus, () => 3000, () => Boolean(store.platform.error), () => true, true, 5000);
     schedule(store.refreshLinkDiagnostics, () => 3000, () => Boolean(store.linkDiagnostics.error),
       () => ["/diagnostics/interface-drops", "/diagnostics/qdiscs", "/diagnostics/tcp-windowing", "/diagnostics/capture-details"].includes(route.path), true, 5000);
     schedule(store.refreshBGPStatus, () => 3000, () => Boolean(store.bgpStatus.error),
-      () => route.path === "/overview" && store.bgpMonitoring || ["/routing/bgp", "/routing/bgp/peers"].includes(route.path), true, 5000);
+      () => overview() && store.bgpMonitoring || ["/routing/bgp", "/routing/bgp/peers"].includes(route.path), true, 5000);
     schedule(store.refreshBGPRoutes, () => 3000, () => Boolean(store.bgpRoutes.error),
       () => route.name === "bgp-routes" && store.bgpRouteDirection === "received" ||
         route.path.startsWith("/wireguard") && Boolean((store.state.data?.active_transaction?.candidate ?? store.state.data?.desired)?.bgp?.enabled), true, 5000);
@@ -42,17 +45,17 @@ export function usePolling(): void {
       () => route.name === "bgp-routes" && store.bgpRouteDirection === "advertised", true, 5000);
     schedule(store.refreshState, () => store.activeTransactions.length || store.uncertain ? 1000 : store.softwareCheckPending ? 2000 : 5000,
       () => Boolean(store.state.error),
-      () => route.path === "/overview" || route.path === "/config/upgrade" || route.name === "settings-advanced" ||
+      () => overview() || route.path === "/config/upgrade" || route.name === "settings-advanced" ||
         route.name === "transaction-detail" || store.softwareCheckPending, true);
     schedule(store.refreshRuntime, () => 5000, () => Boolean(store.runtime.error), () =>
-      route.path === "/overview" || route.path.startsWith("/wireguard") || route.path === "/routes" ||
+      overview() || route.path.startsWith("/wireguard") || route.path === "/routes" ||
       route.path.startsWith("/services/"), true, 5000);
     schedule(store.refreshTransactions, () => store.activeTransactions.length || store.uncertain ? 1000 : 10000,
       () => Boolean(store.transactions.error),
-      () => route.path === "/overview" || route.name === "settings-advanced" || route.name === "transaction-detail", true);
+      () => overview() || route.name === "settings-advanced" || route.name === "transaction-detail", true);
     schedule(store.refreshStatistics, () => 3000, () => Boolean(store.statistics.error),
-      () => (route.path === "/overview" && store.monitoring) || ["/diagnostics/traffic", "/diagnostics/interface-drops"].includes(route.path), true);
-    schedule(store.refreshGatewayStatistics, () => 3000, () => Boolean(store.gatewayStatistics.error), () => store.gatewayMonitoring && ["/overview", "/gateway-monitors"].includes(route.path), true, 5000);
+      () => (overview() && store.monitoring) || ["/diagnostics/traffic", "/diagnostics/interface-drops"].includes(route.path), true);
+    schedule(store.refreshGatewayStatistics, () => 3000, () => Boolean(store.gatewayStatistics.error), () => store.gatewayMonitoring && (overview() || route.path === "/gateway-monitors"), true, 5000);
     schedule(store.refreshHostHealth, () => 3000, () => Boolean(store.hostHealth.error));
     schedule(store.refreshMqttStatus, () => 7500, () => Boolean(store.mqttStatus.error), () => route.path === "/settings/mqtt-streaming", true);
     schedule(store.refreshVnStatReporting, () => 15000, () => Boolean(store.vnstatReporting.error), () => route.path === "/services/vnstat", true);

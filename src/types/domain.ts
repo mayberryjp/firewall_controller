@@ -5,6 +5,7 @@ import { dateVersionSchema } from "@/services/versions";
 import { sandoSchema } from "@/services/sandoState";
 import { ruleOwnershipShape, validateRuleOwnership } from "@/services/ruleOwnership";
 import { firewallProtocolSchema } from "@/services/firewallProtocols";
+import { offloadsSchema, rfsConfigSchema, type TuningSettings } from "@/services/tuning";
 
 const list = <T extends z.ZodTypeAny>(schema: T) =>
   z.array(schema).nullable().transform((value) => value ?? []);
@@ -78,7 +79,16 @@ export const bgpAdvertisedRoutesSchema = z.object({
   })),
 });
 export type BGPAdvertisedRoutes = z.infer<typeof bgpAdvertisedRoutesSchema>;
-export const kernelSchema = z.object({ namespace: stringMap, host: stringMap }).strict();
+export interface KernelConfig extends TuningSettings {
+  namespace: Record<string, string>;
+  host: Record<string, string>;
+}
+export const kernelSchema: z.ZodType<KernelConfig, z.ZodTypeDef, TuningSettings & {
+  namespace: z.input<typeof stringMap>; host: z.input<typeof stringMap>;
+}> = z.object({
+  namespace: stringMap, host: stringMap, rps: z.record(z.string()).optional(),
+  rfs: rfsConfigSchema.nullable().optional(), offloads: offloadsSchema.optional(),
+}).strict();
 export const peerSchema = z.object({
   ...annotation,
   public_key: z.string(), endpoint: optionalText, allowed_ips: list(z.string()),
@@ -304,7 +314,6 @@ export const configSchema = z.object({
   blackhole: blackholeSchema.optional(),
   system: systemSchema.optional(),
   dhcp_clients: z.record(dhcpClientSchema).optional(), dns: z.record(dnsConfigSchema).optional(),
-  // The backend added kernel settings after FRONTEND_SPEC; preserve, but do not edit them.
   kernel: kernelSchema.optional(),
   // Retired public field: present at all (even [] or null) is incompatible.
   policy_rules: z.never().optional(),

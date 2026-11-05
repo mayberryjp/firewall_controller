@@ -53,6 +53,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "vnStat", name: "vnstat", path: "/services/vnstat", icon: "mdi-chart-bar" },
   ] },
   { title: "Diagnostics", name: "diagnostics-section", path: "/diagnostics", icon: "mdi-chart-line", pages: [
+    { title: "SYSTEM OVERVIEW", name: "system-overview", path: "/diagnostics/system-overview", icon: "mdi-view-dashboard-outline" },
     { title: "REAL TIME TRAFFIC", name: "real-time-traffic", path: "/diagnostics/traffic", icon: "mdi-chart-line" },
     { title: "FIREWALL DROPS", name: "firewall-drops", path: "/diagnostics/firewall-drops", icon: "mdi-shield-alert-outline" },
     { title: "Process health", name: "process-health", path: "/diagnostics/process-health", icon: "mdi-heart-pulse" },
@@ -60,6 +61,10 @@ export const navigationSections: NavigationSection[] = [
     { title: "QDISCS", name: "qdiscs", path: "/diagnostics/qdiscs", icon: "mdi-format-list-numbered" },
     { title: "TCP WINDOWING", name: "tcp-windowing", path: "/diagnostics/tcp-windowing", icon: "mdi-swap-horizontal" },
     { title: "Capture details", name: "capture-details", path: "/diagnostics/capture-details", icon: "mdi-clipboard-check-outline" },
+    { title: "Interface capabilities", name: "interface-capabilities", path: "/diagnostics/interface-capabilities", icon: "mdi-expansion-card" },
+    { title: "RPS Configuration", name: "rps-configuration", path: "/diagnostics/rps", icon: "mdi-chip" },
+    { title: "NIC Offloads", name: "nic-offloads", path: "/diagnostics/nic-offloads", icon: "mdi-table" },
+    { title: "Path MTU/MSS", name: "path-tests", path: "/diagnostics/path-tests", icon: "mdi-transit-connection-variant" },
     { title: "API explorer", name: "api-explorer", path: "/diagnostics/api", icon: "mdi-api" },
     { title: "Download config", name: "download-config", path: "/diagnostics/download-config", icon: "mdi-download" },
   ] },

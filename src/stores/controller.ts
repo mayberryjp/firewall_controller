@@ -1,12 +1,12 @@
 import { computed, onScopeDispose, ref, shallowReactive, watch } from "vue";
 import { defineStore } from "pinia";
-import { ApiFailure, onUnauthorized, setApiDevice } from "@/services/api";
+import { ApiFailure, onMutationCheck, onUnauthorized, setApiDevice } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import {
   configSchema, knownStatuses, terminal,
   type Config, type StateView, type RuntimeState, type Transaction, type PlatformStatus,
   type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
-  type BGPStatus, type BGPRoutes, type BGPAdvertisedRoutes, type VnStatReporting,
+  type BGPStatus, type BGPRoutes, type BGPAdvertisedRoutes, type VnStatReporting, type DiscoveredInterface,
 } from "@/types/domain";
 import { cloneConfig, differences, equalConfig, stableJson, syncWireGuardRoutes, validateConfig } from "@/services/configuration";
 import { encodeJson, utf8Size } from "@/services/json";
@@ -17,6 +17,7 @@ import { mqttStatusSchema, dynamicDnsStatusSchema, mdnsStatusPageSchema, udpRela
 import type { z } from "zod";
 import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
 import { isInitialLoad } from "@/services/datasets";
+import { pathTestRequestSchema, validatePathInterfaces, type PathTestStatus, type PathTestRequest } from "@/services/pathTests";
 
 export interface Dataset<T> {
   data: T | null;
@@ -37,6 +38,18 @@ export const useControllerStore = defineStore("controller", () => {
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
   const platform = dataset<PlatformStatus>();
   const linkDiagnostics = dataset<LinkDiagnostics>();
+  const pathTests = dataset<PathTestStatus>(), pathInterfaces = dataset<DiscoveredInterface[]>();
+  const pathTestsUnsupported = ref(false), pathTestPending = ref<"" | "start" | "cancel">("");
+  const pathTestUncertain = ref(false), pathTestActionError = ref("");
+  let pathSubmitting = false;
+  const pathTestWriteBlockedReason = computed(() => {
+    if (pathTestPending.value) return "A path-test operation is pending. Conflicting writes are blocked.";
+    if (pathTestUncertain.value) return "Path-test outcome is unknown. Refresh its status before making changes.";
+    if (pathTests.data?.active) return "A path test or its restoration owns temporary networking state. Wait for the lease to be released.";
+    return "";
+  });
+  onMutationCheck(path => path === "/diagnostics/path-tests" && pathTestPending.value === "start" &&
+    !pathTests.data?.active && !pathTestUncertain.value ? "" : pathTestWriteBlockedReason.value);
   const bgpStatus = dataset<BGPStatus>(), bgpRoutes = dataset<BGPRoutes>();
   const bgpAdvertisedRoutes = dataset<BGPAdvertisedRoutes>();
   const bgpRouteDirection = ref<"received" | "advertised">("received"), bgpAdvertisedRoutesExpired = ref(true);
@@ -151,7 +164,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, platform, linkDiagnostics, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, udpRelayStatus, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, vnstatReporting, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, platform, linkDiagnostics, pathTests, pathInterfaces, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, udpRelayStatus, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, vnstatReporting, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -179,6 +192,7 @@ export const useControllerStore = defineStore("controller", () => {
     (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || a.id.localeCompare(b.id)));
   const readOnlyBlock = computed(() => {
     if (!connected.value) return "Sign in and select a registered firewall.";
+    if (pathTestWriteBlockedReason.value) return pathTestWriteBlockedReason.value;
     if (restartPending.value || restartReconnecting.value) return "A process restart is in progress. Your local draft is preserved.";
     if (busy.value || submitted.value || uncertain.value) return "A submitted snapshot or uncertain write is frozen. Reconcile its server outcome first.";
     return "";
@@ -196,14 +210,16 @@ export const useControllerStore = defineStore("controller", () => {
     return "";
   });
   const canApply = computed(() => !applyBlockedReason.value);
-  const operationBlockedReason = computed(() => {
+  function operationBlock(ignorePathTest = false): string {
     if (!connected.value) return "Select a connected firewall.";
+    if (!ignorePathTest && pathTestWriteBlockedReason.value) return pathTestWriteBlockedReason.value;
     if (restartPending.value || restartReconnecting.value) return "A restart is already in progress.";
     if (busy.value || submitted.value || uncertain.value) return "Resolve the pending configuration operation first.";
     if (activeTransactions.value.length) return "Finish the active transaction or recovery first.";
     if (upgradePending.value || upgradeBlockedReason.value) return upgradeBlockedReason.value || "An upgrade is pending.";
     return "";
-  });
+  }
+  const operationBlockedReason = computed(() => operationBlock());
   function firewallDeletionBlock(includePendingReads: boolean): string {
     if (operationBlockedReason.value) return operationBlockedReason.value;
     if (incompatible.value) return "Resolve the incompatible configuration or transaction state first.";
@@ -224,6 +240,9 @@ export const useControllerStore = defineStore("controller", () => {
     stopSoftwareCheck(); softwareCheckDenied.value = false; softwareCheckNotice.value = "";
     epoch++;
     sessionVersion.value++;
+    pathTests.data = null; pathInterfaces.data = null;
+    pathTestsUnsupported.value = false; pathTestPending.value = ""; pathTestUncertain.value = false;
+    pathTestActionError.value = ""; pathSubmitting = false;
     clearTimeout(reconnectTimer);
     restartPending.value = ""; restartReconnecting.value = false; restartNotice.value = ""; restartError.value = "";
     aborts.forEach((controller) => controller.abort());
@@ -265,6 +284,66 @@ export const useControllerStore = defineStore("controller", () => {
   const refreshState = () => load(state, api.getState);
   const refreshRuntime = () => load(runtime, api.getRuntime);
   const refreshLinkDiagnostics = () => load(linkDiagnostics, api.getLinkDiagnostics);
+  const refreshPathInterfaces = () => load(pathInterfaces, api.getDiscoveredInterfaces);
+  async function refreshPathTests(): Promise<void> {
+    if (!connected.value || pathSubmitting) return;
+    const version = epoch;
+    await load(pathTests, api.getPathTests);
+    if (version !== epoch) return;
+    pathTestsUnsupported.value = Boolean(pathTests.error && !pathTests.data &&
+      /HTTP (404|405|501)\b/.test(pathTests.error));
+    if (!pathTests.stale && pathTests.data) pathTestUncertain.value = false;
+  }
+  function acceptPathStatus(result: PathTestStatus): void {
+    pathTests.data = result; pathTests.error = null; pathTests.stale = false;
+    pathTests.incompatible = false; pathTests.lastSuccess = Date.now();
+    pathTestsUnsupported.value = false; pathTestUncertain.value = false;
+  }
+  async function runPathAction(action: "start" | "cancel", input?: PathTestRequest): Promise<void> {
+    if (!connected.value || pathTestPending.value) throw new Error("Wait for the connected firewall's pending path-test operation.");
+    if (action === "start" && operationBlockedReason.value) throw new Error(operationBlockedReason.value);
+    const request = action === "start" ? pathTestRequestSchema.parse(input) : undefined;
+    const nativeID = pathTests.data?.id;
+    if (action === "cancel" && !nativeID) throw new Error("No native path-test session is available to cancel.");
+    const version = epoch, controller = new AbortController();
+    aborts.add(controller); pathTestPending.value = action; pathTestActionError.value = "";
+    let sent = false;
+    try {
+      if (request) {
+        await Promise.all([refreshState(), refreshTransactions(), refreshPathInterfaces(), refreshPathTests()]);
+        if (version !== epoch) return;
+        const blocked = operationBlock(true);
+        if (blocked) throw new Error(blocked);
+        if (!freshState.value || transactions.stale || transactions.error) throw new Error("Fresh configuration and transaction state are required before starting.");
+        if (!pathTests.data || pathTests.stale || pathTests.error) throw new Error(pathTests.error || "Read native path-test status before starting.");
+        if (pathTests.data.active) throw new Error("The existing path test must finish restoration before starting another.");
+        if (!pathInterfaces.data || pathInterfaces.stale || pathInterfaces.error) throw new Error(pathInterfaces.error || "Refresh live interfaces before starting.");
+        validatePathInterfaces(request, pathInterfaces.data);
+        if (request.source_address.includes(":") && state.data?.desired.ipv6_enabled === false) throw new Error("IPv6 must be enabled in committed configuration.");
+      } else {
+        await refreshPathTests();
+        if (version !== epoch) return;
+        if (pathTests.data?.id !== nativeID) throw new Error("The native test ID changed. Review current status before cancelling.");
+      }
+      pathSubmitting = true; sent = true;
+      const result = request ? await api.startPathTest(request, controller.signal) :
+        await api.cancelPathTest(nativeID!, controller.signal);
+      if (version === epoch) acceptPathStatus(result);
+    } catch (failure) {
+      if (version !== epoch) return;
+      pathTestUncertain.value = sent && (!(failure instanceof ApiFailure) || failure.uncertain || failure.incompatible);
+      pathTestActionError.value = message(failure);
+      throw failure;
+    } finally {
+      aborts.delete(controller);
+      if (version === epoch) {
+        pathSubmitting = false; pathTestPending.value = "";
+        if (sent) void refreshPathTests();
+      }
+    }
+  }
+  const startPathTest = (input: PathTestRequest) => runPathAction("start", input);
+  const cancelPathTest = () => runPathAction("cancel");
   const refreshUDPRelayStatus = () => load(udpRelayStatus, api.getUDPRelayStatus);
   async function refreshBGPStatus(): Promise<void> {
     if (bgpUnsupported.value) return;
@@ -400,11 +479,13 @@ export const useControllerStore = defineStore("controller", () => {
       }
     }
   async function checkMaintenance(): Promise<void> {
+    if (pathTestWriteBlockedReason.value) throw new Error(pathTestWriteBlockedReason.value);
     if (upgradePending.value) throw new Error("System upgrade submission is pending");
     await refreshUpgrade();
     if (upgrade.stale || !upgrade.data || upgradeBlockedReason.value) throw new Error(upgradeBlockedReason.value || upgrade.error || "Upgrade status is unavailable");
   }
   async function startUpgrade(version: string, expectedRepository: string): Promise<void> {
+    if (pathTestWriteBlockedReason.value) throw new Error(pathTestWriteBlockedReason.value);
     if (upgradePending.value) return;
     const session = epoch;
     upgradePending.value = true; upgradeNotice.value = "";
@@ -561,6 +642,7 @@ export const useControllerStore = defineStore("controller", () => {
     } catch (error) { if (session === epoch) actionError.value = message(error); return null; }
   }
   async function mutate(operation: string, action: () => Promise<Transaction | RuntimeState>, id?: string): Promise<Transaction | null> {
+    if (pathTestWriteBlockedReason.value) throw new Error(pathTestWriteBlockedReason.value);
     if (!connected.value || busy.value) throw new Error("Connect and wait for the current operation");
     busy.value = true; actionError.value = null; notice.value = null;
     const priorIDs = Object.keys(transactions.data ?? {});
@@ -713,6 +795,8 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale && !comparisonRevision.data.current) revisionCache.set(id, comparisonRevision.data);
   }
   return {
+    pathTests, pathInterfaces, pathTestsUnsupported, pathTestPending, pathTestUncertain, pathTestActionError,
+    pathTestWriteBlockedReason, refreshPathTests, refreshPathInterfaces, startPathTest, cancelPathTest,
     udpRelayStatus, udpRelayStatusCurrent, refreshUDPRelayStatus,
     linkDiagnostics, refreshLinkDiagnostics, sessionVersion, operationBlockedReason,
     bgpStatus, bgpRoutes, bgpUnsupported, bgpStatusCurrent, bgpRoutesCurrent, bgpMonitoring, refreshBGPStatus, refreshBGPRoutes,

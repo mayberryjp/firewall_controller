@@ -9,6 +9,7 @@ import { decodeJson, encodeJson } from "../../src/services/json";
 import { defaultOverviewLayout, overviewLayoutSchema } from "../../src/services/overviewLayout";
 import { firewallCounters } from "../firewallTelemetryFixtures";
 import { normalize } from "../../src/services/configuration";
+import { rpsDiagnostics } from "../diagnosticsFixtures";
 
 export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; normalizeCandidate?: boolean; applyError?: { message: string; outcome: "rolled_back" | "recovery_failed" }; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics; stateRuntime?: StateView["runtime"] } = {}) {
   let committed = { ...options.initialConfig ?? config(), software: options.initialConfig?.software ?? software() }, revision = "2026.10.29.1";
@@ -142,6 +143,14 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       if (path === "/services/mdns") return reply(committed.mdns ?? mdnsSchema.parse({}));
       if (path === "/services/mdns/status") return reply({ instances: [discoveryStatus()], error: "" });
       if (path === "/statistics") return reply(options.statistics ?? statistics());
+      if (path === "/statistics/performance") {
+        const sample = rpsDiagnostics();
+        sample.sample = { ...sample.sample, scope: "simulator", backend_scope: "simulator", status: "simulated", collected_at: null, identity_stable: false };
+        sample.sections.online_cpus = { status: "unavailable", data: null, error: "No host CPU observations in simulator" };
+        sample.interfaces = null; sample.tuning_available = false;
+        sample.config_revision = revision; sample.configured_rps = activeConfig().kernel?.rps ?? {};
+        return reply(sample);
+      }
       if (path === "/statistics/firewall") {
         const counters = firewallCounters(activeConfig());
         return reply({ ...counters, config_revision: revision, sample: { ...counters.sample, status: "simulated" }, rules: [], generation: null, ruleset_id: null });
@@ -235,6 +244,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
         return reply(runtimeState());
       }
     }
+    if (path === "/interface-capabilities" && request.method() === "GET") return reply(null);
     return reply({ error: "Unexpected mocked endpoint", transaction: null }, 404);
   });
   return {

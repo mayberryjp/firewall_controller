@@ -14,6 +14,8 @@ test("tables match compact counters without alternating row bands", async ({ pag
   await page.getByLabel("Registry admin password").fill("registry-test-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await page.goto("/diagnostics/system-overview");
 
   const counters = page.getByRole("region", { name: "Interface counters", exact: true });
   const counterRow = counters.locator("tbody tr").first();

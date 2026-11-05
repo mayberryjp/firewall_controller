@@ -21,6 +21,8 @@ test("Overview metric links show live ApexCharts without link styling and drill 
   await page.getByLabel("Registry admin password").fill("registry-test-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await page.goto("/diagnostics/system-overview");
   const system = page.getByRole("region", { name: "System stats", exact: true });
   await expect(system.getByRole("button", { name: "CPU usage", exact: true })).toBeVisible();
   await expect(system.getByRole("row", { name: /Uptime/ }).locator("button, a")).toHaveCount(0);

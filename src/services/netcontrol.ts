@@ -1,8 +1,12 @@
 import { ApiFailure, request } from "@/services/api";
 import { z } from "zod";
-import { cloneConfig, numericAddress } from "@/services/configuration";
+import { cloneConfig, numericAddress, stableJson } from "@/services/configuration";
 import { hostHealthSchema } from "@/services/hostHealth";
 import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
+import { interfaceCapabilitySnapshotSchema } from "@/services/interfaceCapabilities";
+import { rpsDiagnosticsSchema } from "@/services/rps";
+import { pathTestRequestSchema, pathTestStatusSchema, type PathTestRequest } from "@/services/pathTests";
+import { tuningSettings } from "@/services/tuning";
 import { dateVersionSchema } from "@/services/versions";
 import { ruleOwnershipPreserved } from "@/services/ruleOwnership";
 import { firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, type FirewallDenyQuery } from "@/services/firewallTelemetry";
@@ -19,6 +23,34 @@ import {
 } from "@/types/domain";
 
 const id = encodeURIComponent;
+export const getPathTests = (signal?: AbortSignal) =>
+  request("GET", "/diagnostics/path-tests", pathTestStatusSchema, undefined, signal);
+export async function startPathTest(input: PathTestRequest, signal?: AbortSignal) {
+  const value = pathTestRequestSchema.parse(input);
+  try { return await request("POST", "/diagnostics/path-tests",
+    pathTestStatusSchema.refine(result => result.id !== null && result.state !== "idle", "Accepted start lacks a native session"),
+    value, signal); }
+  catch (failure) {
+    const status = failure instanceof ApiFailure ? failure.status : undefined;
+    const detail = failure instanceof ApiFailure ? [
+      value.pairing_secret, JSON.stringify(value.pairing_secret).slice(1, -1), encodeURIComponent(value.pairing_secret),
+    ].reduce((text, secret) => text.split(secret).join("[redacted]"), failure.message) : "";
+    throw new ApiFailure(status ? `Path test start failed. ${detail}. Check status before another start.` :
+      "Path test start outcome is unknown. Check status before another start; no request was automatically repeated.",
+    status, undefined, !(failure instanceof ApiFailure) || failure.uncertain, failure instanceof ApiFailure && failure.incompatible);
+  }
+}
+export function cancelPathTest(value: string, signal?: AbortSignal) {
+  if (!/^[0-9a-f]{32}$/.test(value)) throw new Error("A native path-test ID is required for cancellation.");
+  return request("POST", `/diagnostics/path-tests/${value}/cancel`,
+    pathTestStatusSchema.refine(result => result.id === value, "Cancellation response belongs to a different session"), undefined, signal);
+}
+export const getRpsDiagnostics = (signal?: AbortSignal) =>
+  request("GET", "/statistics/performance", rpsDiagnosticsSchema, undefined, signal);
+export const getInterfaceCapabilities = (signal?: AbortSignal) =>
+  request("GET", "/interface-capabilities", interfaceCapabilitySnapshotSchema.nullable(), undefined, signal);
+export const refreshInterfaceCapabilities = (signal?: AbortSignal) =>
+  request("GET", "/interface-capabilities/refresh", interfaceCapabilitySnapshotSchema, undefined, signal);
 export const getUDPRelayConfig = (signal?: AbortSignal) => request("GET", "/services/udp-broadcast-relay", udpBroadcastRelaySchema, undefined, signal);
 export const getUDPRelayStatus = (signal?: AbortSignal) => request("GET", "/services/udp-broadcast-relay/status", udpRelayStatusPageSchema, undefined, signal);
 export const getBGPConfig = (signal?: AbortSignal) => request("GET", "/services/bgp", bgpSchema, undefined, signal);
@@ -120,6 +152,9 @@ export const getLatestRevision = () => request("GET", "/revisions/latest", revis
 export async function submitPackage(body: PackageRequest) {
   const payload = { ...body, base_revision: revisionSchema.parse(body.base_revision), config: cloneConfig(body.config) };
   const result = await request("POST", "/transactions", submittedTransactionSchema, payload);
+  if (stableJson(tuningSettings(payload.config.kernel)) !== stableJson(tuningSettings(result.candidate.kernel))) {
+    throw new ApiFailure("The backend did not preserve the requested RPS, RFS or NIC offload settings. A provisional transaction may be active; review it and roll back rather than confirming. Deploy a tuning-capable backend before retrying.", 202, result, true, true);
+  }
   if (!ruleOwnershipPreserved(payload.config, result.candidate)) {
     throw new ApiFailure("The backend did not preserve the requested rule ownership labels. A provisional transaction may be active; review it and roll back rather than confirming. Deploy a label-capable backend before retrying.", 202, result, true, true);
   }

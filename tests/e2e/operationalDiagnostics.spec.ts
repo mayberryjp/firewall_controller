@@ -1,11 +1,16 @@
 import { expect, test } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
-import { dnsResponse, linkDiagnostics } from "../diagnosticsFixtures";
+import { dnsResponse, linkDiagnostics, interfaceCapabilitySnapshot, wireguardInterface, wireguardRpsDiagnostics } from "../diagnosticsFixtures";
 import { config, processHealthSnapshot } from "../fixtures";
 import { encodeJson } from "../../src/services/json";
 import { dnsLookupRequestSchema } from "../../src/services/operations";
 
 test("API explorer reads suggested and custom paths without appliance writes", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async (text: string) => { Object.defineProperty(window, "__copiedApiResponse", { configurable: true, value: text }); },
+    } });
+  });
   const backend = await mockBackend(page);
   const requests: string[] = [];
   await page.route("**/proxy/services/vnstat/status", route => {
@@ -27,6 +32,14 @@ test("API explorer reads suggested and custom paths without appliance writes", a
   await expect(page.getByRole("region", { name: "API response" })).toContainText("HTTP 200");
   await expect(page.getByLabel("Response body")).toContainText("18446744073709551615");
   await expect(page.getByLabel("Response body")).toContainText("Retained accounting state");
+  const responseBody = page.getByLabel("Response body"), bodyText = await responseBody.innerText();
+  await responseBody.press("Control+a");
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(bodyText);
+  await responseBody.press("Meta+a");
+  expect(await page.evaluate(() => window.getSelection()?.toString())).toBe(bodyText);
+  await page.getByRole("button", { name: "Copy response to clipboard" }).click();
+  await expect(page.getByRole("region", { name: "API response" }).getByRole("status")).toHaveText("Copied");
+  expect(await page.evaluate(() => Reflect.get(window, "__copiedApiResponse"))).toBe(bodyText);
   const input = explorer.getByRole("combobox", { name: "Appliance API path" });
   await input.fill("/api/v1/platform/status");
   await page.getByRole("option", { name: "/api/v1/platform/status", exact: true }).click();
@@ -39,6 +52,346 @@ test("API explorer reads suggested and custom paths without appliance writes", a
   expect(requests).toEqual(["GET", "GET"]);
   expect(backend.writes).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("API explorer capability scans are explicit GET actions and retain stale evidence on failure", async ({ page }) => {
+  const backend = await mockBackend(page);
+  const snapshot = { collected_at: "2026-11-04T05:10:00.123+00:00", scope: "simulator",
+    inventory: { source: "simulator", status: "partial", kernel_release: null, boot_id: null,
+      errors: ["Driver information unavailable"], interfaces: [] } };
+  let saved: typeof snapshot | null = null, scans = 0, refreshStatus = 200;
+  const requests: Array<{ method: string; path: string; body: string | null }> = [];
+  await page.route("**/proxy/interface-capabilities**", route => {
+    const request = route.request(), url = new URL(request.url());
+    requests.push({ method: request.method(), path: url.pathname + url.search, body: request.postData() });
+    if (url.pathname.endsWith("/refresh")) {
+      scans++;
+      if (refreshStatus !== 200) return route.fulfill({ status: refreshStatus, contentType: "application/json", body: '{"error":"Capability scan denied or unavailable"}' });
+      saved = snapshot;
+    }
+    return route.fulfill({ contentType: "application/json", body: encodeJson(saved) });
+  });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/diagnostics/api");
+  const explorer = page.getByRole("region", { name: "API explorer", exact: true });
+  const input = explorer.getByRole("combobox", { name: "Appliance API path" });
+  await input.fill("/api/v1/interface-capabilities");
+  await page.getByRole("option", { name: "/api/v1/interface-capabilities (Read saved interface capabilities)", exact: true }).click();
+  expect(scans).toBe(0);
+  await explorer.getByRole("button", { name: "GET", exact: true }).click();
+  await expect(page.getByLabel("Response body")).toHaveText("null");
+  await expect(explorer).toContainText("No saved capability snapshot");
+  await input.fill("/api/v1/interface-capabilities/refresh");
+  await page.getByRole("option", { name: "/api/v1/interface-capabilities/refresh (Scans hardware and saves)", exact: true }).click();
+  await expect(explorer).toContainText("Requires state.read and interfaces.write");
+  expect(scans).toBe(0);
+  const scan = explorer.getByRole("button", { name: "GET: Scan & save", exact: true });
+  await scan.click();
+  await expect(page.getByLabel("Response body")).toContainText("Driver information unavailable");
+  expect(scans).toBe(1);
+  await scan.click();
+  await expect(scan).toBeEnabled();
+  expect(scans).toBe(2);
+  refreshStatus = 503;
+  await scan.click();
+  await expect(explorer.getByRole("alert")).toContainText("HTTP 503");
+  await expect(explorer.getByRole("status")).toContainText("Stale: previous saved capabilities");
+  await expect(page.getByLabel("Response body")).toContainText("Driver information unavailable");
+  refreshStatus = 403;
+  await scan.click();
+  await expect(scan).toBeDisabled();
+  await expect(explorer.getByRole("alert")).toContainText("HTTP 403");
+  expect(scans).toBe(4);
+  expect(requests.every(request => request.method === "GET" && request.body === null && !request.path.includes("?"))).toBe(true);
+  expect(backend.writes).toEqual([]);
+});
+
+test("Interface capabilities lists saved support separately from enabled state and scans only on explicit refresh", async ({ page }, testInfo) => {
+  const initialConfig = config();
+  initialConfig.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
+  const backend = await mockBackend(page, { initialConfig });
+  let saved: ReturnType<typeof interfaceCapabilitySnapshot> | null = null, scans = 0, refreshStatus = 200;
+  const requests: Array<{ method: string; query: string; body: string | null }> = [];
+  await page.route("**/proxy/interface-capabilities**", route => {
+    const request = route.request(), url = new URL(request.url());
+    requests.push({ method: request.method(), query: url.search, body: request.postData() });
+    if (url.pathname.endsWith("/refresh")) {
+      scans++;
+      if (refreshStatus !== 200) return route.fulfill({ status: refreshStatus, contentType: "application/json", body: '{"error":"Capability scan denied or unavailable"}' });
+      saved ??= interfaceCapabilitySnapshot();
+    }
+    return route.fulfill({ contentType: "application/json", body: encodeJson(saved) });
+  });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/diagnostics/interface-capabilities");
+  const inspector = page.getByRole("region", { name: "Interface capabilities", exact: true });
+  await expect(page.getByRole("tab", { name: "Interface capabilities", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(inspector).toContainText("No saved capability snapshot");
+  expect(scans).toBe(0);
+  expect(requests).toHaveLength(2);
+  const refresh = inspector.getByRole("button", { name: "Refresh capabilities", exact: true });
+  await refresh.click();
+  const inventory = inspector.getByLabel("Interface capability inventory", { exact: true });
+  await expect(inventory).toContainText("eno1");
+  await expect(inventory).toContainText("lo");
+  await expect(inspector).toContainText("Collected (Asia/Kolkata)");
+  await expect(inspector.locator("time")).toHaveText("2026-11-04 10:40:00");
+  await expect(inspector.locator("time")).toHaveAttribute("datetime", "2026-11-04T05:10:00.123456Z");
+  const footer = inspector.locator(".snapshot-context");
+  expect(await footer.evaluate(element => element === element.parentElement?.lastElementChild)).toBe(true);
+  expect(await footer.evaluate(element => element.getBoundingClientRect().top >= element.previousElementSibling!.getBoundingClientRect().bottom)).toBe(true);
+  const guidance = inspector.getByText("Refresh scans and saves capabilities without changing networking.", { exact: true });
+  expect(await footer.evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize)))
+    .toBeLessThan(await guidance.evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize)));
+  const cells = inventory.locator("tbody > tr").first().getByRole("cell");
+  await expect(cells.nth(2).locator(".v-chip")).toHaveText("Supported");
+  await expect(cells.nth(2).locator(".v-chip")).toHaveClass(/text-info/);
+  await expect(cells.nth(2).locator(".v-chip")).toHaveAttribute("title", "Support: Supported; enabled: Unknown");
+  await expect(cells.nth(3).locator(".v-chip")).toHaveText("Disabled");
+  await expect(cells.nth(3).locator(".v-chip")).toHaveClass(/text-warning/);
+  await expect(cells.nth(4).locator(".v-chip")).toHaveText("Enabled");
+  await expect(cells.nth(4).locator(".v-chip")).toHaveClass(/text-success/);
+  await expect(cells.nth(6).locator(".v-chip")).toHaveText("Unsupported");
+  await expect(cells.nth(6).locator(".v-chip")).toHaveClass(/text-error/);
+  await expect(cells.nth(7).locator(".v-chip")).toHaveText("Unknown");
+  await expect(inventory.locator(".v-chip")).toHaveCount(12);
+  await expect(inspector.getByRole("button", { name: /Details/ })).toHaveCount(0);
+  if (testInfo.project.name === "chromium") {
+    expect(await inventory.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("interface-capabilities.png"), fullPage: true, animations: "disabled" });
+  expect(scans).toBe(1);
+  await page.reload();
+  await expect(inventory).toContainText("eno1");
+  expect(scans).toBe(1);
+  saved = interfaceCapabilitySnapshot();
+  saved.inventory.status = "partial";
+  saved.inventory.errors = ["Driver scan incomplete"];
+  saved.inventory.interfaces = [saved.inventory.interfaces[1]!];
+  await refresh.click();
+  await expect(inventory).not.toContainText("eno1");
+  await expect(inventory).toContainText("lo");
+  await expect(inspector).toContainText("Partial snapshot");
+  await expect(inspector).not.toContainText("Driver scan incomplete");
+  await expect(inspector.getByRole("alert")).toHaveCount(0);
+  refreshStatus = 503;
+  await refresh.click();
+  await expect(inspector).toContainText("Stale: previous saved capabilities");
+  await expect(inspector.getByRole("alert").first()).toContainText("HTTP 503");
+  await expect(inventory).toContainText("lo");
+  refreshStatus = 403;
+  await refresh.click();
+  await expect(refresh).toBeDisabled();
+  await expect(inspector.getByRole("alert").first()).toContainText("HTTP 403");
+  expect(scans).toBe(4);
+  expect(requests.every(request => request.method === "GET" && request.body === null && request.query === "")).toBe(true);
+  expect(backend.writes).toEqual([]);
+});
+
+test("dedicated RPS and offload pages preserve saved RFS through SAVE and confirmation", async ({ page }, testInfo) => {
+  const initial = config();
+  initial.interfaces.push({ ...initial.interfaces[0]!, kind: "ethernet", name: "eno1", role: "wan", addresses: [] });
+  initial.interfaces.push(wireguardInterface());
+  initial.kernel!.rps = { "eno1/rx-1": "1", "wg0/rx-1": "2" };
+  initial.kernel!.rfs = { sock_flow_entries: 4096, queues: { "eno1/rx-1": 1024 } };
+  const backend = await mockBackend(page, { initialConfig: initial });
+  const observations = wireguardRpsDiagnostics(); observations.configured_rps = { ...initial.kernel!.rps }; observations.tuning_available = false;
+  observations.configured_rfs = initial.kernel!.rfs;
+  let performanceReads = 0;
+  await page.route("**/proxy/interface-capabilities", route => route.fulfill({ contentType: "application/json", body: encodeJson(interfaceCapabilitySnapshot()) }));
+  await page.route("**/proxy/statistics/performance", route => {
+    performanceReads++;
+    expect(route.request().method()).toBe("GET");
+    expect(route.request().postData()).toBeNull();
+    expect(new URL(route.request().url()).search).toBe("");
+    return route.fulfill({ contentType: "application/json", body: encodeJson(observations) });
+  });
+  const dialogs: string[] = [];
+  page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/diagnostics/rps");
+  const controls = page.getByRole("region", { name: "RPS Configuration", exact: true });
+  await expect(controls.locator("time")).toHaveCount(0);
+  await expect(controls.getByText("Receive Packet Steering (RPS) distributes incoming packet processing across selected CPUs.", { exact: true })).toHaveClass(/text-medium-emphasis/);
+  const enabled = controls.getByRole("checkbox", { name: "Enable RPS for eno1/rx-0", exact: true });
+  await expect(enabled).toBeVisible();
+  await expect(enabled).toBeDisabled();
+  await expect(controls).toContainText("does not hold exclusive host-tuning ownership");
+  await expect(controls).not.toContainText("--allow-host-tunables");
+  await expect(controls.getByRole("button", { name: "Refresh performance state", exact: true })).toHaveCount(0);
+  await expect(controls).not.toContainText("Changes apply only through SAVE. RSS, XPS and XDP remain read-only.");
+  await expect(controls.getByRole("heading", { name: "RPS Advanced CPU Mask", exact: true })).toBeVisible();
+  await expect(controls).toContainText("to pin specific interfaces to specific CPUs");
+  expect(backend.writes).toEqual([]);
+  observations.tuning_available = true;
+  await page.reload();
+  await expect(enabled).toBeEnabled();
+  await expect(enabled).not.toBeChecked();
+  await enabled.check();
+  const cpuCount = controls.getByRole("combobox", { name: "CPU count for eno1/rx-0", exact: true });
+  await expect(cpuCount).toHaveValue("");
+  await expect(controls.getByLabel("CPU mask for eno1/rx-0", { exact: true })).toHaveCount(0);
+  await expect(controls.getByRole("button", { name: "STAGE CHANGES", exact: true })).toBeDisabled();
+  await controls.locator(".v-select").filter({
+    has: page.getByRole("combobox", { name: "CPU count for eno1/rx-0", exact: true }),
+  }).locator(".v-field").click();
+  await expect(page.getByRole("option")).toHaveCount(5);
+  await page.getByRole("option", { name: "2", exact: true }).click();
+  await expect(controls).toContainText("Selected CPUs: 0, 1");
+  expect(backend.writes).toEqual([]);
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await expect(controls).toContainText("Performance changes staged");
+  expect(performanceReads).toBe(3);
+  await enabled.uncheck();
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await expect(cpuCount).toHaveValue("0");
+  await expect(controls.getByRole("columnheader", { name: "Restore", exact: true })).toHaveCount(0);
+  await expect(controls.getByRole("button", { name: "Restore original RPS for eno1/rx-0", exact: true })).toHaveCount(0);
+  await enabled.check(); await cpuCount.press("ArrowDown");
+  await page.getByRole("option", { name: "2", exact: true }).click();
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await expect(controls).toContainText("Performance changes staged");
+  await controls.getByRole("checkbox", { name: "RPS Advanced CPU Mask", exact: true }).check();
+  const mask = controls.getByLabel("CPU mask for eno1/rx-0", { exact: true });
+  await expect(mask).toHaveValue("3");
+  await mask.fill("c");
+  await expect(controls).toContainText("Selected CPUs: 2, 3");
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await controls.getByRole("checkbox", { name: "RPS Advanced CPU Mask", exact: true }).uncheck();
+  await expect(cpuCount).toHaveValue("2");
+  const wgEnabled = controls.getByRole("checkbox", { name: "Enable RPS for wg0/rx-0", exact: true });
+  await expect(wgEnabled).not.toBeChecked();
+  await wgEnabled.check();
+  const wgCount = controls.getByRole("combobox", { name: "CPU count for wg0/rx-0", exact: true });
+  await expect(wgCount).toHaveValue("");
+  await wgCount.press("ArrowDown");
+  await page.getByRole("option", { name: "2", exact: true }).click();
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await wgEnabled.uncheck();
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await expect(wgCount).toHaveValue("0");
+  await wgEnabled.check();
+  await controls.getByRole("checkbox", { name: "RPS Advanced CPU Mask", exact: true }).check();
+  await controls.getByLabel("CPU mask for wg0/rx-0", { exact: true }).fill("2");
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await expect(controls.getByRole("checkbox", { name: "Manage RFS tables", exact: true })).toHaveCount(0);
+  await expect(controls.getByRole("table", { name: "NIC offload settings", exact: true })).toHaveCount(0);
+  const navigation = page.getByRole("navigation", { name: "Diagnostics pages" });
+  await navigation.getByRole("tab", { name: "NIC Offloads", exact: true }).click();
+  const offloads = page.getByRole("region", { name: "NIC Offloads", exact: true });
+  const chooseOffload = async (label: string, value: string) => {
+    await offloads.getByRole("combobox", { name: label, exact: true }).press("ArrowDown");
+    await page.getByRole("option", { name: value, exact: true }).click();
+  };
+  await expect(offloads.getByRole("region", { name: "NIC offload configuration", exact: true })).toBeVisible();
+  await expect(offloads.locator(".setting-row")).toHaveCount(1);
+  await expect(offloads.getByRole("combobox", { name: "Desired rx-checksum for wg0", exact: true })).toHaveCount(0);
+  await expect(offloads.getByRole("checkbox", { name: "Manage RFS tables", exact: true })).toHaveCount(0);
+  await chooseOffload("Desired rx-checksum for eno1", "On");
+  await chooseOffload("Category", "Receiving");
+  await offloads.getByRole("combobox", { name: "Desired rx-lro for eno1", exact: true }).press("ArrowDown");
+  await expect(page.getByRole("option", { name: "On", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: "Off", exact: true }).click();
+  await offloads.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await expect(offloads).toContainText("Performance changes staged");
+  await navigation.getByRole("tab", { name: "RPS Configuration", exact: true }).click();
+  await expect(cpuCount).toHaveValue("2");
+  await expect(controls).toContainText("Selected CPUs: 2, 3");
+  await expect(wgCount).toHaveValue("1");
+  await navigation.getByRole("tab", { name: "NIC Offloads", exact: true }).click();
+  await expect(offloads.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("On");
+  expect(backend.writes).toEqual([]);
+  expect(dialogs).toEqual([]);
+  await expect(page.locator(".v-select__content:visible")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: testInfo.outputPath("nic-offload-settings.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("link", { name: "Save configuration", exact: true }).click();
+  await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+  const push = page.getByRole("dialog");
+  await expect(push).toContainText("interfaces.write");
+  await expect(push).toContainText("kernel.host.write");
+  await push.getByRole("button", { name: "Push changes", exact: true }).click();
+  await expect(push.getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
+  expect(backend.writes.filter(write => write.path.endsWith("/confirm"))).toEqual([]);
+  expect(backend.writes.find(write => write.path === "/transactions")!.body).toMatchObject({
+    config: { kernel: {
+      ...initial.kernel, rps: { "eno1/rx-0": "c", "eno1/rx-1": "1", "wg0/rx-0": "2", "wg0/rx-1": "2" },
+      rfs: initial.kernel!.rfs,
+      offloads: { eno1: { "rx-checksum": true, "rx-lro": false } },
+    }, routes: initial.routes },
+  });
+  await push.getByRole("button", { name: "Confirm changes", exact: true }).click();
+  await expect(push).not.toBeVisible();
+  expect(backend.writes.filter(write => write.path.endsWith("/confirm"))).toHaveLength(1);
+  expect(dialogs).toEqual([]);
+});
+
+test("a new WireGuard tunnel and an explicitly unverified RPS queue share the reviewed creation candidate", async ({ page, isMobile }, testInfo) => {
+  const backend = await mockBackend(page);
+  await page.route("**/proxy/interface-capabilities", route => route.fulfill({ contentType: "application/json", body: encodeJson(interfaceCapabilitySnapshot()) }));
+  await page.route("**/proxy/statistics/performance", route => route.fulfill({ contentType: "application/json", body: encodeJson(wireguardRpsDiagnostics()) }));
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/tunnels");
+  await page.getByRole("button", { name: "Add tunnel", exact: true }).click();
+  await page.getByLabel("Private Key", { exact: true }).fill("new-tunnel-key");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("row", { name: /tun_wg0/ })).toBeVisible();
+  if (isMobile) await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Diagnostics", exact: true }).click();
+  await page.getByRole("navigation", { name: "Diagnostics pages" }).getByRole("tab", { name: "RPS Configuration", exact: true }).click();
+  const controls = page.getByRole("region", { name: "RPS Configuration", exact: true });
+  await expect(controls.getByRole("checkbox", { name: "Enable RPS for tun_wg0/rx-0", exact: true })).toHaveCount(0);
+  await controls.getByRole("combobox", { name: "New WireGuard interface", exact: true }).press("ArrowDown");
+  await page.getByRole("option", { name: "tun_wg0", exact: true }).click();
+  await controls.getByLabel("New WireGuard RX queue", { exact: true }).fill("rx-0");
+  await controls.getByRole("button", { name: "Add WireGuard queue", exact: true }).click();
+  await expect(controls).toContainText("Queue support unverified until apply");
+  await controls.getByRole("checkbox", { name: "Enable RPS for tun_wg0/rx-0", exact: true }).check();
+  const count = controls.getByRole("combobox", { name: "CPU count for tun_wg0/rx-0", exact: true });
+  await expect(count).toHaveValue("");
+  await count.press("ArrowDown");
+  await page.getByRole("option", { name: "1", exact: true }).click();
+  await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
+  await expect(controls).toContainText("Performance changes staged");
+  expect(backend.writes).toEqual([]);
+  await expect(page.locator(".v-select__content:visible")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("wireguard-rps-creation.png"), fullPage: true, animations: "disabled" });
+  await controls.getByRole("link", { name: "Review in SAVE", exact: true }).click();
+  await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+  const push = page.getByRole("dialog");
+  await expect(push).toContainText("wireguard.write");
+  await expect(push).toContainText("kernel.host.write");
+  await push.getByRole("button", { name: "Push changes", exact: true }).click();
+  await expect(push.getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
+  const submitted = backend.writes.find(write => write.path === "/transactions")!.body;
+  expect(submitted).toMatchObject({
+    config: {
+      interfaces: expect.arrayContaining([expect.objectContaining({ name: "tun_wg0", kind: "wireguard" })]),
+      kernel: { rps: { "tun_wg0/rx-0": "1" } },
+    },
+  });
+  expect(backend.writes.filter(write => write.path.endsWith("/confirm"))).toEqual([]);
+  await push.getByRole("button", { name: "Confirm changes", exact: true }).click();
+  await expect(push).not.toBeVisible();
 });
 
 test("DNS lookup, focused diagnostic tables and icon-only confirmed restart", async ({ page }, testInfo) => {

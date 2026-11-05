@@ -7,7 +7,7 @@ import { useControllerStore } from "@/stores/controller";
 import { configSchema, type DiscoveredInterface } from "@/types/domain";
 import { record } from "@/types/forms";
 import { differences, stableJson } from "@/services/configuration";
-import { displayResourceValue, isSystemLoopback, resourceColumns } from "@/services/resourceCollections";
+import { displayResourceValue, isSystemLoopback, resourceColumns, routeGatewayMode } from "@/services/resourceCollections";
 import type { Section } from "@/services/resourceForms";
 import type { ResourceRow } from "@/composables/useResourceCollection";
 import { useFirewallCounters } from "@/composables/useFirewallCounters";
@@ -37,11 +37,16 @@ const blackholeLabel = computed(() => ({ blackhole: 'Drop', unreachable: 'Unreac
 // Enabled IPv4 routes on a DHCP interface are installed only while the lease is valid; enabled stays configured intent.
 function waitingForDhcp(route: Record<string, unknown>): string {
   const name = String(route.interface), data = store.runtime.data;
-  if (props.section !== "routes" || route.enabled === false || String(route.destination).includes(":") ||
-      !store.state.data?.desired.dhcp_clients?.[name] || !data?.dhcp_clients || store.runtime.stale) return "";
+  const client = store.state.data?.desired.dhcp_clients?.[name];
+  if (props.section !== "routes" || route.enabled === false || String(route.destination).includes(":") || !client) return "";
+  if (store.runtime.error) return `DHCP status unavailable: ${store.runtime.error}`;
+  if (!data?.dhcp_clients) return "";
+  if (store.runtime.stale) return "DHCP status is stale; waiting for a fresh runtime read";
   const lease = data.dhcp_clients.leases[name], error = data.dhcp_clients.errors[name];
-  if (lease && lease.acquired_at + lease.lifetime > (store.runtime.lastSuccess ?? Date.now()) / 1000) return "";
-  return `Not installed until ${name} has a valid DHCP lease${error ? `: ${error}` : ""}`;
+  if (error) return `DHCP error on ${name}: ${error}`;
+  if (lease && stableJson(lease.client) === stableJson(client) &&
+      lease.acquired_at + lease.lifetime > Date.now() / 1000) return "";
+  return `Not installed until ${name} has a valid matching DHCP lease`;
 }
 const blackholeTarget = computed(() => {
   const target = (store.draft ?? store.state.data?.desired)?.blackhole;
@@ -71,6 +76,12 @@ function adoptable(row: ResourceRow): boolean {
   return Boolean(row.discovered && row.index < 0 && row.discovered.name !== "lo" && row.discovered.ownership === "unmanaged" && (props.loopbacks ? ["dummy"] : ["ethernet", "veth"]).includes(row.discovered.kind) && !store.runtime.data?.parent_interfaces.some(parent => parent.name === row.discovered!.name));
 }
 function cell(value: Record<string, unknown>, key: string, discovered?: DiscoveredInterface): string {
+  if (props.section === "routes" && key === "gateway_mode") {
+    return { direct: "Direct", static: "Static address", dhcp: "DHCP gateway" }[routeGatewayMode(value.gateway)];
+  }
+  if (props.section === "routes" && key === "gateway") {
+    return value.gateway === "dhcp" ? "From lease" : String(value.gateway || "—");
+  }
   if (key === "role" && isSystemLoopback(discovered)) return displayResourceValue(discovered?.role, key);
   if (props.loopbacks && key === "address_mode") {
     if (isSystemLoopback(discovered)) return discovered?.addressing_type === "static" ? "Static" : "—";
@@ -106,6 +117,7 @@ function rowMode(value: Record<string, unknown>): string {
   return config?.dhcp_clients?.[String(value.name)] ? "DHCP" : "Static";
 }
 function heading(key: string): string {
+  if (props.section === "routes" && key === "gateway_mode") return "Gateway type";
   if (props.section === "gateway_monitors" && key === "target") return "Probe Target";
   const labels: Record<string, string> = { display_name: "Display name", address_mode: "Mode", ipv6_addresses: "IPv6 addresses", kind: "Type", id: "VLAN ID", up: "Admin state", mtu: "MTU", source_address: "Source address", routing_table: "Routing table", key_ref: "Key reference", listen_port: "Listen port" };
   if ((physical.value || props.vlan) && key === "addresses") return "IPv4";
@@ -333,7 +345,7 @@ function staged(value: unknown): string {
               class="ml-1"
               :title="waitingForDhcp(row.value)"
             >
-              Waiting for DHCP
+              {{ store.runtime.error || store.runtime.data?.dhcp_clients?.errors[String(row.value.interface)] ? "DHCP error" : "Waiting for DHCP" }}
             </v-chip>
             <div
               v-if="section === 'gateway_monitors' && key === 'interface'"

@@ -75,7 +75,8 @@ describe("routed navigation sections", () => {
   });
   it("includes Download config in Diagnostics", () => {
     const diagnostics = navigationSections.find(section => section.name === "diagnostics-section");
-    expect(diagnostics?.pages.map(page => page.name)).toEqual(["real-time-traffic", "firewall-drops", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "api-explorer", "download-config"]);
+    expect(diagnostics?.pages.map(page => page.name)).toEqual(["system-overview", "real-time-traffic", "firewall-drops", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "interface-capabilities", "rps-configuration", "nic-offloads", "path-tests", "api-explorer", "download-config"]);
+    expect(diagnostics?.pages.find(page => page.name === "system-overview")).toMatchObject({ title: "SYSTEM OVERVIEW", path: "/diagnostics/system-overview" });
     expect(diagnostics?.pages.find(page => page.name === "download-config")).toMatchObject({ title: "Download config", path: "/diagnostics/download-config" });
   });
   it("opens BGP routes under Routing and redirects the old Diagnostics URL", async () => {
@@ -117,12 +118,12 @@ describe("routed navigation sections", () => {
     expect(router.currentRoute.value.path).toBe("/settings/general");
     expect(router.currentRoute.value.meta.authenticated).toBe(true);
     await router.push("/diagnostics");
-    expect(router.currentRoute.value.path).toBe("/diagnostics/traffic");
+    expect(router.currentRoute.value.path).toBe("/diagnostics/system-overview");
     expect(router.currentRoute.value.meta.authenticated).toBe(true);
     await router.push("/diagnostics/link-diagnostics");
     expect(router.currentRoute.value.path).toBe("/diagnostics/interface-drops");
   });
-  it("loads distinct top-level views except for explicitly separate BGP editor modes", async () => {
+  it("loads distinct top-level views except for explicit BGP and performance editor modes", async () => {
     const children = privateRoutes.flatMap(section => section.children ?? []).filter(child => child.component);
     const views = await Promise.all(children.map(async child => {
       const load = child.component as () => Promise<{ default: object }>;
@@ -134,7 +135,12 @@ describe("routed navigation sections", () => {
     expect(views[peersIndex]).toBe(views[processIndex]);
     expect(children[peersIndex]!.props).toEqual({ mode: "peers" });
     expect(children[processIndex]!.props).toBeUndefined();
-    const pages = views.filter((_, index) => !children[index]!.path.includes(":") && index !== peersIndex);
+    const rpsIndex = children.findIndex(child => child.name === "rps-configuration");
+    const offloadsIndex = children.findIndex(child => child.name === "nic-offloads");
+    expect(views[offloadsIndex]).toBe(views[rpsIndex]);
+    expect(children[rpsIndex]!.props).toEqual({ mode: "rps" });
+    expect(children[offloadsIndex]!.props).toEqual({ mode: "offloads" });
+    const pages = views.filter((_, index) => !children[index]!.path.includes(":") && index !== peersIndex && index !== offloadsIndex);
     expect(new Set(pages).size).toBe(pages.length);
   });
   it("redirects config entry and legacy URLs to canonical config pages", async () => {
@@ -225,22 +231,32 @@ describe("page-scoped polling", () => {
       wrapper.unmount(); await vi.advanceTimersByTimeAsync(6000); expect(read).toHaveBeenCalledTimes(3);
     } finally { wrapper.unmount(); store.$dispose(); visibility.mockRestore(); vi.useRealTimers(); }
   });
-  it("polls live traffic only on its visible page and stops on navigation or unmount", async () => {
+  it.each(["/diagnostics/traffic", "/overview", "/diagnostics/system-overview"])("polls live traffic on %s and stops on navigation or unmount", async path => {
     vi.useFakeTimers();
     const pinia = createPinia(); setActivePinia(pinia);
-    const store = useControllerStore(); store.connected = true;
+    const store = useControllerStore(); store.connected = true; store.monitoring = true;
+    store.gatewayMonitoring = true; store.bgpMonitoring = true;
     const refreshStatistics = vi.spyOn(store, "refreshStatistics").mockResolvedValue();
     const refreshState = vi.spyOn(store, "refreshState").mockResolvedValue();
     const refreshRuntime = vi.spyOn(store, "refreshRuntime").mockResolvedValue();
+    const refreshHost = vi.spyOn(store, "refreshHostHealth").mockResolvedValue();
+    const refreshGateways = vi.spyOn(store, "refreshGatewayStatistics").mockResolvedValue();
+    const refreshBGP = vi.spyOn(store, "refreshBGPStatus").mockResolvedValue();
+    const refreshTransactions = vi.spyOn(store, "refreshTransactions").mockResolvedValue();
     vi.spyOn(store, "refreshUpgrade").mockResolvedValue();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
-    await router.push("/diagnostics/traffic");
+    await router.push(path);
     const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
     try {
       await vi.advanceTimersByTimeAsync(6100);
       expect(refreshStatistics).toHaveBeenCalledTimes(3);
-      expect(refreshState).not.toHaveBeenCalled(); expect(refreshRuntime).not.toHaveBeenCalled();
+      expect(refreshState).toHaveBeenCalledTimes(path === "/diagnostics/traffic" ? 0 : 2);
+      expect(refreshRuntime).toHaveBeenCalledTimes(path === "/diagnostics/traffic" ? 0 : 2);
+      for (const read of [refreshHost, refreshGateways, refreshBGP]) {
+        expect(read).toHaveBeenCalledTimes(path === "/diagnostics/traffic" ? 0 : 3);
+      }
+      expect(refreshTransactions).toHaveBeenCalledTimes(path === "/diagnostics/traffic" ? 0 : 1);
       visibility.mockReturnValue("hidden");
       document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(6000);
@@ -250,8 +266,10 @@ describe("page-scoped polling", () => {
       await vi.advanceTimersByTimeAsync(100);
       expect(refreshStatistics).toHaveBeenCalledTimes(4);
       await router.push("/services/dhcp-relay");
+      const stopped = [refreshHost, refreshGateways, refreshBGP, refreshTransactions].map(read => read.mock.calls.length);
       await vi.advanceTimersByTimeAsync(6000);
       expect(refreshStatistics).toHaveBeenCalledTimes(4);
+      expect([refreshHost, refreshGateways, refreshBGP, refreshTransactions].map(read => read.mock.calls.length)).toEqual(stopped);
       wrapper.unmount();
       await vi.advanceTimersByTimeAsync(6000);
       expect(refreshStatistics).toHaveBeenCalledTimes(4);
