@@ -8,32 +8,31 @@ import { useTimestamps } from "@/composables/useTimestamps";
 import { useInterfaceCapabilities } from "@/composables/useInterfaceCapabilities";
 import { nicOffloadFeatures, tuningSettings } from "@/services/tuning";
 
-type Mode = "enabled" | "disabled" | "unmanaged";
+type OffloadMode = "enabled" | "disabled";
+type Mode = OffloadMode | "unmanaged";
 type QueueEdit = { target: string; mode: Mode; mask: string };
 type OffloadEdit = { interface: string; feature: typeof nicOffloadFeatures[number]; mode: Mode };
-const offloadGroups = ["Checksums", "Sending", "Receiving", "VLAN tags"] as const;
-type OffloadGroup = typeof offloadGroups[number];
-const offloadDescriptions: Record<OffloadEdit["feature"], { group: OffloadGroup; label: string; description: string }> = {
-  "rx-checksum": { group: "Checksums", label: "Receive checksums", description: "Validate incoming packet checksums on the network adapter." },
-  "tx-checksum-ipv4": { group: "Checksums", label: "IPv4 transmit checksums", description: "Compute outgoing IPv4 packet checksums on the adapter." },
-  "tx-checksum-ip-generic": { group: "Checksums", label: "General transmit checksums", description: "Compute outgoing checksums for protocols supported by the driver." },
-  "tx-checksum-ipv6": { group: "Checksums", label: "IPv6 transmit checksums", description: "Compute outgoing IPv6 transport checksums on the adapter." },
-  "tx-scatter-gather": { group: "Sending", label: "Scatter/gather", description: "Send packet data from separate memory buffers without first copying it together." },
-  "tx-scatter-gather-fraglist": { group: "Sending", label: "Fragment-list scatter/gather", description: "Send packets assembled from linked lists of memory fragments." },
-  "tx-tcp-segmentation": { group: "Sending", label: "TCP segmentation (IPv4)", description: "Let the adapter split large outgoing IPv4 TCP packets." },
-  "tx-tcp6-segmentation": { group: "Sending", label: "TCP segmentation (IPv6)", description: "Let the adapter split large outgoing IPv6 TCP packets." },
-  "tx-tcp-ecn-segmentation": { group: "Sending", label: "TCP segmentation with ECN", description: "Support TCP segmentation while preserving explicit congestion notification." },
-  "tx-tcp-mangleid-segmentation": { group: "Sending", label: "TCP segmentation with IPv4 ID changes", description: "Allow the adapter to adjust IPv4 identification fields during TCP segmentation." },
-  "tx-generic-segmentation": { group: "Sending", label: "Generic segmentation (GSO)", description: "Allow large outgoing packets to be split later in the transmit path." },
-  "tx-gso-partial": { group: "Sending", label: "Partial generic segmentation", description: "Combine software preparation with adapter-assisted packet segmentation." },
-  "rx-gro": { group: "Receiving", label: "Generic receive aggregation (GRO)", description: "Combine incoming packets before upper-layer processing." },
-  "rx-gro-hw": { group: "Receiving", label: "Hardware receive aggregation", description: "Let the adapter combine incoming packets." },
-  "rx-udp-gro-forwarding": { group: "Receiving", label: "UDP aggregation for forwarding", description: "Allow receive aggregation for UDP packets being forwarded." },
-  "rx-lro": { group: "Receiving", label: "Large receive aggregation (LRO)", description: "Combine incoming TCP packets. Only disabling is allowed on a forwarding firewall." },
-  "rx-vlan-hw-parse": { group: "VLAN tags", label: "Receive VLAN tag parsing", description: "Let the adapter extract incoming 802.1Q VLAN tags." },
-  "tx-vlan-hw-insert": { group: "VLAN tags", label: "Transmit VLAN tag insertion", description: "Let the adapter insert outgoing 802.1Q VLAN tags." },
-  "rx-vlan-stag-hw-parse": { group: "VLAN tags", label: "Receive service-VLAN tag parsing", description: "Let the adapter extract incoming 802.1ad service-VLAN tags." },
-  "tx-vlan-stag-hw-insert": { group: "VLAN tags", label: "Transmit service-VLAN tag insertion", description: "Let the adapter insert outgoing 802.1ad service-VLAN tags." },
+const offloadDescriptions: Record<OffloadEdit["feature"], { label: string; description: string }> = {
+  "rx-checksum": { label: "Receive checksums", description: "Lets the adapter verify incoming packet checksums so the CPU can skip checks already completed by hardware. This detects packet corruption; it does not replace firewall rules or authenticate traffic." },
+  "tx-checksum-ipv4": { label: "IPv4 transmit checksums", description: "Lets the adapter calculate transport checksums for outgoing IPv4 packets. This can reduce CPU work when transmitting; disabling it can shift checksum work to software or another supported checksum feature." },
+  "tx-checksum-ip-generic": { label: "General transmit checksums", description: "Lets the adapter finish outgoing checksums using a generic mechanism rather than a separate feature for each IP protocol. It can support multiple packet types, including some tunnel traffic, depending on the driver." },
+  "tx-checksum-ipv6": { label: "IPv6 transmit checksums", description: "Lets the adapter calculate transport checksums for outgoing IPv6 packets. This can reduce transmit CPU work; IPv6 itself has no IP-header checksum, so this setting concerns protocols such as TCP and UDP." },
+  "tx-scatter-gather": { label: "Scatter/gather", description: "Lets the adapter transmit a packet directly from several separate memory buffers instead of first copying them into one buffer. This reduces copying and is often a prerequisite for hardware segmentation features." },
+  "tx-scatter-gather-fraglist": { label: "Fragment-list scatter/gather", description: "Allows transmission of packets stored as linked lists of packet-buffer fragments. It can avoid extra copying for workloads that produce this buffer layout; the benefit depends on the network stack and driver." },
+  "tx-tcp-segmentation": { label: "TCP segmentation (IPv4)", description: "Lets the adapter split large outgoing IPv4 TCP buffers into correctly sized packets instead of making the CPU build each packet separately. It can lower CPU usage at high throughput; captures taken before segmentation may show packets larger than the wire MTU." },
+  "tx-tcp6-segmentation": { label: "TCP segmentation (IPv6)", description: "Lets the adapter split large outgoing IPv6 TCP buffers into correctly sized packets. It reduces per-packet transmit work without increasing the interface MTU; captures before hardware segmentation may show oversized buffers." },
+  "tx-tcp-ecn-segmentation": { label: "TCP segmentation with ECN", description: "Allows TCP segmentation offload for traffic using Explicit Congestion Notification, which signals congestion without relying only on packet loss. This extends segmentation support; it does not enable ECN negotiation by itself." },
+  "tx-tcp-mangleid-segmentation": { label: "TCP segmentation with IPv4 ID changes", description: "Allows the adapter to choose IPv4 identification values while splitting a large TCP buffer into packets. It is a specialized segmentation capability, not a way to change connection identities or firewall matching." },
+  "tx-generic-segmentation": { label: "Generic segmentation (GSO)", description: "Lets the network stack carry large outgoing packet buffers and split them into MTU-sized packets later in the transmit path. This can reduce per-packet CPU work and supports more traffic types than TCP-only segmentation; it does not raise the link MTU." },
+  "tx-gso-partial": { label: "Partial generic segmentation", description: "Shares segmentation work between software and the adapter, often for encapsulated or tunnel packets. Software prepares the parts the adapter cannot handle, allowing hardware to finish supported work; usefulness depends on the driver and packet type." },
+  "rx-gro": { label: "Generic receive aggregation (GRO)", description: "Combines compatible incoming packets from the same flow into larger buffers before higher-level processing. This reduces per-packet CPU overhead; packet captures and counters may reflect aggregated buffers rather than individual wire packets." },
+  "rx-gro-hw": { label: "Hardware receive aggregation", description: "Lets the adapter combine compatible incoming packets before delivering them to the host, using hardware GRO support. It can reduce receive-side CPU work, but changes the packet boundaries seen by later processing and some capture tools." },
+  "rx-udp-gro-forwarding": { label: "UDP aggregation for forwarding", description: "Allows compatible incoming UDP packets to stay aggregated when they are forwarded rather than delivered to a local application. This can improve high-rate UDP forwarding, including some tunnel workloads; benefits depend on the rest of the forwarding path." },
+  "rx-lro": { label: "Large receive aggregation (LRO)", description: "Combines incoming TCP packets into larger buffers to reduce processing overhead. Unlike GRO, LRO can alter header assumptions needed for correct routing and forwarding, so this firewall only allows disabling it; an enabled reported state can be turned off but not selected as a new setting." },
+  "rx-vlan-hw-parse": { label: "Receive VLAN tag parsing", description: "Lets the adapter extract an incoming 802.1Q VLAN tag and pass its VLAN ID to the network stack as metadata. This reduces software parsing and can change how tags appear in captures; it does not create VLAN interfaces or set filtering policy." },
+  "tx-vlan-hw-insert": { label: "Transmit VLAN tag insertion", description: "Lets the adapter insert an outgoing 802.1Q VLAN tag using metadata supplied by the network stack. This avoids software insertion work; the configured VLAN interface still determines the VLAN ID and whether traffic is tagged." },
+  "rx-vlan-stag-hw-parse": { label: "Receive service-VLAN tag parsing", description: "Lets the adapter extract an incoming 802.1ad service-VLAN tag, commonly used as the outer tag in provider or stacked-VLAN networks. This is separate from ordinary 802.1Q tag handling and does not configure stacked VLANs by itself." },
+  "tx-vlan-stag-hw-insert": { label: "Transmit service-VLAN tag insertion", description: "Lets the adapter insert an outgoing 802.1ad service-VLAN tag supplied by the network stack. It is useful for supported provider or stacked-VLAN traffic; enabling it alone does not add an outer tag or create a service-VLAN interface." },
 };
 const props = defineProps<{ mode: "rps" | "offloads" }>();
 const store = useControllerStore();
@@ -46,8 +45,6 @@ const {
 const diagnostics = ref<RpsDiagnostics | null>(null), loading = ref(false), error = ref(""), formError = ref(""), notice = ref("");
 const rows = ref<QueueEdit[]>([]), offloadRows = ref<OffloadEdit[]>([]);
 const selectedOffloadInterface = ref("");
-const offloadPanel = ref<"configuration" | "status">("configuration");
-const offloadGroup = ref<OffloadGroup>("Checksums");
 const advancedMask = ref(false);
 const newInterface = ref(""), newQueue = ref(""), manualTargets = ref<string[]>([]);
 const onlineCpus = computed(() => [...new Set(diagnostics.value?.sections.online_cpus.data ?? [])].sort((left, right) => left - right));
@@ -74,8 +71,7 @@ const queues = computed(() => {
 });
 const supportsOffloads = computed(() => diagnostics.value?.configured_offloads !== undefined);
 const offloadInterfaces = computed(() => [...new Set([...physical.value.map(link => link.name), ...offloadRows.value.map(row => row.interface)])].sort());
-const visibleOffloads = computed(() => offloadRows.value.filter(row => row.interface === selectedOffloadInterface.value &&
-  offloadDescriptions[row.feature].group === offloadGroup.value));
+const visibleOffloads = computed(() => offloadRows.value.filter(row => row.interface === selectedOffloadInterface.value));
 watch(offloadInterfaces, names => {
   if (!names.includes(selectedOffloadInterface.value)) selectedOffloadInterface.value = names[0] ?? "";
 });
@@ -158,7 +154,7 @@ watch(() => [store.connected, store.sessionVersion, props.mode], () => {
   diagnostics.value = null; loading.value = false; error.value = ""; formError.value = ""; notice.value = "";
   rows.value = []; offloadRows.value = [];
   advancedMask.value = false;
-  selectedOffloadInterface.value = ""; offloadPanel.value = "configuration"; offloadGroup.value = "Checksums";
+  selectedOffloadInterface.value = "";
   newInterface.value = ""; newQueue.value = ""; manualTargets.value = [];
   initial.value = formValue.value; initialTuning.value = ""; store.editorDirty = false;
   if (store.connected) void read();
@@ -231,24 +227,25 @@ function offloadTitle(row: OffloadEdit): string {
   const evidence = offloadEvidence(row);
   return [offloadBlocked(row), evidence?.reason, ...(evidence?.evidence ?? [])].filter(Boolean).join(" ");
 }
-function offloadState(row: OffloadEdit): string {
-  const evidence = offloadEvidence(row);
-  if (evidence?.enabled === true) return offloadFixed(row) ? "Fixed enabled" : "Enabled";
-  if (evidence?.enabled === false) return offloadFixed(row) ? "Fixed disabled" : "Disabled";
-  return evidence?.support === "supported" ? "Supported" : evidence?.support === "unsupported" ? "Unsupported" : "Unknown";
+function offloadSelection(row: OffloadEdit): OffloadMode | null {
+  if (row.mode !== "unmanaged") return row.mode;
+  const enabled = offloadEvidence(row)?.enabled;
+  return enabled === true ? "enabled" : enabled === false ? "disabled" : null;
 }
 function offloadOptions(row: OffloadEdit) {
-  const options: Array<{ title: string; value: Mode }> = [
-    { title: "Original", value: "unmanaged" }, { title: "On", value: "enabled" }, { title: "Off", value: "disabled" },
+  const options: Array<{ title: string; value: OffloadMode }> = [
+    { title: "Enabled", value: "enabled" }, { title: "Disabled", value: "disabled" },
   ];
-  return options.filter(option => row.feature !== "rx-lro" || option.value !== "enabled")
-    .map(option => ({ ...option, props: { disabled: option.value !== "unmanaged" && Boolean(offloadBlocked(row)) } }));
+  return options.map(option => ({
+    ...option, props: { disabled: Boolean(offloadBlocked(row)) || (row.feature === "rx-lro" && option.value === "enabled") },
+  }));
 }
-function setOffloadMode(row: OffloadEdit, value: Mode) {
+function setOffloadMode(row: OffloadEdit, value: OffloadMode) {
   const problem = disabled.value ? blockedReason.value || "Performance editing is unavailable." :
-    value !== "unmanaged" ? offloadBlocked(row) : "";
+    offloadBlocked(row) || (row.feature === "rx-lro" && value === "enabled" ? "LRO can only be disabled on a forwarding firewall." : "");
   if (problem) { formError.value = problem; return; }
-  row.mode = value;
+  row.mode = editing.value?.kernel?.offloads?.[row.interface]?.[row.feature] === undefined &&
+    offloadEvidence(row)?.enabled === (value === "enabled") ? "unmanaged" : value;
 }
 function buildCandidate() {
   if (!editing.value) throw new Error("Committed desired configuration is unavailable.");
@@ -291,10 +288,6 @@ const candidateError = computed(() => {
   } catch (failure) { return failure instanceof Error ? failure.message : String(failure); }
 });
 async function stage() {
-  if (props.mode === "offloads" && offloadPanel.value === "status") {
-    formError.value = "Switch to Configuration to stage offload changes.";
-    return;
-  }
   if (disabled.value || !dirty.value) return;
   formError.value = "";
   const session = store.sessionVersion;
@@ -391,9 +384,31 @@ async function stage() {
       <p v-if="mode === 'rps' && rpsBlockedReason">
         {{ rpsBlockedReason }}
       </p>
-      <p v-if="mode === 'rps' && diagnostics.sections.online_cpus.data">
-        Online CPUs: {{ diagnostics.sections.online_cpus.data.join(", ") }}
-      </p>
+      <div
+        v-if="mode === 'rps' && onlineCpus.length"
+        class="online-cpus"
+      >
+        <span class="cpu-label text-medium-emphasis">Online CPUs</span>
+        <div
+          class="cpu-chips"
+          role="list"
+          aria-label="Online CPUs"
+        >
+          <v-chip
+            v-for="cpu in onlineCpus"
+            :key="cpu"
+            class="cpu-chip"
+            role="listitem"
+            :title="`Logical CPU ${cpu}`"
+            prepend-icon="mdi-chip"
+            color="primary"
+            variant="tonal"
+            rounded="lg"
+          >
+            CPU {{ cpu }}
+          </v-chip>
+        </div>
+      </div>
       <p v-if="mode === 'rps' && !rows.length && !loading">
         No managed Ethernet or WireGuard RX queues are available.
       </p>
@@ -530,60 +545,19 @@ async function stage() {
                 density="compact"
                 hide-details
               />
-              <v-select
-                v-model="offloadGroup"
-                :items="offloadGroups"
-                label="Category"
-                aria-label="Offload category"
-                density="compact"
-                hide-details
-              />
             </div>
-            <div
-              class="offload-panels"
-              role="group"
-              aria-label="Offload display"
-            >
-              <v-btn
-                type="button"
-                :aria-pressed="offloadPanel === 'configuration'"
-                :variant="offloadPanel === 'configuration' ? 'tonal' : 'text'"
-                @click="offloadPanel = 'configuration'"
-              >
-                Configuration
-              </v-btn>
-              <v-btn
-                type="button"
-                :aria-pressed="offloadPanel === 'status'"
-                :variant="offloadPanel === 'status' ? 'tonal' : 'text'"
-                @click="offloadPanel = 'status'"
-              >
-                Status
-              </v-btn>
-            </div>
-            <p v-if="offloadPanel === 'configuration'">
-              Original releases this setting and restores the backend-captured value; On and Off explicitly manage it. Review changes in SAVE. Hover a setting name for its Linux feature name.
-            </p>
-            <p v-else>
-              Cached status, not live readback. Collected ({{ timeZone }}):
-              <time
-                v-if="snapshot?.collected_at"
-                :datetime="snapshot.collected_at"
-              >{{ formatTimestamp(snapshot.collected_at) }}</time><span v-else>Unavailable</span>.
-              Refresh capabilities to scan again; hover a state for driver evidence.
+            <p>
+              Select Enabled or Disabled, then STAGE CHANGES and review in SAVE. Hover a setting name for its Linux feature name.
             </p>
             <p v-if="!offloadRows.length">
               No configurable offloads were found. Refresh capabilities to scan the physical NICs.
             </p>
             <section
-              :aria-label="`NIC offload ${offloadPanel}`"
+              aria-label="NIC offload configuration"
               class="offload-settings"
             >
-              <h3 class="settings-head">
-                {{ offloadGroup }}
-              </h3>
               <p v-if="!visibleOffloads.length && offloadRows.length">
-                No settings in this category were reported for {{ selectedOffloadInterface }}. Choose another category or refresh capabilities.
+                No configurable offloads were reported for {{ selectedOffloadInterface }}. Refresh capabilities to scan again.
               </p>
               <div
                 v-for="row in visibleOffloads"
@@ -591,65 +565,55 @@ async function stage() {
                 class="setting-row"
               >
                 <label
-                  v-if="offloadPanel === 'configuration'"
                   :for="`offload-${row.interface}-${row.feature}`"
                   class="setting-name"
                   :title="row.feature"
                 >{{ offloadDescriptions[row.feature].label }}</label>
-                <span
-                  v-else
-                  class="setting-name"
-                  :title="row.feature"
-                >{{ offloadDescriptions[row.feature].label }}</span>
                 <div class="setting-control">
-                  <template v-if="offloadPanel === 'configuration'">
-                    <v-select
-                      :id="`offload-${row.interface}-${row.feature}`"
-                      :model-value="row.mode"
-                      :items="offloadOptions(row)"
-                      :aria-label="`Desired ${row.feature} for ${row.interface}`"
-                      :aria-describedby="`offload-description-${row.interface}-${row.feature}`"
-                      :disabled="disabled || !supportsOffloads || (Boolean(offloadBlocked(row)) && row.mode === 'unmanaged')"
-                      density="compact"
-                      hide-details
-                      class="setting-field"
-                      @update:model-value="setOffloadMode(row, $event)"
-                    />
-                    <p
-                      :id="`offload-description-${row.interface}-${row.feature}`"
-                      class="setting-desc"
-                    >
-                      {{ offloadBlocked(row) || offloadDescriptions[row.feature].description }}
-                    </p>
-                  </template>
-                  <template v-else>
-                    <v-chip
-                      size="small"
-                      :title="offloadTitle(row)"
-                      :color="offloadState(row) === 'Enabled' ? 'success' : offloadState(row) === 'Disabled' ? 'warning' : offloadState(row) === 'Unsupported' ? 'error' : undefined"
-                    >
-                      {{ offloadState(row) }}
-                    </v-chip>
-                    <p class="setting-desc">
-                      {{ offloadDescriptions[row.feature].description }}
-                    </p>
-                  </template>
+                  <v-select
+                    :id="`offload-${row.interface}-${row.feature}`"
+                    :model-value="offloadSelection(row)"
+                    :items="offloadOptions(row)"
+                    :aria-label="`Desired ${row.feature} for ${row.interface}`"
+                    :aria-describedby="`offload-description-${row.interface}-${row.feature}`"
+                    :disabled="disabled || Boolean(offloadBlocked(row))"
+                    :placeholder="offloadEvidence(row)?.support === 'unsupported' ? 'Unsupported' : 'Unknown'"
+                    :title="offloadTitle(row)"
+                    density="compact"
+                    hide-details
+                    class="setting-field"
+                    @update:model-value="setOffloadMode(row, $event)"
+                  />
+                  <p
+                    :id="`offload-description-${row.interface}-${row.feature}`"
+                    class="setting-desc"
+                  >
+                    {{ offloadDescriptions[row.feature].description }}
+                    <span
+                      v-if="offloadBlocked(row)"
+                      class="d-block text-warning mt-1"
+                    >{{ offloadBlocked(row) }}</span>
+                  </p>
                 </div>
               </div>
             </section>
+            <p class="text-caption text-medium-emphasis">
+              Status collected ({{ timeZone }}):
+              <time
+                v-if="snapshot?.collected_at"
+                :datetime="snapshot.collected_at"
+              >{{ formatTimestamp(snapshot.collected_at) }}</time><span v-else>Unavailable</span>.
+            </p>
           </template>
         </template>
         <p
-          v-if="candidateError && (mode === 'rps' || offloadPanel === 'configuration')"
+          v-if="candidateError"
           class="text-error"
           role="alert"
         >
           {{ candidateError }}
         </p>
-        <div
-          v-if="mode === 'rps' || offloadPanel === 'configuration'"
-          class="rps-actions"
-        >
+        <div class="rps-actions">
           <v-btn
             type="submit"
             color="primary"
@@ -682,6 +646,10 @@ async function stage() {
 .rps-controls { min-width: 0; }
 .rps-header, .rps-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .rps-header { justify-content: space-between; }
+.online-cpus { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-top: 16px; }
+.cpu-label { font-size: 0.875rem; font-weight: 600; }
+.cpu-chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.cpu-chip { flex: 0 0 auto; border: 1px solid rgba(var(--v-theme-primary), 0.3); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: 0.025em; box-shadow: inset 0 0 12px rgba(var(--v-theme-primary), 0.08); }
 .rps-controls p, .rps-controls form, .rps-controls .v-alert, .rps-actions { margin-top: 12px; }
 .rps-controls p, .mask-cell { overflow-wrap: anywhere; }
 .rps-controls small { display: block; font-weight: normal; }
@@ -691,17 +659,15 @@ async function stage() {
 .rps-controls :deep(.rps-enable .v-label) { white-space: nowrap; }
 .mask-cell { min-width: 200px; max-width: 320px; }
 .mask-cell small { white-space: normal; }
-.offload-selectors { display: grid; grid-template-columns: repeat(2, minmax(0, 360px)); gap: 16px; margin-top: 16px; }
-.offload-panels { display: flex; gap: 8px; margin-top: 16px; }
+.offload-selectors { max-width: 360px; margin-top: 16px; }
 .offload-settings { min-width: 0; }
-.settings-head { padding: 18px 4px 12px; font-size: 0.8125rem; font-weight: 600; color: var(--text-muted); }
 .setting-row { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; align-items: start; padding: 18px 4px; border-top: 1px solid var(--border-color); }
 .setting-name { padding-top: 6px; font-weight: 700; color: var(--text-primary); overflow-wrap: anywhere; }
 .setting-control { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
 .setting-field { width: 100%; max-width: 360px; }
 .rps-controls .setting-desc { margin: 0; max-width: 760px; font-size: 0.8125rem; line-height: 1.45; color: var(--text-muted); }
 @media (max-width: 700px) {
-  .offload-selectors, .setting-row { grid-template-columns: minmax(0, 1fr); }
+  .setting-row { grid-template-columns: minmax(0, 1fr); }
   .setting-row { gap: 10px; padding: 16px 4px; }
   .setting-name { padding-top: 0; }
 }

@@ -122,6 +122,9 @@ describe("reviewed and staged RPS controls", () => {
     const data = rpsDiagnostics(); data.sections.online_cpus.data = [32, 2, 0];
     vi.mocked(api.getRpsDiagnostics).mockResolvedValue(data);
     const wrapper = render(); await flushPromises();
+    const chips = wrapper.get('[role="list"][aria-label="Online CPUs"]').findAll('[role="listitem"]');
+    expect(chips.map(chip => chip.text())).toEqual(["CPU 0", "CPU 2", "CPU 32"]);
+    expect(chips.every(chip => chip.attributes("prepend-icon") === "mdi-chip")).toBe(true);
     expect(wrapper.findAll(`${count} option`).map(option => option.attributes("value"))).toEqual(["", "0", "1", "2", "3"]);
     await wrapper.get(toggle).setValue(true);
     await wrapper.get(advanced).setValue(true);
@@ -142,6 +145,22 @@ describe("reviewed and staged RPS controls", () => {
     expect(wrapper.get<HTMLInputElement>(toggle).element.checked).toBe(false);
     await wrapper.get("form").trigger("submit"); await flushPromises();
     expect(useControllerStore().draft?.kernel?.rps).toEqual({ "eno1/rx-0": "0" });
+  });
+
+  it("shows all reported CPUs as read-only chips without changing tuning", async () => {
+    const data = rpsDiagnostics();
+    data.sections.online_cpus.data = Array.from({ length: 64 }, (_, cpu) => cpu);
+    vi.mocked(api.getRpsDiagnostics).mockResolvedValue(data);
+    const wrapper = render(); await flushPromises();
+    const list = wrapper.get('[role="list"][aria-label="Online CPUs"]');
+    const chips = list.findAll('[role="listitem"]');
+    expect(chips).toHaveLength(64);
+    expect(chips[0]!.text()).toBe("CPU 0");
+    expect(chips[63]!.text()).toBe("CPU 63");
+    expect(list.find("button, input, select").exists()).toBe(false);
+    expect(useControllerStore().editorDirty).toBe(false);
+    expect(useControllerStore().draft).toBeNull();
+    expect(api.submitPackage).not.toHaveBeenCalled();
   });
 
   it.each(["0", "A", "00", "0x1", "10"])("blocks enabled mask %s without applying anything", async value => {
@@ -378,17 +397,21 @@ describe("reviewed and staged RPS controls", () => {
   });
 
   it("stages offloads and disable-only LRO without showing RPS or RFS editors", async () => {
+    const snapshot = interfaceCapabilitySnapshot();
+    snapshot.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "ethtool:rx-lro")!.enabled = true;
+    vi.mocked(api.getInterfaceCapabilities).mockResolvedValue(snapshot);
     const store = useControllerStore(), original = JSON.stringify(store.state.data!.desired), wrapper = render("offloads");
     await flushPromises();
     expect(wrapper.find(toggle).exists()).toBe(false);
     expect(wrapper.find('[aria-label="Manage RFS tables"]').exists()).toBe(false);
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("enabled");
-    await wrapper.get('[aria-label="Offload category"]').setValue("Receiving");
-    expect(wrapper.get('[aria-label="Desired rx-lro for eno1"]').find('option[value="enabled"]').exists()).toBe(false);
+    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("disabled");
+    const lro = wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-lro for eno1"]');
+    expect(lro.element.value).toBe("enabled");
+    expect(lro.get('option[value="enabled"]').attributes("disabled")).toBeDefined();
     await wrapper.get('[aria-label="Desired rx-lro for eno1"]').setValue("disabled");
     await wrapper.get("form").trigger("submit"); await flushPromises();
     expect(store.draft?.kernel).toMatchObject({
-      offloads: { eno1: { "rx-checksum": true, "rx-lro": false } },
+      offloads: { eno1: { "rx-checksum": false, "rx-lro": false } },
     });
     expect(JSON.stringify(store.state.data!.desired)).toBe(original);
     expect(store.editorDirty).toBe(false);
@@ -413,7 +436,7 @@ describe("reviewed and staged RPS controls", () => {
     else expect(store.draft?.kernel?.rps).toEqual(kernel.rps);
   });
 
-  it("distinguishes offload false from releasing individual features and the last NIC entry", async () => {
+  it("changes managed offloads between enabled and disabled without releasing unrelated settings", async () => {
     const store = useControllerStore(), data = rpsDiagnostics();
     store.state.data!.desired.kernel!.offloads = { eno1: { "rx-checksum": true, "rx-gro": true } };
     data.configured_offloads = store.state.data!.desired.kernel!.offloads;
@@ -422,16 +445,13 @@ describe("reviewed and staged RPS controls", () => {
     await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("disabled");
     await wrapper.get("form").trigger("submit"); await flushPromises();
     expect(store.draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": false, "rx-gro": true } });
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("unmanaged");
+    expect(wrapper.find('option[value="unmanaged"]').exists()).toBe(false);
+    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("enabled");
     await wrapper.get("form").trigger("submit"); await flushPromises();
-    expect(store.draft?.kernel?.offloads).toEqual({ eno1: { "rx-gro": true } });
-    await wrapper.get('[aria-label="Offload category"]').setValue("Receiving");
-    await wrapper.get('[aria-label="Desired rx-gro for eno1"]').setValue("unmanaged");
-    await wrapper.get("form").trigger("submit"); await flushPromises();
-    expect(store.draft?.kernel?.offloads).toBeUndefined();
+    expect(store.draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": true, "rx-gro": true } });
   });
 
-  it("shows one interface and category at a time without inventing missing settings or losing edits", async () => {
+  it("shows all reported settings for one interface without inventing missing settings or losing edits", async () => {
     const store = useControllerStore(), data = rpsDiagnostics(), snapshot = interfaceCapabilitySnapshot();
     for (const [offset, name] of ["eno2", "eno3"].entries()) {
       store.state.data!.desired.interfaces.push({ ...store.state.data!.desired.interfaces.at(-1)!, name });
@@ -447,20 +467,19 @@ describe("reviewed and staged RPS controls", () => {
     vi.mocked(api.getInterfaceCapabilities).mockResolvedValue(snapshot);
     const wrapper = render("offloads"); await flushPromises();
     expect(wrapper.find("table").exists()).toBe(false);
-    expect(wrapper.findAll(".setting-row")).toHaveLength(1);
+    expect(wrapper.findAll(".setting-row")).toHaveLength(2);
     expect(wrapper.text()).toContain("Receive checksums");
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("enabled");
+    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("disabled");
     await wrapper.get('[aria-label="Offload interface"]').setValue("eno2");
-    expect(wrapper.text()).toContain("No settings in this category were reported for eno2");
-    await wrapper.get('[aria-label="Offload category"]').setValue("Receiving");
+    expect(wrapper.findAll(".setting-row")).toHaveLength(1);
     expect(wrapper.get('[aria-label="Desired rx-gro for eno2"]').attributes("disabled")).toBeUndefined();
     expect(wrapper.find('[aria-label="Desired rx-checksum for eno1"]').exists()).toBe(false);
     await wrapper.get('[aria-label="Desired rx-gro for eno2"]').setValue("enabled");
     await wrapper.get('[aria-label="Offload interface"]').setValue("eno3");
-    expect(wrapper.text()).toContain("No settings in this category were reported for eno3");
+    expect(wrapper.text()).toContain("No configurable offloads were reported for eno3");
     expect(wrapper.findAll(".setting-row")).toHaveLength(0);
     await wrapper.get("form").trigger("submit"); await flushPromises();
-    expect(store.draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": true }, eno2: { "rx-gro": true } });
+    expect(store.draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": false }, eno2: { "rx-gro": true } });
     expect(api.refreshInterfaceCapabilities).not.toHaveBeenCalled();
   });
 
@@ -475,7 +494,7 @@ describe("reviewed and staged RPS controls", () => {
     await wrapper.get("form").trigger("submit"); await flushPromises();
     await wrapper.setProps({ mode: "offloads" }); await flushPromises();
     expect(wrapper.find(toggle).exists()).toBe(false);
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("enabled");
+    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("disabled");
     await wrapper.get("form").trigger("submit"); await flushPromises();
     await wrapper.setProps({ mode: "rps" }); await flushPromises();
     expect(wrapper.find('[aria-label="NIC offload configuration"]').exists()).toBe(false);
@@ -484,7 +503,7 @@ describe("reviewed and staged RPS controls", () => {
     await wrapper.get("form").trigger("submit"); await flushPromises();
     expect(store.draft?.kernel).toMatchObject({
       rps: { "eno1/rx-0": "7", "eno1/rx-1": "1" },
-      rfs: kernel.rfs, offloads: { eno1: { "rx-checksum": true } },
+      rfs: kernel.rfs, offloads: { eno1: { "rx-checksum": false } },
     });
     expect(store.state.data!.desired.kernel).toEqual(kernel);
     expect(api.submitPackage).not.toHaveBeenCalled();
@@ -492,26 +511,34 @@ describe("reviewed and staged RPS controls", () => {
     wrapper.unmount();
   });
 
-  it("separates cached status from configuration and retains unsubmitted settings across views", async () => {
+  it("shows reported state in the dropdown and preserves edits when status is refreshed", async () => {
     const store = useControllerStore();
     store.state.data!.desired.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
     const wrapper = render("offloads"); await flushPromises();
-    expect(wrapper.find("time").exists()).toBe(false);
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("disabled");
-    const open = async (label: string) => wrapper.findAll("button").find(button => button.text() === label)!.trigger("click");
-    await open("Status");
-    const status = wrapper.get('[aria-label="NIC offload status"]');
-    expect(status.text()).toContain("Enabled");
-    expect(status.find('[aria-label="Desired rx-checksum for eno1"]').exists()).toBe(false);
-    expect(wrapper.findAll("button").some(button => button.text() === "STAGE CHANGES")).toBe(false);
-    expect(wrapper.text()).toContain("Cached status, not live readback");
+    expect(wrapper.find('[aria-label="Offload category"]').exists()).toBe(false);
+    expect(wrapper.findAll("button").some(button => ["Status", "Configuration"].includes(button.text()))).toBe(false);
+    const select = wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]');
+    expect(select.element.value).toBe("enabled");
+    expect(select.findAll("option").slice(1).map(option => option.text())).toEqual(["Enabled", "Disabled"]);
+    expect(wrapper.find(".offload-status").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Cached:");
+    expect(wrapper.text()).not.toContain("Original");
+    expect(store.editorDirty).toBe(false);
+    await select.setValue("disabled");
+    expect(wrapper.findAll("button").some(button => button.text() === "STAGE CHANGES")).toBe(true);
+    expect(wrapper.text()).toContain("Status collected (Asia/Kolkata)");
     expect(wrapper.get("time").text()).toBe("2026-11-04 10:40:00");
     expect(wrapper.get("time").attributes("datetime")).toBe("2026-11-04T05:10:00.123456Z");
     store.draft = cloneConfig(store.state.data!.desired);
     store.draft.system!.timezone = "Pacific/Auckland";
     await flushPromises();
     expect(wrapper.get("time").text()).toBe("2026-11-04 10:40:00");
-    await open("Configuration");
+    expect(wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]').element.value).toBe("disabled");
+    const refreshed = interfaceCapabilitySnapshot();
+    refreshed.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "ethtool:rx-checksum")!.enabled = false;
+    vi.mocked(api.refreshInterfaceCapabilities).mockResolvedValue(refreshed);
+    await wrapper.findAll("button").find(button => button.text() === "Refresh capabilities")!.trigger("click");
+    await flushPromises();
     expect(wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]').element.value).toBe("disabled");
     expect(store.editorDirty).toBe(true);
     expect(api.submitPackage).not.toHaveBeenCalled();
@@ -519,23 +546,63 @@ describe("reviewed and staged RPS controls", () => {
     wrapper.unmount();
   });
 
-  it("groups every allowlisted feature into compact settings rows with technical names on hover", async () => {
+  it("shows every allowlisted feature with state in the dropdown, detailed descriptions and technical names on hover", async () => {
     const snapshot = interfaceCapabilitySnapshot();
     snapshot.inventory.interfaces[0]!.capabilities = nicOffloadFeatures.map(feature => ({
       name: `ethtool:${feature}`, support: "supported", enabled: false, evidence: [], reason: null,
     }));
     vi.mocked(api.getInterfaceCapabilities).mockResolvedValue(snapshot);
     const wrapper = render("offloads"); await flushPromises();
-    const names: string[] = [];
-    for (const [category, count] of [["Checksums", 4], ["Sending", 8], ["Receiving", 4], ["VLAN tags", 4]] as const) {
-      await wrapper.get('[aria-label="Offload category"]').setValue(category);
-      expect(wrapper.findAll(".setting-row")).toHaveLength(count);
-      names.push(...wrapper.findAll("label.setting-name").map(label => label.attributes("title")!));
+    expect(wrapper.findAll(".setting-row")).toHaveLength(nicOffloadFeatures.length);
+    expect(wrapper.findAll(".offload-status")).toHaveLength(0);
+    for (const row of wrapper.findAll(".setting-row")) {
+      expect(row.get<HTMLSelectElement>("select").element.value).toBe("disabled");
+      expect(row.get(".setting-desc").text().split(/\.\s+/).length).toBeGreaterThan(1);
     }
+    expect(wrapper.find('[aria-label="Offload category"]').exists()).toBe(false);
+    const names = wrapper.findAll("label.setting-name").map(label => label.attributes("title")!);
     expect(names.sort()).toEqual([...nicOffloadFeatures].sort());
     expect(wrapper.find("table").exists()).toBe(false);
     expect(useControllerStore().editorDirty).toBe(false);
     wrapper.unmount();
+  });
+
+  it("does not manage displayed states automatically and cancels an unsubmitted edit when its reported value is reselected", async () => {
+    const store = useControllerStore(), wrapper = render("offloads");
+    await flushPromises();
+    const select = wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]');
+    expect(select.element.value).toBe("enabled");
+    expect(store.editorDirty).toBe(false);
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(api.getRpsDiagnostics).toHaveBeenCalledTimes(1);
+    expect(store.draft).toBeNull();
+    await select.setValue("disabled");
+    expect(store.editorDirty).toBe(true);
+    await select.setValue("enabled");
+    expect(store.editorDirty).toBe(false);
+    await select.setValue("disabled");
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(store.draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": false } });
+    expect(store.state.data!.desired.kernel?.offloads).toBeUndefined();
+    expect(api.submitPackage).not.toHaveBeenCalled();
+  });
+
+  it.each(["supported", "unsupported", "unknown"] as const)("does not invent an enabled state when %s evidence has no reported value", async support => {
+    const snapshot = interfaceCapabilitySnapshot();
+    const feature = snapshot.inventory.interfaces[0]!.capabilities.find(item => item.name === "ethtool:rx-checksum")!;
+    feature.support = support; feature.enabled = null;
+    vi.mocked(api.getInterfaceCapabilities).mockResolvedValue(snapshot);
+    const wrapper = render("offloads"); await flushPromises();
+    const select = wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]');
+    expect(select.element.value).toBe("");
+    expect(select.attributes("placeholder")).toBe(support === "unsupported" ? "Unsupported" : "Unknown");
+    expect(select.element.disabled).toBe(support !== "supported");
+    expect(useControllerStore().editorDirty).toBe(false);
+    if (support === "supported") {
+      await select.setValue("enabled");
+      await wrapper.get("form").trigger("submit"); await flushPromises();
+      expect(useControllerStore().draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": true } });
+    }
   });
 
   it.each(["success", "failure"] as const)("keeps initial pending-to-%s capability reads neutral", async outcome => {
@@ -588,12 +655,12 @@ describe("reviewed and staged RPS controls", () => {
     expect(wrapper.text()).not.toContain("CPU read failed");
     expect(wrapper.text()).not.toContain("Global RFS read failed");
     expect(wrapper.get('[aria-label="Desired rx-checksum for eno1"]').attributes("disabled")).toBeUndefined();
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("enabled");
+    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("disabled");
     await wrapper.get("form").trigger("submit"); await flushPromises();
-    expect(useControllerStore().draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": true } });
+    expect(useControllerStore().draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": false } });
   });
 
-  it.each(["stale", "identity", "unsupported", "fixed"] as const)("blocks offload changes using known %s evidence, but permits explicit release", async condition => {
+  it.each(["stale", "identity", "unsupported", "fixed"] as const)("blocks offload changes using known %s evidence without hiding descriptions", async condition => {
     const store = useControllerStore(), data = rpsDiagnostics();
     store.state.data!.desired.kernel!.offloads = { eno1: { "rx-checksum": true } };
     data.configured_offloads = store.state.data!.desired.kernel!.offloads;
@@ -610,19 +677,19 @@ describe("reviewed and staged RPS controls", () => {
       await wrapper.findAll("button").find(button => button.text() === "Refresh capabilities")!.trigger("click");
       await flushPromises();
     }
-    const select = wrapper.get('[aria-label="Desired rx-checksum for eno1"]');
-    expect(select.attributes("disabled")).toBeUndefined();
+    const select = wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]');
+    expect(select.attributes("disabled")).toBeDefined();
     expect(select.get('option[value="enabled"]').attributes("disabled")).toBeDefined();
     expect(select.get('option[value="disabled"]').attributes("disabled")).toBeDefined();
-    expect(select.get('option[value="unmanaged"]').attributes("disabled")).toBeUndefined();
+    expect(select.find('option[value="unmanaged"]').exists()).toBe(false);
+    expect(wrapper.get(".setting-desc").text()).toContain("This detects packet corruption");
     if (condition === "fixed") {
-      await wrapper.findAll("button").find(button => button.text() === "Status")!.trigger("click");
-      expect(wrapper.text()).toContain("Fixed enabled");
-      await wrapper.findAll("button").find(button => button.text() === "Configuration")!.trigger("click");
+      expect(select.element.value).toBe("enabled");
+      expect(wrapper.get(".setting-desc").text()).toContain("fixed feature");
     }
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("unmanaged");
     await wrapper.get("form").trigger("submit"); await flushPromises();
-    expect(store.draft?.kernel?.offloads).toBeUndefined();
+    expect(store.draft).toBeNull();
+    expect(store.state.data!.desired.kernel!.offloads).toEqual({ eno1: { "rx-checksum": true } });
   });
 
   it("keeps RPS usable on an older backend without inventing support for RFS or offloads", async () => {
@@ -657,10 +724,10 @@ describe("reviewed and staged RPS controls", () => {
     else changed.configured_offloads = { eno1: { "rx-checksum": false } };
     vi.mocked(api.getRpsDiagnostics).mockResolvedValueOnce(rpsDiagnostics()).mockResolvedValue(changed);
     const wrapper = render("offloads"); await flushPromises();
-    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("enabled");
+    await wrapper.get('[aria-label="Desired rx-checksum for eno1"]').setValue("disabled");
     await wrapper.get("form").trigger("submit"); await flushPromises();
     expect(wrapper.text()).toContain("differ from committed state");
-    expect(wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]').element.value).toBe("enabled");
+    expect(wrapper.get<HTMLSelectElement>('[aria-label="Desired rx-checksum for eno1"]').element.value).toBe("disabled");
     expect(useControllerStore().draft).toBeNull();
     expect(api.submitPackage).not.toHaveBeenCalled();
   });

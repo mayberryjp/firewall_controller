@@ -15,6 +15,7 @@ import type { StateView, Statistics } from "@/types/domain";
 
 const store = useControllerStore();
 const id = `traffic-flow-${useId()}`;
+const diagramScale = 1.4;
 const paused = ref(false), hidden = ref(document.visibilityState === "hidden");
 const viewport = ref<HTMLElement | null>(null), viewportWidth = ref(0);
 const frame = ref<TrafficFrame | null>(null);
@@ -95,12 +96,12 @@ let observer: ResizeObserver | null = null;
 watch([() => ports.value.map(port => `${port.role}/${port.name}`).join(","), viewportWidth], async () => {
   await nextTick();
   const element = viewport.value;
-  if (element) element.scrollLeft = Math.max(0, (boardWidth.value - element.clientWidth) / 2);
+  if (element) element.scrollLeft = Math.max(0, (boardWidth.value * diagramScale - element.clientWidth) / 2);
 });
 onMounted(() => {
   if (viewport.value) {
-    viewportWidth.value = viewport.value.clientWidth;
-    observer = new ResizeObserver(entries => { viewportWidth.value = entries[0]?.contentRect.width ?? 0; });
+    viewportWidth.value = viewport.value.clientWidth / diagramScale;
+    observer = new ResizeObserver(entries => { viewportWidth.value = (entries[0]?.contentRect.width ?? 0) / diagramScale; });
     observer.observe(viewport.value);
   }
   document.addEventListener("visibilitychange", visibilityChanged);
@@ -148,7 +149,7 @@ onUnmounted(() => {
     >
       <div
         class="flow-board"
-        :style="{ width: `${boardWidth}px` }"
+        :style="{ width: `${boardWidth}px`, zoom: diagramScale }"
       >
         <template
           v-for="zone in zones"

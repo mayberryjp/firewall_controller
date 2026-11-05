@@ -24,6 +24,35 @@ async function select(page: Page, label: string, value: string) {
   await page.locator(".v-select").filter({ has: page.getByRole("combobox", { name: label, exact: true }) }).click();
   await page.getByRole("option", { name: value, exact: true }).click();
 }
+test("BGP overview distributes peer details across the full card width", async ({ page, isMobile }, testInfo) => {
+  await mockBackend(page, { initialConfig: bgpConfig() });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page.goto("/diagnostics/system-overview");
+  const widget = page.getByRole("region", { name: "BGP peers", exact: true });
+  await expect(widget).toContainText("Established");
+  const sizes = isMobile ? [page.viewportSize()!] : [{ width: 1280, height: 900 }, { width: 1920, height: 1080 }];
+  for (const size of sizes) {
+    await page.setViewportSize(size);
+    const table = widget.getByRole("table");
+    const headers = table.getByRole("columnheader");
+    const cells = table.locator("tbody tr").first().getByRole("cell");
+    for (const [index, alignment] of [/^(left|start)$/, "center", "right"].entries()) {
+      await expect(headers.nth(index)).toHaveCSS("text-align", alignment);
+      await expect(cells.nth(index)).toHaveCSS("text-align", alignment);
+    }
+    const widths = await headers.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().width));
+    expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(1);
+    const bounds = (await table.boundingBox())!, card = (await widget.boundingBox())!;
+    expect(Math.abs(bounds.width - (card.width - 2))).toBeLessThanOrEqual(1);
+    expect(await widget.locator(".v-table__wrapper").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await widget.screenshot({ path: testInfo.outputPath("bgp-overview-full-width.png"), animations: "disabled" });
+});
+
 test("BGP peers and DNAT stage inline, preserve the complete package, and survive confirmation", async ({ page }, testInfo) => {
   const initialConfig = bgpConfig(), backend = await mockBackend(page, { initialConfig });
   const dialogs: string[] = [];

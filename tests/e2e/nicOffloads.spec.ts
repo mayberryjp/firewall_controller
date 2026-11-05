@@ -5,7 +5,7 @@ import { interfaceCapabilitySnapshot, rpsDiagnostics } from "../diagnosticsFixtu
 import { nicOffloadFeatures } from "../../src/services/tuning";
 import { encodeJson } from "../../src/services/json";
 
-test("offloads use compact General-settings rows with separate configuration and cached status", async ({ page }, testInfo) => {
+test("offloads show reported Enabled or Disabled in each dropdown without Original or status badges", async ({ page }, testInfo) => {
   const initial = config();
   initial.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
   initial.interfaces.push(...["eno1", "eno2"].map(name => ({
@@ -17,7 +17,10 @@ test("offloads use compact General-settings rows with separate configuration and
   first.capabilities = nicOffloadFeatures.map(feature => ({
     name: `ethtool:${feature}`, support: "supported", enabled: feature !== "rx-lro", evidence: ["Cached driver evidence"], reason: null,
   }));
-  snapshot.inventory.interfaces.push({ ...first, name: "eno2", index: 3 });
+  snapshot.inventory.interfaces.push({
+    ...first, name: "eno2", index: 3,
+    capabilities: first.capabilities.map(feature => feature.name === "ethtool:rx-checksum" ? { ...feature, enabled: false } : feature),
+  });
   performance.interfaces!.push({ ...performance.interfaces![0]!, name: "eno2", index: 3 });
   await page.route("**/proxy/interface-capabilities", route => route.fulfill({ contentType: "application/json", body: encodeJson(snapshot) }));
   await page.route("**/proxy/statistics/performance", route => route.fulfill({ contentType: "application/json", body: encodeJson(performance) }));
@@ -33,31 +36,33 @@ test("offloads use compact General-settings rows with separate configuration and
     await page.getByRole("option", { name: value, exact: true }).click();
     await expect(page.locator(".v-select__content:visible")).toHaveCount(0);
   };
-  await expect(view.locator(".setting-row")).toHaveCount(4);
+  await expect(view.locator(".setting-row")).toHaveCount(nicOffloadFeatures.length);
   await expect(view.locator("table")).toHaveCount(0);
   await expect(view.locator(".v-chip")).toHaveCount(0);
-  await choose("Desired rx-checksum for eno1", "Off");
+  await expect(view.getByRole("combobox", { name: "Category", exact: true })).toHaveCount(0);
+  await expect(view.getByRole("button", { name: "Status", exact: true })).toHaveCount(0);
+  await expect(view.getByRole("button", { name: "Configuration", exact: true })).toHaveCount(0);
+  await expect(view.getByRole("button", { name: "STAGE CHANGES", exact: true })).toBeDisabled();
+  await expect(view).not.toContainText("Original");
+  await expect(view).not.toContainText("Cached:");
+  await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Enabled");
+  await choose("Desired rx-checksum for eno1", "Disabled");
   await choose("Interface", "eno2");
-  await choose("Desired rx-checksum for eno2", "On");
+  await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno2", exact: true })).toHaveValue("Disabled");
+  await choose("Desired rx-checksum for eno2", "Enabled");
   await choose("Interface", "eno1");
-  await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Off");
-  for (const [category, count] of [["Sending", 8], ["Receiving", 4], ["VLAN tags", 4], ["Checksums", 4]] as const) {
-    await choose("Category", category);
-    await expect(view.locator(".setting-row")).toHaveCount(count);
-    expect(await view.locator(".offload-settings").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Disabled");
+  for (const feature of nicOffloadFeatures) {
+    const control = view.getByRole("combobox", { name: `Desired ${feature} for eno1`, exact: true });
+    await expect(control).toBeVisible();
+    await expect(control).toHaveValue(feature === "rx-lro" || feature === "rx-checksum" ? "Disabled" : "Enabled");
   }
-  await view.getByRole("button", { name: "Status", exact: true }).click();
-  const status = view.getByRole("region", { name: "NIC offload status", exact: true });
-  await expect(status.locator(".v-chip")).toHaveCount(4);
-  await expect(status.locator(".v-chip").first()).toHaveText("Enabled");
-  await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveCount(0);
-  await expect(view.getByRole("button", { name: "STAGE CHANGES", exact: true })).toHaveCount(0);
+  expect(await view.locator(".offload-settings").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(view.getByRole("button", { name: "STAGE CHANGES", exact: true })).toBeVisible();
   await expect(view.locator("time")).toHaveText("2026-11-04 10:40:00");
   await expect(view.locator("time")).toHaveAttribute("datetime", "2026-11-04T05:10:00.123456Z");
-  await page.screenshot({ path: testInfo.outputPath("nic-offload-status.png"), fullPage: true, animations: "disabled" });
-  await view.getByRole("button", { name: "Configuration", exact: true }).click();
-  await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Off");
+  await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Disabled");
   await view.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
   await expect(view).toContainText("Performance changes staged");
   expect(backend.writes).toEqual([]);

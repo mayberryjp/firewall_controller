@@ -19,7 +19,10 @@ onUnmounted(() => { store.bgpMonitoring = false; });
     :note="store.bgpStatus.error || store.bgpStatus.data?.error ? 'Unavailable' : store.bgpStatus.data && !store.bgpStatusCurrent ? 'Stale' : undefined"
     :detail="store.bgpStatus.error ?? store.bgpStatus.data?.error ?? undefined"
   >
-    <v-table density="compact">
+    <v-table
+      class="bgp-peer-table"
+      density="compact"
+    >
       <thead><tr><th>Peer</th><th>Address</th><th>Status</th></tr></thead>
       <tbody>
         <tr
@@ -47,3 +50,13 @@ onUnmounted(() => { store.bgpMonitoring = false; });
     </v-table>
   </OverviewWidget>
 </template>
+
+<style scoped>
+.bgp-peer-table :deep(table) { width: 100%; }
+.bgp-peer-table :deep(th),
+.bgp-peer-table :deep(td:not([colspan])) { width: calc(100% / 3); }
+.bgp-peer-table :deep(th:nth-child(2)),
+.bgp-peer-table :deep(td:nth-child(2)) { text-align: center; }
+.bgp-peer-table :deep(th:last-child),
+.bgp-peer-table :deep(td:last-child:not([colspan])) { text-align: right; }
+</style>

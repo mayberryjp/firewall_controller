@@ -3,6 +3,39 @@ import { mockBackend } from "./mockBackend";
 import { trafficFlowCapabilities, trafficFlowConfig, trafficFlowStatistics } from "../trafficFlowFixtures";
 import { gatewayStatistics, healthSnapshot, monitor, runtime } from "../fixtures";
 
+test("Overview enlarges only the diagram to 140% at normal browser zoom", async ({ page, isMobile }) => {
+  const initialConfig = trafficFlowConfig();
+  initialConfig.interfaces = initialConfig.interfaces.filter(link => ["wan0", "lab0"].includes(link.name));
+  await mockBackend(page, { initialConfig, statistics: trafficFlowStatistics() });
+  await page.route("**/proxy/interface-capabilities", route => route.fulfill({
+    contentType: "application/json", body: JSON.stringify(trafficFlowCapabilities()),
+  }));
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  const map = page.getByRole("region", { name: "Overview", exact: true });
+  await expect(map.locator(".flow-node")).toHaveCount(2);
+  await expect(map.locator(".flow-board")).toHaveCSS("zoom", "1.4");
+  await expect(page.locator(".app-header")).toHaveCSS("zoom", "1");
+  await expect(page.locator("html")).toHaveCSS("zoom", "1");
+  for (const card of await map.locator(".flow-node").all()) {
+    await expect.poll(async () => (await card.boundingBox())!.width).toBeCloseTo(441, 0);
+  }
+  const viewport = map.locator(".flow-viewport");
+  const board = map.locator(".flow-board");
+  const appliance = map.locator(".appliance");
+  if (!isMobile) {
+    await expect.poll(async () => (await appliance.boundingBox())!.width).toBeCloseTo(560, 0);
+    await expect.poll(async () => Math.abs((await board.boundingBox())!.width - (await viewport.boundingBox())!.width)).toBeLessThanOrEqual(1);
+  }
+  const chassis = (await appliance.boundingBox())!, window = (await viewport.boundingBox())!;
+  expect(chassis.x).toBeGreaterThanOrEqual(window.x);
+  expect(chassis.x + chassis.width).toBeLessThanOrEqual(window.x + window.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+});
+
 test("System Overview keeps rounded dashboard cards and readable tables on wide screens", async ({ page, isMobile }, testInfo) => {
   test.skip(isMobile, "This regression exercises available desktop space.");
   const initialConfig = trafficFlowConfig(), publicKey = "A".repeat(43) + "=";
@@ -126,6 +159,7 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
   await expect(map.locator(".appliance-halo")).toHaveCount(0);
   if (!isMobile) {
     const originalViewport = page.viewportSize()!;
+    let compactLinkHeight = 0;
     for (const size of [{ width: 960, height: 720 }, { width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
       await page.setViewportSize(size);
       await expect.poll(async () => {
@@ -141,12 +175,13 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
       expect(panelBounds.x + panelBounds.width).toBeLessThanOrEqual(applianceBounds.x + applianceBounds.width + 1);
       for (const card of await map.locator(".flow-node").all()) {
         const cardBounds = (await card.boundingBox())!;
-        expect(cardBounds.width).toBeLessThanOrEqual(315);
+        expect(cardBounds.width).toBeLessThanOrEqual(315 * 1.4);
         expect(panelBounds.x >= cardBounds.x + cardBounds.width || panelBounds.x + panelBounds.width <= cardBounds.x ||
           panelBounds.y >= cardBounds.y + cardBounds.height || panelBounds.y + panelBounds.height <= cardBounds.y).toBe(true);
       }
+      if (size.height === 720) compactLinkHeight = (await map.locator(".flow-links").first().boundingBox())!.height;
       if (size.height === 1080) {
-        expect((await map.locator(".flow-links").first().boundingBox())!.height).toBeGreaterThan(150);
+        expect((await map.locator(".flow-links").first().boundingBox())!.height).toBeGreaterThan(compactLinkHeight);
         await page.screenshot({ path: testInfo.outputPath("traffic-flow-tall.png"), fullPage: true, animations: "disabled" });
       }
     }
@@ -159,7 +194,7 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
   expect(readings.y + readings.height).toBeLessThanOrEqual(outboundLinks.y);
   const wan = await map.getByRole("article", { name: "wan0 interface counters", exact: true }).boundingBox();
   const appliance = await map.locator(".appliance").boundingBox();
-  expect(Math.abs(wan!.width - 252 * 1.25)).toBeLessThanOrEqual(1);
+  expect(Math.abs(wan!.width - 315 * 1.4)).toBeLessThanOrEqual(1);
   const lan = await map.getByRole("article", { name: "lab0 interface counters", exact: true }).boundingBox();
   expect(wan!.y + wan!.height).toBeLessThan(appliance!.y);
   expect(lan!.y).toBeGreaterThan(appliance!.y + appliance!.height);

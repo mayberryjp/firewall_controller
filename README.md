@@ -494,7 +494,7 @@ or appliance acceptance.
 | `/diagnostics/interface-capabilities` | Saved per-interface performance capabilities shown as color-coded chips: green Enabled, amber Disabled, blue Supported (activation unknown), red Unsupported, and neutral Unknown or N/A. Hover a chip for its separate support and enabled states. No Details controls or collection-error lists. **Refresh capabilities** explicitly scans hardware and saves observations; opening the page only reads the saved snapshot. No automatic scans, tuning, retries or configuration edits. Unknown and simulated results are not treated as measured support; partial results replace older evidence and failed requests retain the previous snapshot marked stale with an inline request error. Collection time uses the saved system timezone. |
 | `/diagnostics/api` | GET API explorer; most endpoints are read-only, but interface-capability refresh explicitly scans hardware and saves. Focus the response box and use Ctrl+A (Cmd+A on macOS) to select only its body, or use its copy icon to copy the displayed response with full numeric precision. Clipboard access requires browser support and HTTPS or localhost; errors appear inline. |
 | `/diagnostics/rps` | RPS Configuration: CPU steering for managed Ethernet and kernel WireGuard RX queues, staged through the shared SAVE flow. No NIC inventory snapshot is required. |
-| `/diagnostics/nic-offloads` | NIC Offloads: one interface at a time in the General settings layout, with separate Configuration and cached Status views. Choose Checksums, Sending, Receiving or VLAN tags; settings use plain-English labels with Linux names on hover. |
+| `/diagnostics/nic-offloads` | NIC Offloads: all settings for one interface in the General settings layout, with Enabled/Disabled dropdowns initialized from reported state. Settings have detailed descriptions and Linux names on hover. |
 | `/diagnostics/path-tests` | Path MTU/MSS: explicitly approved two-firewall packet-size and TCP MSS tests, temporary MTU/permission changes, live progress, directional measurements, cancellation and restoration. Requires a native backend with the path-test API; unsupported older backends stay disabled. |
 | `/config/changes` | Staged changes, unified diff, Commit & push |
 | `/config/commits`, `/config/commits/:id` | Commits: independent recovery discovery and explicit lifecycle actions |
@@ -518,7 +518,8 @@ configuration revision IDs.
 
 Diagnostics > **RPS Configuration** provides controls for observed,
 managed physical Ethernet and kernel WireGuard RX queues. Receive Packet Steering
-(RPS) distributes incoming packet processing across selected CPUs. WireGuard targets come
+(RPS) distributes incoming packet processing across selected CPUs. Online logical
+CPU IDs appear as read-only processor-icon chips. WireGuard targets come
 from live performance evidence, not physical NIC inventory or IRQ recommendations.
 RPS steers post-decryption RX processing, not WireGuard crypto workers. Deploy a
 backend with WireGuard RPS support before using the extended targets; older
@@ -562,23 +563,27 @@ local socket consumers, not general forwarding, and global
 table changes affect other applications.
 
 Diagnostics > **NIC Offloads** uses exact allowlisted Linux feature names on managed
-physical Ethernet interfaces (at most 32). Select one interface and category:
-**Checksums** handles packet-integrity calculations, **Sending** handles segmentation
-and memory-buffer support, **Receiving** handles packet aggregation, and **VLAN tags**
-handles hardware tag parsing/insertion. Only the selected category is displayed,
-using the same labeled rows and short descriptions as General settings.
-**Configuration** uses **Original / On / Off** (LRO omits On); **Status** is read-only
-cached evidence with its collection time in the saved timezone, not live readback.
-Linux feature names remain available on label hover. Switching interfaces,
-categories or views preserves unsubmitted edits and never stages automatically.
-Missing category evidence is explicit, never invented support. Cached chips and hover evidence are
-separate from desired settings and fresh performance observations. Refresh
+physical Ethernet interfaces (at most 32). Select one interface to see all its
+reported settings together, using the same labeled rows as General settings and detailed descriptions
+of each feature's purpose, benefits and limitations, without categories or a separate Status view.
+Each dropdown shows **Enabled** or **Disabled**, using existing desired settings
+where configured and otherwise the reported hardware state. Unknown states stay
+explicit rather than defaulting to Disabled. Viewing reported values does not
+add them to configuration; only edited settings are staged. Returning an
+unconfigured setting to its reported value before staging cancels that edit.
+The collection time is shown below the settings in the saved timezone; the
+reported state is a saved snapshot, not live readback. Linux feature names and
+driver evidence remain available on hover. Switching
+interfaces preserves unsubmitted edits and never stages automatically.
+Missing interface evidence is explicit, never invented support. Refresh
 capabilities to rescan; unsupported/unknown or stale evidence cannot enable a
 feature. The backend freshly verifies support, fixed bits, identity, requested
 bits and coherent dependencies during push. Dependent features are never edited
-automatically. **LRO can only be disabled.** Off owns an explicit false setting;
-**Original** restores captured active/requested bits and releases the feature.
-Releasing every feature restores the NIC's captured state. Offloads can alter
+automatically. **LRO can only be disabled.** Its Enabled option is disabled but can
+display an already enabled state. **Disabled** owns an explicit false setting.
+To release an existing override and restore backend-captured settings, remove
+that feature's `kernel.offloads` entry in the configuration editor and review in SAVE.
+Offloads can alter
 packet capture/accounting granularity. Backend errors retain the ordinary review/
 recovery flow; a response that drops or changes requested tuning is not confirmed.
 Offload controls require the updated diagnostic fields; older backends
@@ -591,6 +596,12 @@ not implemented by the backend. Capability
 support alone does not demonstrate a bottleneck or a performance improvement.
 
 ### Paired path MTU/MSS diagnostics
+
+The controller follows the [November 5 frontend handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-05.md).
+The API contract and native status serialization were checked against backend
+commit [`a5e82f8`](https://github.com/mayberryjp/firewall_backend/commit/a5e82f81f928889b3d60a63789e9da8b0c7e19ba),
+which includes the nftables cleanup metadata fix. Deploy a matching native backend;
+pushed source and local mock tests do not establish deployment or live-appliance acceptance.
 
 Open Diagnostics > **Path MTU/MSS** on both firewalls. Select an actual live
 interface and an address currently assigned to it, enter the peer's IP and an
@@ -705,7 +716,9 @@ borders, live charts, drill-down links and errors, along with the shared saved
 two-column layout and existing move/hide/restore/save controls. The columns use
 the available page width and stack on smaller screens.
 The Overview canvas is dedicated to the firewall graphic and rainbow traffic
-streams, filling the available browser height. With larger interface groups, pan
+streams, filling the available browser height. The diagram alone uses 140% sizing
+at normal browser zoom for more readable cards, appliance details and host metrics;
+the surrounding application keeps its normal sizing. With larger interface groups, pan
 or scroll inside the diagram. Interface counter cards remain compact and shrink
 to fit each interface row.
 

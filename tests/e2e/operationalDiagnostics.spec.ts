@@ -207,7 +207,10 @@ test("dedicated RPS and offload pages preserve saved RFS through SAVE and confir
   const observations = wireguardRpsDiagnostics(); observations.configured_rps = { ...initial.kernel!.rps }; observations.tuning_available = false;
   observations.configured_rfs = initial.kernel!.rfs;
   let performanceReads = 0;
-  await page.route("**/proxy/interface-capabilities", route => route.fulfill({ contentType: "application/json", body: encodeJson(interfaceCapabilitySnapshot()) }));
+  const offloadSnapshot = interfaceCapabilitySnapshot();
+  offloadSnapshot.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "ethtool:rx-checksum")!.enabled = false;
+  offloadSnapshot.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "ethtool:rx-lro")!.enabled = true;
+  await page.route("**/proxy/interface-capabilities", route => route.fulfill({ contentType: "application/json", body: encodeJson(offloadSnapshot) }));
   await page.route("**/proxy/statistics/performance", route => {
     performanceReads++;
     expect(route.request().method()).toBe("GET");
@@ -226,6 +229,20 @@ test("dedicated RPS and offload pages preserve saved RFS through SAVE and confir
   const controls = page.getByRole("region", { name: "RPS Configuration", exact: true });
   await expect(controls.locator("time")).toHaveCount(0);
   await expect(controls.getByText("Receive Packet Steering (RPS) distributes incoming packet processing across selected CPUs.", { exact: true })).toHaveClass(/text-medium-emphasis/);
+  const cpuChips = controls.getByRole("list", { name: "Online CPUs", exact: true });
+  await expect(cpuChips.getByRole("listitem")).toHaveText(["CPU 0", "CPU 1", "CPU 2", "CPU 3"]);
+  await expect(cpuChips.locator(".mdi-chip")).toHaveCount(4);
+  expect(await cpuChips.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  if (testInfo.project.name.includes("mobile")) {
+    const viewport = page.viewportSize()!;
+    await page.setViewportSize({ width: 320, height: viewport.height });
+    const first = await cpuChips.getByRole("listitem").first().boundingBox();
+    const last = await cpuChips.getByRole("listitem").last().boundingBox();
+    expect(last!.y).toBeGreaterThan(first!.y);
+    expect(await cpuChips.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.setViewportSize(viewport);
+  }
+  await page.screenshot({ path: testInfo.outputPath("rps-cpu-chips.png"), fullPage: true, animations: "disabled" });
   const enabled = controls.getByRole("checkbox", { name: "Enable RPS for eno1/rx-0", exact: true });
   await expect(enabled).toBeVisible();
   await expect(enabled).toBeDisabled();
@@ -295,16 +312,18 @@ test("dedicated RPS and offload pages preserve saved RFS through SAVE and confir
   const chooseOffload = async (label: string, value: string) => {
     await offloads.getByRole("combobox", { name: label, exact: true }).press("ArrowDown");
     await page.getByRole("option", { name: value, exact: true }).click();
+    await expect(page.locator(".v-select__content:visible")).toHaveCount(0);
   };
   await expect(offloads.getByRole("region", { name: "NIC offload configuration", exact: true })).toBeVisible();
-  await expect(offloads.locator(".setting-row")).toHaveCount(1);
+  await expect(offloads.locator(".setting-row")).toHaveCount(2);
   await expect(offloads.getByRole("combobox", { name: "Desired rx-checksum for wg0", exact: true })).toHaveCount(0);
   await expect(offloads.getByRole("checkbox", { name: "Manage RFS tables", exact: true })).toHaveCount(0);
-  await chooseOffload("Desired rx-checksum for eno1", "On");
-  await chooseOffload("Category", "Receiving");
+  await chooseOffload("Desired rx-checksum for eno1", "Enabled");
+  await expect(offloads.getByRole("combobox", { name: "Desired rx-lro for eno1", exact: true })).toHaveValue("Enabled");
   await offloads.getByRole("combobox", { name: "Desired rx-lro for eno1", exact: true }).press("ArrowDown");
-  await expect(page.getByRole("option", { name: "On", exact: true })).toHaveCount(0);
-  await page.getByRole("option", { name: "Off", exact: true }).click();
+  await expect(page.getByRole("option", { name: "Enabled", exact: true })).toHaveClass(/v-list-item--disabled/);
+  await expect(page.getByRole("option", { name: "Original", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: "Disabled", exact: true }).click();
   await offloads.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
   await expect(offloads).toContainText("Performance changes staged");
   await navigation.getByRole("tab", { name: "RPS Configuration", exact: true }).click();
@@ -312,7 +331,7 @@ test("dedicated RPS and offload pages preserve saved RFS through SAVE and confir
   await expect(controls).toContainText("Selected CPUs: 2, 3");
   await expect(wgCount).toHaveValue("1");
   await navigation.getByRole("tab", { name: "NIC Offloads", exact: true }).click();
-  await expect(offloads.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("On");
+  await expect(offloads.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Enabled");
   expect(backend.writes).toEqual([]);
   expect(dialogs).toEqual([]);
   await expect(page.locator(".v-select__content:visible")).toHaveCount(0);
