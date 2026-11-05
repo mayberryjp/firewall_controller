@@ -710,6 +710,7 @@ Its flat surfaces, text, borders, status indicators and appliance illustration u
 the app's shared theme colors; rainbow accents are reserved for traffic streams.
 The appliance's front label carries the lime Modan mark beside MODAN,
 with KNOW YOUR NETWORK beneath it.
+The generic enclosure omits Ethernet jacks so it does not imply a physical port count.
 The caption beside the pause control shows the configured hostname and domain.
 Full Interfaces, Gateways, WireGuard, BGP peers, System stats and Interface counters
 cards live in **Diagnostics > SYSTEM OVERVIEW**, which remains the default

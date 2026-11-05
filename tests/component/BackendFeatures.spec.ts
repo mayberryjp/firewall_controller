@@ -1082,8 +1082,7 @@ describe("October 17 frontend workflows", () => {
     await row.get('[aria-label="Edit / stage"]').trigger("click");
     editor = wrapper.getComponent(ResourceRowEditor);
     expect(editor.props("form")[invalid]).toBe(valid);
-    if (section === "routes") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("metadata");
-    else expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).toContain("metadata");
+    expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).not.toContain("metadata");
     if (section === "gateway_monitors") expect(editor.findAllComponents(FieldInput).map(field => field.props("field").key)).toContain("latency_threshold_ms");
     editor.vm.$emit("change", invalid, valid + 1); await flushPromises(); await flushPromises();
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);

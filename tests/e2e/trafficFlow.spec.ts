@@ -129,6 +129,7 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
   const map = page.getByRole("region", { name: "Overview", exact: true });
   await expect(map.getByRole("img", { name: "Illustration of a firewall hardware appliance", exact: true })).toBeVisible();
   await expect(map.locator(".appliance-logo")).toBeVisible();
+  await expect(map.locator('.appliance svg rect[width="22"][height="25"]')).toHaveCount(0);
   await expect(map.locator(".flow-stream.is-moving")).toHaveCount(8, { timeout: 12000 });
   await expect(map.getByRole("article", { name: "wan0 interface counters", exact: true })).toContainText("8 Mb/s");
   await expect(map.getByRole("article", { name: "wan0 interface counters", exact: true }).locator(".node-role")).toHaveText("WAN");

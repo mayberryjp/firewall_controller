@@ -413,36 +413,6 @@ onUnmounted(() => {
                 font-family="inherit"
                 letter-spacing="2"
               >KNOW YOUR NETWORK</text>
-              <g
-                v-for="socket in 8"
-                :key="socket"
-                :transform="`translate(${310 + socket * 29}, 99)`"
-              >
-                <rect
-                  width="22"
-                  height="25"
-                  rx="2"
-                  fill="var(--bg-primary)"
-                  stroke="var(--border-light)"
-                />
-                <path
-                  d="M 4 5 h 14 v 11 h -4 v 4 h -6 v -4 h -4 Z"
-                  fill="var(--bg-hover)"
-                />
-                <path
-                  d="M 7 6 v 5 m 3 -5 v 5 m 3 -5 v 5 m 3 -5 v 5"
-                  stroke="var(--text-muted)"
-                  stroke-width="1"
-                />
-                <rect
-                  x="2"
-                  y="28"
-                  width="4"
-                  height="2"
-                  rx="1"
-                  :fill="hasTraffic ? 'rgb(var(--v-theme-success))' : 'var(--text-muted)'"
-                />
-              </g>
               <circle
                 cx="52"
                 cy="110"

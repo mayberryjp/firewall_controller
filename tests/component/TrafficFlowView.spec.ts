@@ -107,6 +107,8 @@ describe("Traffic flow appliance view", () => {
     expect(wrapper.get(".appliance svg").text()).not.toContain("FIREWALL");
     expect(wrapper.get(".appliance svg").text()).toContain("KNOW YOUR NETWORK");
     expect(wrapper.get(".appliance svg").text()).not.toContain("TRAFFIC GATEWAY");
+    expect(wrapper.find('.appliance svg rect[width="22"][height="25"]').exists()).toBe(false);
+    expect(wrapper.find('.appliance svg path[d="M 4 5 h 14 v 11 h -4 v 4 h -6 v -4 h -4 Z"]').exists()).toBe(false);
     expect(wrapper.find('path[d="M 121 51 l 13 -7 l 13 7 v 12 l -13 7 l -13 -7 Z"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("1 TB");
     expect(wrapper.text()).toContain("1,000 pps");
