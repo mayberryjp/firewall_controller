@@ -23,16 +23,17 @@ test("gateway monitors reserve space for names and place Status beside Actions",
   expect(addBounds).not.toBeNull();
   expect(chartBounds!.y + chartBounds!.height).toBeLessThanOrEqual(addBounds!.y);
   await expect(table.locator("thead th")).toHaveText([
-    "Name", "Interface", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions",
+    "Name", "Interface", "Probe Target", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions",
   ]);
-  await expect(row.locator("td").nth(7).getByLabel("Monitoring enabled for primary-uplink-monitor", { exact: true })).toBeVisible();
-  await expect(row.locator("td").nth(8).getByRole("button", { name: "Edit / stage", exact: true })).toBeVisible();
+  await expect(row.locator("td").nth(2)).toContainText(initialConfig.gateway_monitors[0]!.target);
+  await expect(row.locator("td").nth(8).getByLabel("Monitoring enabled for primary-uplink-monitor", { exact: true })).toBeVisible();
+  await expect(row.locator("td").nth(9).getByRole("button", { name: "Edit / stage", exact: true })).toBeVisible();
   if (testInfo.project.name === "chromium") {
     const widths = await table.locator("thead th").evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
-    expect(widths[0]).toBeGreaterThan(widths[2]!);
     expect(widths[0]).toBeGreaterThan(widths[3]!);
-    expect(widths[2]).toBeCloseTo(96, 0);
-    expect(widths[3]).toBeCloseTo(80, 0);
+    expect(widths[0]).toBeGreaterThan(widths[4]!);
+    expect(widths[3]).toBeCloseTo(96, 0);
+    expect(widths[4]).toBeCloseTo(80, 0);
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
