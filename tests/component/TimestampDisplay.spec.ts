@@ -24,6 +24,45 @@ beforeEach(() => { setActivePinia(createPinia()); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe("human-facing timestamp displays", () => {
+  it("stops an existing countdown when the transaction becomes console-only", async () => {
+    vi.useFakeTimers();
+    useControllerStore();
+    const wrapper = mount(TransactionActions, { props: { transaction: transaction() }, global });
+    try {
+      expect(wrapper.find("time").exists()).toBe(true);
+      expect(vi.getTimerCount()).toBe(1);
+      await wrapper.setProps({ transaction: { ...transaction("applying_local"), confirmation_deadline: null } });
+      expect(wrapper.find("time").exists()).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(wrapper.text()).not.toContain("Confirm changes");
+    } finally { wrapper.unmount(); }
+  });
+  it.each(["applying_local", "pending_confirmation", "recovery_failed", "committed"])("never starts a confirmation countdown or offers lifecycle actions for console %s", status => {
+    useControllerStore();
+    const interval = vi.spyOn(globalThis, "setInterval");
+    const record = { ...transaction(status), confirmation_deadline: null };
+    const wrapper = mount(TransactionActions, { props: { transaction: record }, global });
+    try {
+      expect(wrapper.find("time").exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("remaining");
+      expect(wrapper.text()).not.toContain("Confirm changes");
+      expect(wrapper.text()).not.toContain("Roll back");
+      expect(wrapper.text()).not.toContain("Retry rollback");
+      expect(interval).not.toHaveBeenCalled();
+      expect(record.confirmation_deadline).toBeNull();
+    } finally { wrapper.unmount(); interval.mockRestore(); }
+  });
+  it("renders a console commit without a deadline or remote action in commit detail", async () => {
+    const record = { ...transaction("applying_local"), confirmation_deadline: null };
+    vi.spyOn(useControllerStore(), "readTransaction").mockResolvedValue(record);
+    const wrapper = mount(TransactionDetailView, { props: { id: record.id }, global: { stubs: { ...global.stubs, ConfigDiff: true } } });
+    try {
+      await flushPromises();
+      expect(wrapper.text()).toContain("applying_local");
+      expect(wrapper.findComponent(TransactionActions).exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("automatic rollback");
+    } finally { wrapper.unmount(); }
+  });
   it("reactively uses the saved system timezone in diagnostics, not unsaved drafts", async () => {
     const store = useControllerStore();
     store.state.data = state();

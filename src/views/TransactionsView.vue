@@ -70,7 +70,7 @@ onMounted(() => { void store.refreshTransactions(); });
           <td class="mono text-no-wrap">
             {{ item.base_revision }}
           </td>
-          <td>{{ item.status === "pending_confirmation" ? formatTimestamp(item.confirmation_deadline) : "—" }}</td>
+          <td>{{ item.status === "pending_confirmation" && item.confirmation_deadline !== null ? formatTimestamp(item.confirmation_deadline) : "—" }}</td>
         </tr><tr v-if="!filtered.length">
           <td colspan="6">
             No matching commit records.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { counterConfigurationMatches, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime } from "@/services/firewallTelemetry";
+import { counterConfigurationMatches, dhcpRelayCounterSummaries, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime } from "@/services/firewallTelemetry";
 import { cloneConfig } from "@/services/configuration";
 import { hostPolicyConfig, state, transaction } from "../fixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
@@ -95,6 +95,26 @@ describe("system firewall rules", () => {
 });
 
 describe("applied firewall identity", () => {
+  it.each(["enable", "disable", "servers", "address", "up"] as const)("invalidates counters for unapplied relay %s edits", edit => {
+    const current = state();
+    const link = current.desired.interfaces[0]!;
+    link.dhcp_relay = { enabled: edit !== "enable", servers: ["198.51.100.40"] };
+    const sample = firewallCounters(current.desired), draft = cloneConfig(current.desired);
+    const changed = draft.interfaces[0]!;
+    if (edit === "enable" || edit === "disable") changed.dhcp_relay.enabled = !changed.dhcp_relay.enabled;
+    if (edit === "servers") changed.dhcp_relay.servers = ["198.51.100.41"];
+    if (edit === "address") changed.addresses = ["192.0.2.11/24"];
+    if (edit === "up") changed.up = false;
+    expect(counterConfigurationMatches(sample, current, draft)).toBe(false);
+    expect(counterConfigurationMatches(sample, current, current.desired)).toBe(true);
+    expect(current.desired.firewall).toEqual(draft.firewall);
+  });
+  it("does not invalidate relay counters for unrelated interface metadata or disabled server-list edits", () => {
+    const current = state(), sample = firewallCounters(current.desired), draft = cloneConfig(current.desired);
+    draft.interfaces[0]!.metadata = { display_name: "New label", description: "" };
+    draft.interfaces[0]!.dhcp_relay.servers = ["198.51.100.40"];
+    expect(counterConfigurationMatches(sample, current, draft)).toBe(true);
+  });
   it("allows unrelated draft changes but never reattributes edited or reordered rules", () => {
     const current = { ...state(), desired: hostPolicyConfig() }, sample = firewallCounters(current.desired);
     const draft = cloneConfig(current.desired);
@@ -104,6 +124,39 @@ describe("applied firewall identity", () => {
     expect(counterConfigurationMatches(sample, current, draft)).toBe(false);
     expect(counterConfigurationMatches({ ...sample, config_revision: "2026.10.30.1" }, current, current.desired)).toBe(false);
     expect(counterConfigurationMatches(sample, { ...current, drift: true }, current.desired)).toBe(false);
+  });
+
+  describe("generated DHCP relay counters", () => {
+    it("accepts exact system counter totals and sorts interfaces alphabetically without changing identifiers", () => {
+      const settings = hostPolicyConfig();
+      settings.interfaces = ["vlan30", "eth2", "eth10"].map(name => ({
+        ...settings.interfaces[0]!, name, dhcp_relay: { enabled: true, servers: ["198.51.100.40", "198.51.100.41"] },
+      }));
+      const sample = firewallCounters(settings), before = JSON.stringify(sample);
+      const parsed = firewallCountersSchema.parse(sample);
+      const rows = dhcpRelayCounterSummaries(parsed);
+      expect(rows.map(row => [row.interfaceName, row.label])).toEqual(["eth10", "eth2", "vlan30"].flatMap(name => [
+        [name, "DHCP relay clients"], [name, "DHCP relay servers"],
+      ]));
+      expect(rows[0]).toMatchObject({
+        id: "input:generated/input/dhcp_relay/eth10/clients", packets: "9007199254740993",
+        bytes: "18446744073709551616", origin: "system", import_source: null,
+      });
+      expect(rows[1]!.packets).toBe("0");
+      expect(JSON.stringify(sample)).toBe(before);
+    });
+    it("does not invent permits for older backends, missing samples or unrelated counter identities", () => {
+      expect(dhcpRelayCounterSummaries(null)).toEqual([]);
+      const sample = firewallCounters();
+      expect(dhcpRelayCounterSummaries(sample)).toEqual([]);
+      const base = { ...sample.rules[0]!, chain: "input", config_path: null, origin: "system" as const };
+      sample.rules = [
+        { ...base, id: "input:generated/input/dhcp_relay/lab0/other" },
+        { ...base, id: "input:generated/input/dhcp_relay/lab0/clients", origin: "manual" },
+        { ...base, id: "input:generated/input/dhcp_relay/lab0/servers", config_path: "/firewall/input/interfaces/0/rules/0" },
+      ];
+      expect(dhcpRelayCounterSummaries(sample)).toEqual([]);
+    });
   });
   it("matches the pending applied candidate only with the same transaction identity", () => {
     const current = state(), pending = transaction();

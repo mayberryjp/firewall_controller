@@ -1,7 +1,7 @@
 import { computed, onUnmounted, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { getFirewallCounters } from "@/services/netcontrol";
-import { counterConfigurationMatches, firewallCounterSummaries, type FirewallCounters, type FirewallCounterSummary } from "@/services/firewallTelemetry";
+import { counterConfigurationMatches, dhcpRelayCounterSummaries, firewallCounterSummaries, type FirewallCounters, type FirewallCounterSummary } from "@/services/firewallTelemetry";
 import { useTimestamps } from "@/composables/useTimestamps";
 import type { Config } from "@/types/domain";
 import { isInitialLoad } from "@/services/datasets";
@@ -24,15 +24,17 @@ export function useFirewallCounters(selected: MaybeRefOrGetter<Config | undefine
     return `Rule matches since the last ruleset reset. Sampled (${timeZone.value}): ${formatTimestamp(data.value.sample.collected_at)}.`;
   });
   const byID = computed(() => new Map(available.value ? data.value?.rules.map(row => [row.id, row]) : []));
+  const relaySummaries = computed(() => dhcpRelayCounterSummaries(available.value ? data.value : null));
   function counts(path: string, chain: string) {
     const row = byID.value.get(`${chain}:${path}`);
     return { packets: row?.packets ?? "—", bytes: row?.bytes ?? "—" };
   }
   function summaries(chain: keyof typeof firewallCounterSummaries): FirewallCounterSummary[] {
-    return firewallCounterSummaries[chain].flatMap(item => {
+    const rows = firewallCounterSummaries[chain].flatMap(item => {
       const row = byID.value.get(item.id);
       return row ? [{ ...item, packets: row.packets, bytes: row.bytes, origin: row.origin ?? "system", import_source: row.import_source ?? null }] : [];
     });
+    return chain === "input" ? [...rows, ...relaySummaries.value] : rows;
   }
   function stop(): void {
     version++; clearTimeout(timer); controller?.abort(); controller = undefined;
@@ -68,5 +70,5 @@ export function useFirewallCounters(selected: MaybeRefOrGetter<Config | undefine
     disposed = true; stop();
     document.removeEventListener("visibilitychange", restart); window.removeEventListener("online", restart);
   });
-  return { data, notice, counts, summaries };
+  return { data, notice, counts, summaries, relaySummaries };
 }

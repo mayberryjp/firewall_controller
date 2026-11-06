@@ -4,13 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ApiExplorerView from "@/views/ApiExplorerView.vue";
 import { useControllerStore } from "@/stores/controller";
 import * as api from "@/services/api";
-import { config } from "../fixtures";
+import { config, state } from "../fixtures";
 
 const stubs = {
   VCombobox: { name: "VCombobox", props: ["modelValue", "items", "disabled"], emits: ["update:modelValue"],
     template: '<input :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)">' },
   VBtn: { props: ["disabled", "icon"], template: '<button :disabled="disabled" :data-icon="icon"><slot /></button>' },
   VAlert: { template: "<div><slot /></div>" },
+  VTextarea: { props: ["modelValue", "disabled"], emits: ["update:modelValue"],
+    template: '<textarea :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)"></textarea>' },
   RouterLink: { template: "<a><slot /></a>" },
 };
 beforeEach(() => {
@@ -25,6 +27,110 @@ async function render(send = true) {
   if (send) { await wrapper.get("form").trigger("submit"); await flushPromises(); }
   return wrapper;
 }
+describe("API Explorer VLAN adoption", () => {
+  const path = "/api/v1/interfaces/adopt-vlan";
+  const input = { name: "vlan30", parent: "eth0", id: 30 };
+  const result = () => ({
+    revision: "2026.11.06.9", interface: {
+      ...config().interfaces[0]!, name: input.name, kind: "vlan" as const, role: "unassigned" as const,
+      vlan: { parent: input.parent, id: input.id },
+    },
+  });
+  function ready() {
+    const store = useControllerStore();
+    store.state.data = state(); store.state.stale = false;
+    store.transactions.data = {}; store.transactions.stale = false;
+    return store;
+  }
+  it("registers an explicitly labeled POST without sending on mount or selection", async () => {
+    const store = ready(), adoption = vi.spyOn(store, "adoptVlan").mockResolvedValue(result());
+    const wrapper = await render(false);
+    expect(wrapper.getComponent({ name: "VCombobox" }).props("items")).toContainEqual({
+      value: path, title: `${path} (POST: Adopt existing VLAN)`,
+    });
+    await wrapper.get("input").setValue(path);
+    expect(wrapper.get('button[type="submit"]').text()).toBe("POST: Adopt VLAN");
+    expect(wrapper.text()).toContain("without a confirmation timer");
+    expect(wrapper.text()).toContain("interfaces.write and transactions.write");
+    expect(adoption).not.toHaveBeenCalled(); expect(api.inspectApiPath).not.toHaveBeenCalled();
+    await wrapper.get("textarea").setValue(JSON.stringify(input));
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(adoption).toHaveBeenCalledExactlyOnceWith(input);
+    expect(api.inspectApiPath).not.toHaveBeenCalled();
+    expect(wrapper.get('[aria-label="Response body"]').text()).toContain('"revision": "2026.11.06.9"');
+    wrapper.unmount();
+  });
+  it.each(["{", '{"name":"vlan30","parent":"eth0","id":0}', '{"name":"vlan30","parent":"eth0","id":30,"extra":true}'])("rejects invalid JSON requests inline: %s", async body => {
+    const store = ready(), adoption = vi.spyOn(store, "adoptVlan");
+    const wrapper = await render(false);
+    await wrapper.get("input").setValue(path);
+    await wrapper.get("textarea").setValue(body);
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).not.toBe("");
+    expect(adoption).not.toHaveBeenCalled(); expect(api.inspectApiPath).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("rejects query parameters instead of issuing a GET or POST", async () => {
+    const store = ready(), adoption = vi.spyOn(store, "adoptVlan");
+    const wrapper = await render(false);
+    await wrapper.get("input").setValue(`${path}?id=30`);
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("no query parameters");
+    expect(adoption).not.toHaveBeenCalled(); expect(api.inspectApiPath).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it("sends once while pending, hides cancellation and displays the actual failure", async () => {
+    const store = ready();
+    let reject!: (reason: Error) => void;
+    const adoption = vi.spyOn(store, "adoptVlan").mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    const wrapper = await render(false);
+    await wrapper.get("input").setValue(path);
+    await wrapper.get("textarea").setValue(JSON.stringify(input));
+    await wrapper.get("form").trigger("submit");
+    await wrapper.get("form").trigger("submit");
+    expect(adoption).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.find('[aria-label="Cancel request"]').exists()).toBe(false);
+    reject(new Error("HTTP 503: networkd capture source changed. Recovery may be pending."));
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("networkd capture source changed");
+    expect(wrapper.find('[aria-label="Response body"]').exists()).toBe(false);
+    expect(adoption).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+  it.each(["success", "failure"] as const)("uses neutral initial loading feedback until %s", async outcome => {
+    const wrapper = await render(false);
+    await wrapper.get("input").setValue(path);
+    expect(wrapper.get('[role="status"]').text()).toContain("Loading");
+    expect(wrapper.text()).not.toContain("Fresh compatible configuration");
+    expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeDefined();
+    if (outcome === "success") ready();
+    else useControllerStore().state.error = "Unable to read saved state";
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Loading configuration");
+    if (outcome === "success") expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeUndefined();
+    else expect(wrapper.text()).toContain("Unable to read saved state");
+    wrapper.unmount();
+  });
+  it("blocks drafts and discards late response display when the session changes", async () => {
+    const store = ready();
+    store.draft = config();
+    const wrapper = await render(false);
+    await wrapper.get("input").setValue(path);
+    expect(wrapper.get('button[type="submit"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("Save or discard local changes");
+    store.draft = null;
+    let resolve!: (value: ReturnType<typeof result>) => void;
+    vi.spyOn(store, "adoptVlan").mockReturnValue(new Promise(done => { resolve = done; }));
+    await wrapper.get("textarea").setValue(JSON.stringify(input));
+    await wrapper.get("form").trigger("submit");
+    store.sessionVersion++; await flushPromises();
+    resolve(result()); await flushPromises();
+    expect(wrapper.find('[aria-label="Response body"]').exists()).toBe(false);
+    expect(wrapper.get("textarea").element.value).not.toContain("vlan30");
+    wrapper.unmount();
+  });
+});
 
 describe("API response selection and copying", () => {
   it.each(["ctrlKey", "metaKey"] as const)("limits %s+A to the response body", async modifier => {

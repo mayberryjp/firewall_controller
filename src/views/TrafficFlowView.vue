@@ -33,6 +33,7 @@ const largestGroup = computed(() => Math.max(1, ...zones.value.map(zone => zone.
 const boardWidth = computed(() => Math.max(400, largestGroup.value * 168, viewportWidth.value));
 const applianceWidth = computed(() => Math.min(400, boardWidth.value - 40, (viewportWidth.value || boardWidth.value) - 24));
 const hostname = computed(() => [config.value?.system?.hostname, config.value?.system?.domain].filter(Boolean).join(".") || "Firewall appliance");
+const deviceId = computed(() => store.connected && !store.mqttStatus.stale ? store.mqttStatus.data?.device_id : undefined);
 const live = computed(() => store.connected && !hidden.value && !paused.value && !store.statistics.stale &&
   !store.statistics.error && !store.statistics.delayed && !store.state.stale &&
   !store.state.error && !store.state.delayed && Boolean(frame.value));
@@ -79,6 +80,7 @@ watch(() => [store.connected, store.sessionVersion] as const, async ([connected,
   capabilitiesRequest?.abort(); capabilitiesRequest = null;
   capabilities.value = null; capabilitiesError.value = "";
   if (!connected) return;
+  void store.refreshMqttStatus();
   const request = new AbortController();
   capabilitiesRequest = request;
   const current = () => capabilitiesRequest === request && store.sessionVersion === currentSession;
@@ -442,7 +444,10 @@ onUnmounted(() => {
             <HostPerformanceStrip />
             <div class="appliance-caption">
               <p class="appliance-name">
-                {{ hostname }}
+                {{ hostname }}<span v-if="deviceId"> ({{ deviceId.slice(0, 8) }})</span><span
+                  v-else-if="store.connected && store.mqttStatus.error"
+                  :title="store.mqttStatus.error"
+                > (Device ID unavailable)</span>
               </p>
               <v-btn
                 :icon="paused ? 'mdi-play' : 'mdi-pause'"

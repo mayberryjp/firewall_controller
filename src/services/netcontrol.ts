@@ -12,6 +12,7 @@ import { ruleOwnershipPreserved } from "@/services/ruleOwnership";
 import { firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, type FirewallDenyQuery } from "@/services/firewallTelemetry";
 import { dnsLookupRequestSchema, dnsLookupSchema, restartResponseSchema, restartTargetSchema, type DNSLookupRequest } from "@/services/operations";
 import {
+  adoptVlanRequestSchema, adoptVlanResponseSchema, type AdoptVlanRequest,
   mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema, timezonesSchema,
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
   revisionSchema, revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
@@ -23,6 +24,13 @@ import {
 } from "@/types/domain";
 
 const id = encodeURIComponent;
+export function adoptVlan(input: AdoptVlanRequest, signal?: AbortSignal) {
+  const value = adoptVlanRequestSchema.parse(input);
+  return request("POST", "/interfaces/adopt-vlan", adoptVlanResponseSchema.refine(result =>
+    result.interface.name === value.name && result.interface.kind === "vlan" &&
+    result.interface.vlan.parent === value.parent && result.interface.vlan.id === value.id,
+  "Adopted VLAN identity differs from the request"), value, signal);
+}
 export const getPathTests = (signal?: AbortSignal) =>
   request("GET", "/diagnostics/path-tests", pathTestStatusSchema, undefined, signal);
 export async function startPathTest(input: PathTestRequest, signal?: AbortSignal) {
@@ -72,7 +80,8 @@ export function restartProcess(target: string) {
   const value = restartTargetSchema.parse(target);
   return request("POST", "/processes/restart", restartResponseSchema.refine(result => result.target === value, "Restart response target differs from the requested process"), { target: value });
 }
-const submittedTransactionSchema = transactionSchema.extend({ ignored_fields: z.array(z.string()).optional() });
+const submittedTransactionSchema = transactionSchema.extend({ ignored_fields: z.array(z.string()).optional() })
+  .refine(value => value.confirmation_deadline !== null && value.status !== "applying_local", "Remote transactions require timed confirmation");
 export const getHostHealth = (signal?: AbortSignal) => request("GET", "/statistics/host", hostHealthSchema, undefined, signal);
 export const getMqttStatus = (signal?: AbortSignal) => request("GET", "/services/mqtt/status", mqttStatusSchema, undefined, signal);
 export const getDynamicDnsStatus = (signal?: AbortSignal) => request("GET", "/services/dynamic-dns/status", dynamicDnsStatusSchema, undefined, signal);

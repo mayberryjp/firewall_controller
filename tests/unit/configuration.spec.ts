@@ -4,6 +4,66 @@ import { decodeJson, encodeJson, utf8Size } from "@/services/json";
 import { differenceContext, differences, endpoint, equalConfig, importConfig, normalize, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, statistics, transaction } from "../fixtures";
 
+describe("explicit IPv6 policy", () => {
+  function ipv4Config() {
+    const value = config();
+    delete value.ipv6_enabled;
+    value.interfaces[0]!.addresses = ["192.0.2.10/24"];
+    return value;
+  }
+  it("treats omitted IPv6 as off and preserves explicit enablement through normalization and import", () => {
+    const omitted = ipv4Config(), disabled = { ...omitted, ipv6_enabled: false }, enabled = { ...omitted, ipv6_enabled: true };
+    expect(validateConfig(omitted)).toEqual([]);
+    expect(equalConfig(omitted, disabled)).toBe(true);
+    expect(equalConfig(omitted, enabled)).toBe(false);
+    expect(normalize(enabled).ipv6_enabled).toBe(true);
+    expect(importConfig(encodeJson(enabled)).ipv6_enabled).toBe(true);
+    const changes = differences(omitted, enabled);
+    expect(changes).toContainEqual({ area: "ipv6", identity: "Enable IPv6", kind: "modified", before: false, after: true });
+    expect(differenceContext(normalize(omitted), normalize(enabled), changes[0]!).after.ipv6_enabled).toBe(true);
+    expect(requiredPermissions(changes)).toEqual(["transactions.write", "kernel.namespace.write"]);
+    expect(transactionSchema.parse({ ...transaction(), candidate: enabled }).candidate.ipv6_enabled).toBe(true);
+  });
+  it.each(["address", "route", "dns", "collector", "wireguard", "filter", "icmpv6", "nat"] as const)(
+    "requires explicit enablement for retained IPv6 %s settings", resource => {
+      const value = ipv4Config();
+      if (resource === "address") value.interfaces[0]!.addresses.push("2001:db8::10/64");
+      if (resource === "route") value.routes.push({ enabled: false, interface: "lab0", destination: "2001:db8::/32", table: 254, metric: 0 });
+      if (resource === "dns") value.dns = { lab0: { servers: ["2001:db8::53"], domains: [] } };
+      if (resource === "collector") value.vnstat = { enabled: false, collector: "[2001:db8::1]:9999" };
+      if (resource === "wireguard") value.interfaces.push({
+        ...value.interfaces[0]!, name: "wg0", kind: "wireguard",
+        wireguard: { key_ref: "test-key", listen_port: 51820, peers: [{
+          public_key: "A".repeat(43) + "=", allowed_ips: ["2001:db8::/32"], persistent_keepalive_seconds: 0,
+        }] },
+      });
+      if (resource === "filter") value.softflowd[0]!.capture_filter = "ip6";
+      if (resource === "icmpv6") value.firewall.rules[0]!.protocol = "icmpv6";
+      if (resource === "nat") value.firewall.nat.masquerade[0]!.family = "ipv6";
+      expect(validateConfig(value).some(issue => issue.message.includes("IPv6"))).toBe(true);
+      value.ipv6_enabled = true;
+      expect(validateConfig(value).some(issue => issue.message.includes("IPv6 is disabled") || issue.message.includes("requires global IPv6"))).toBe(false);
+    },
+  );
+  it.each([null, "true", 1])("rejects malformed IPv6 policy %j", ipv6_enabled => {
+    expect(configSchema.safeParse({ ...ipv4Config(), ipv6_enabled }).success).toBe(false);
+  });
+});
+
+describe("imported static route metrics", () => {
+  it.each([0, 2147483647])("preserves valid boundary metric %s in imports, transactions and drafts", metric => {
+    const value = config(); value.routes[0]!.metric = metric;
+    expect(validateConfig(value)).toEqual([]);
+    expect(importConfig(encodeJson(value)).routes[0]!.metric).toBe(metric);
+    expect(transactionSchema.parse({ ...transaction(), candidate: value }).candidate.routes[0]!.metric).toBe(metric);
+    expect(normalize(value).routes[0]!.metric).toBe(metric);
+  });
+  it.each([-1, 0.5, 2147483648])("rejects invalid static route metric %s", metric => {
+    const value = config(); value.routes[0]!.metric = metric;
+    expect(validateConfig(value)).toContainEqual(expect.objectContaining({ path: "routes.0.metric", message: "Must be an integer 0..2147483647" }));
+  });
+});
+
 describe("lossless boundary and import", () => {
   it.each([true, false])("preserves DHCP route gateways with enabled=%s across imports, transactions and normalization", enabled => {
     const before = config(), candidate = config();
@@ -134,7 +194,7 @@ describe("lossless boundary and import", () => {
     expect(validateConfig(candidate)).toEqual([]);
     candidate.routes.push({ ...candidate.routes[0]!, enabled: true });
     expect(validateConfig(candidate).some(issue => issue.message.includes("Duplicate table/destination/metric"))).toBe(true);
-    candidate.routes = [{ ...candidate.routes[0]!, interface: "absent0", metric: 0 }];
+    candidate.routes = [{ ...candidate.routes[0]!, interface: "absent0", metric: -1 }];
     expect(validateConfig(candidate).some(issue => issue.path === "routes.0.interface")).toBe(true);
     expect(validateConfig(candidate).some(issue => issue.path === "routes.0.metric")).toBe(true);
   });
@@ -297,9 +357,9 @@ describe("inclusive validation limits and dependencies", () => {
     const errors = validateConfig(candidate);
     expect(errors.some(issue => issue.path === "routes.0.table")).toBe(value < 10000 || value > 19999);
   });
-  it.each([0, 1, 2147483647, 2147483648])("checks route metric %s", value => {
+  it.each([-1, 0, 1, 2147483647, 2147483648])("checks route metric %s", value => {
     const candidate = config(); candidate.routes[0]!.metric = value;
-    expect(validateConfig(candidate).some(issue => issue.path === "routes.0.metric")).toBe(value < 1 || value > 2147483647);
+    expect(validateConfig(candidate).some(issue => issue.path === "routes.0.metric")).toBe(value < 0 || value > 2147483647);
   });
   it("links flow validation errors to netflow routes without changing configuration paths", () => {
     const candidate = config();

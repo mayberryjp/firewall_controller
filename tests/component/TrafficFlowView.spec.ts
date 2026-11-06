@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import TrafficFlowView from "@/views/TrafficFlowView.vue";
 import { useControllerStore } from "@/stores/controller";
 import type { Statistics } from "@/types/domain";
-import { state, transaction } from "../fixtures";
+import { mqttStatus, state, transaction } from "../fixtures";
 import { trafficFlowCapabilities, trafficFlowConfig, trafficFlowStatistics } from "../trafficFlowFixtures";
 import * as netcontrol from "@/services/netcontrol";
 
@@ -25,6 +25,7 @@ beforeEach(() => {
   vi.spyOn(store, "refreshState").mockResolvedValue();
   vi.spyOn(store, "refreshStatistics").mockResolvedValue();
   vi.spyOn(store, "refreshHostHealth").mockResolvedValue();
+  vi.spyOn(store, "refreshMqttStatus").mockResolvedValue();
   vi.spyOn(netcontrol, "getInterfaceCapabilities").mockResolvedValue(null);
 });
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
@@ -37,6 +38,58 @@ async function publish(seconds = 0, increment = 0n, change?: (data: Statistics) 
 }
 
 describe("Traffic flow appliance view", () => {
+  it("appends the backend device ID in parentheses without changing saved identity or hostname", async () => {
+    const store = useControllerStore(), desired = trafficFlowConfig();
+    desired.system = { hostname: "firewall", domain: "example.test", timezone: "UTC" };
+    store.state.data = { ...state(), desired };
+    store.mqttStatus.data = { ...mqttStatus(), device_id: "0123456789abcdef0123456789abcdef" };
+    store.mqttStatus.stale = false;
+    wrapper = render(); await flushPromises();
+    expect(wrapper.get(".appliance-name").text()).toBe("firewall.example.test (01234567)");
+    expect(store.mqttStatus.data.device_id).toBe("0123456789abcdef0123456789abcdef");
+    expect(store.refreshMqttStatus).toHaveBeenCalledTimes(1);
+    expect(store.state.data.desired.system).toEqual(desired.system);
+    expect(store.draft).toBeNull();
+  });
+  it.each(["success", "failure"] as const)("omits the device ID while loading and shows the completed %s inline", async outcome => {
+    const store = useControllerStore();
+    let finish!: () => void;
+    vi.mocked(store.refreshMqttStatus).mockImplementationOnce(() => {
+      store.mqttStatus.loading = true;
+      return new Promise<void>(resolve => {
+        finish = () => {
+          store.mqttStatus.loading = false;
+          if (outcome === "success") {
+            store.mqttStatus.data = mqttStatus();
+            store.mqttStatus.stale = false;
+          } else store.mqttStatus.error = "HTTP 403: state.read required";
+          resolve();
+        };
+      });
+    });
+    wrapper = render(); await flushPromises();
+    expect(wrapper.get(".appliance-name").text()).toBe("edge-fw-01");
+    expect(wrapper.text()).not.toContain("Device ID unavailable");
+    finish(); await flushPromises();
+    expect(wrapper.get(".appliance-name").text()).toBe(outcome === "success"
+      ? "edge-fw-01 (aaaaaaaa)" : "edge-fw-01 (Device ID unavailable)");
+    if (outcome === "failure") expect(wrapper.get(".appliance-name span").attributes("title")).toBe("HTTP 403: state.read required");
+  });
+  it("does not display a stale device ID after a session change or disconnection", async () => {
+    const store = useControllerStore();
+    store.mqttStatus.data = mqttStatus(); store.mqttStatus.stale = false;
+    wrapper = render(); await flushPromises();
+    expect(wrapper.get(".appliance-name").text()).toContain("(aaaaaaaa)");
+    store.mqttStatus.stale = true; store.sessionVersion++;
+    await flushPromises();
+    expect(wrapper.get(".appliance-name").text()).not.toContain("(aaaaaaaa)");
+    expect(store.refreshMqttStatus).toHaveBeenCalledTimes(2);
+    store.mqttStatus.data = { ...mqttStatus(), device_id: "b".repeat(32) };
+    store.mqttStatus.stale = false; await flushPromises();
+    expect(wrapper.get(".appliance-name").text()).toContain("(bbbbbbbb)");
+    store.connected = false; await flushPromises();
+    expect(wrapper.get(".appliance-name").text()).not.toContain("(bbbbbbbb)");
+  });
   it.each([
     ["firewall", "example.test", "firewall.example.test"],
     ["firewall", "", "firewall"],

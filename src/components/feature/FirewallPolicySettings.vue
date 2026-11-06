@@ -40,7 +40,7 @@ function stageHost(): void {
     if (hostEditingBlocked.value || !editingConfig.value) throw new Error(store.readOnlyReason || "Configuration unavailable.");
     const address = hostAddress.value.trim();
     const parsed = policyHostAddress(address);
-    if (editingConfig.value.ipv6_enabled === false && parsed.kind() === "ipv6") throw new Error("IPv6 is disabled.");
+    if (editingConfig.value.ipv6_enabled !== true && parsed.kind() === "ipv6") throw new Error("IPv6 is disabled.");
     const candidate = cloneConfig(editingConfig.value);
     const policies = candidate.firewall.policies;
     if (!policies) throw new Error("Host policies are no longer available.");

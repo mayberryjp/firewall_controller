@@ -3,6 +3,7 @@ import { dateVersionSchema } from "@/services/versions";
 import { stableJson } from "@/services/configuration";
 import type { Config, StateView } from "@/types/domain";
 import { ruleOwnershipShape, validateRuleOwnership, withoutRuleOwnership, type RuleOwnership } from "@/services/ruleOwnership";
+import { compareInterfaceNames, sortByInterface } from "@/services/interfaceNames";
 
 const integer = z.number().int().safe().nonnegative();
 const decimal = z.string().regex(/^(0|[1-9]\d*)$/);
@@ -84,14 +85,31 @@ export const firewallCountersSchema = z.object({
 });
 export type FirewallCounters = z.infer<typeof firewallCountersSchema>;
 export interface FirewallCounts { packets: string; bytes: string }
-export interface FirewallCounterSummary extends FirewallCounts, RuleOwnership { id: string; label: string }
+export interface FirewallCounterSummary extends FirewallCounts, RuleOwnership { id: string; label: string; interfaceName?: string }
+
+export function dhcpRelayCounterSummaries(sample: FirewallCounters | null): FirewallCounterSummary[] {
+  const rows = (sample?.rules ?? []).flatMap(row => {
+    const match = /^input:generated\/input\/dhcp_relay\/([A-Za-z0-9_.-]{1,15})\/(clients|servers)$/.exec(row.id);
+    if (!match || row.chain !== "input" || row.config_path !== null || row.origin !== "system") return [];
+    return [{
+      id: row.id, label: match[2] === "clients" ? "DHCP relay clients" : "DHCP relay servers",
+      interfaceName: match[1]!, origin: "system" as const, import_source: null,
+      packets: row.packets, bytes: row.bytes,
+    }];
+  });
+  return rows.sort((left, right) => compareInterfaceNames(left.interfaceName, right.interfaceName) || left.label.localeCompare(right.label));
+}
 
 export function counterConfigurationMatches(sample: FirewallCounters, state: StateView | null, selected: Config | undefined): boolean {
   if (!state || state.drift || !selected || sample.sample.status !== "available" || sample.config_revision !== state.revision) return false;
   const active = state.active_transaction;
   if (active && active.status !== "pending_confirmation") return false;
   if (sample.transaction_id !== (active?.id ?? null)) return false;
-  return stableJson(withoutRuleOwnership(selected.firewall)) === stableJson(withoutRuleOwnership((active?.candidate ?? state.desired).firewall));
+  const applied = active?.candidate ?? state.desired;
+  const relays = (config: Config) => sortByInterface(config.interfaces.filter(link => link.dhcp_relay.enabled), link => link.name)
+    .map(link => ({ name: link.name, up: link.up, addresses: link.addresses, dhcp_relay: link.dhcp_relay }));
+  return stableJson(withoutRuleOwnership(selected.firewall)) === stableJson(withoutRuleOwnership(applied.firewall)) &&
+    stableJson(relays(selected)) === stableJson(relays(applied));
 }
 
 export const firewallCounterSummaries = {

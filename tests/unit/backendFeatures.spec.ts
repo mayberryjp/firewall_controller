@@ -63,6 +63,26 @@ describe("native runtime parent diagnostics", () => {
   });
 });
 
+describe("console takeover contracts", () => {
+  it.each(["captured", "applying", "owned", "failed", "complete"])("preserves the sanitized %s receipt", phase => {
+    const receipt = {
+      mode: "console", phase, error: phase === "failed" ? "Native takeover failed" : "",
+      connectivity_confirmation_required: false,
+      items: [{ resource: "eth0", disposition: "imported", reason: "Supported Ethernet" }, { resource: "bridge0", disposition: "disabled", reason: "Unsupported bridge" }],
+    };
+    expect(runtimeSchema.parse({ ...runtime(), host_takeover: receipt }).host_takeover).toEqual(receipt);
+  });
+  it("accepts absent/null receipts without inventing capture success and rejects malformed observations", () => {
+    expect(runtimeSchema.parse(runtime()).host_takeover).toBeUndefined();
+    expect(runtimeSchema.parse({ ...runtime(), host_takeover: null }).host_takeover).toBeNull();
+    expect(runtimeSchema.safeParse({ ...runtime(), host_takeover: { mode: "console", phase: "complete", error: null, items: [] } }).success).toBe(false);
+  });
+  it.each(["applying_local", "committed", "recovery_failed"])("accepts console transaction %s with no deadline without changing the saved candidate", status => {
+    const local = { ...transaction(status), confirmation_deadline: null };
+    expect(transactionSchema.parse(local)).toEqual(local);
+  });
+});
+
 describe("host Ethernet configuration", () => {
   it("preserves the cosmetic system domain in imports and transactions with system.write", () => {
     const candidate = config(), before = config();

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { decodeJson, encodeJson } from "@/services/json";
 import { differences, normalize, requiredPermissions } from "@/services/configuration";
 import { ruleOwnershipEntries } from "@/services/ruleOwnership";
-import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema } from "@/types/domain";
+import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema, adoptVlanRequestSchema } from "@/types/domain";
 import { config, hostPolicyConfig, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus, vnstatReporting, mqttStatus } from "../fixtures";
 import { dnsResponse, linkDiagnostics, interfaceCapabilitySnapshot, rpsDiagnostics } from "../diagnosticsFixtures";
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
@@ -27,6 +27,87 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("reads local null-deadline transactions and takeover receipts without converting them to remote confirmation", async () => {
+    const local = { ...transaction("applying_local"), confirmation_deadline: null };
+    body = encodeJson({ [local.id]: local });
+    expect((await net.getTransactions())[local.id]).toEqual(local);
+    body = encodeJson(local);
+    expect(await net.getTransaction(local.id)).toEqual(local);
+    body = encodeJson({ ...state(), active_transaction: local });
+    expect((await net.getState()).active_transaction?.confirmation_deadline).toBeNull();
+    const receipt = {
+      mode: "console", phase: "failed", error: "Takeover interrupted",
+      connectivity_confirmation_required: false,
+      items: [{ resource: "bridge0", disposition: "disabled", reason: "Unsupported bridge" }],
+    };
+    body = encodeJson({ ...runtime(), host_takeover: receipt });
+    expect((await net.getRuntime()).host_takeover).toEqual(receipt);
+  });
+  it("rejects an unexpected untimed remote submission as uncertain without retrying", async () => {
+    body = encodeJson({ ...transaction("applying_local"), confirmation_deadline: null }); status = 202;
+    await expect(net.submitPackage({ base_revision: state().revision, config: config(), confirm_timeout_seconds: 120 }))
+      .rejects.toMatchObject({ uncertain: true, incompatible: true });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  describe("explicit VLAN adoption", () => {
+    const input = { name: "vlan30", parent: "eth0", id: 30 };
+    const result = () => ({ revision: "2026.11.06.9", interface: {
+      ...config().interfaces[0]!, name: input.name, kind: "vlan", role: "unassigned",
+      vlan: { parent: input.parent, id: input.id }, mtu: 1450, up: false, addresses: ["192.0.2.3/24"],
+    } });
+    it("sends one strict authenticated POST without a query and preserves captured settings", async () => {
+      body = encodeJson(result());
+      const controller = new AbortController();
+      expect(await net.adoptVlan(input, controller.signal)).toEqual(result());
+      expect(captured).toMatchObject({ method: "post", url: "/interfaces/adopt-vlan", signal: controller.signal });
+      expect(captured?.params).toBeUndefined();
+      expect(decodeJson(String(captured?.data))).toEqual(input);
+      expect(captured?.headers.get("Authorization")).toBe("Bearer registry-test-session");
+      expect(adapter).toHaveBeenCalledTimes(1);
+    });
+    it.each([
+      {}, { ...input, name: null }, { ...input, parent: "" }, { ...input, name: "lo" },
+      { ...input, parent: "." }, { ...input, parent: ".." }, { ...input, name: "éth0" },
+      { ...input, name: "x".repeat(16) }, { ...input, name: "bad/name" }, { ...input, name: "bad name" },
+      { ...input, name: "eth0" }, { ...input, id: 0 }, { ...input, id: 4095 }, { ...input, id: 1.5 },
+      { ...input, id: "30" }, { ...input, extra: true },
+    ])("rejects malformed or unknown request fields %j", value => {
+      expect(adoptVlanRequestSchema.safeParse(value).success).toBe(false);
+      expect(adapter).not.toHaveBeenCalled();
+    });
+    it("accepts boundary IDs and mixed-case names without rewriting identities", () => {
+      for (const id of [1, 4094]) {
+        expect(adoptVlanRequestSchema.parse({ name: "Vlan_30.1-test", parent: "Eth0", id }))
+          .toEqual({ name: "Vlan_30.1-test", parent: "Eth0", id });
+      }
+      expect(() => net.adoptVlan({ ...input, id: 0 })).toThrow();
+      expect(adapter).not.toHaveBeenCalled();
+    });
+    it.each([400, 401, 403, 405, 409, 422, 500, 503])("preserves HTTP %i server detail without resubmitting", async code => {
+      status = code; body = '{"error":"networkd ownership recovery is pending"}';
+      await expect(net.adoptVlan(input)).rejects.toMatchObject({
+        status: code, message: `HTTP ${code}: networkd ownership recovery is pending`,
+      });
+      expect(adapter).toHaveBeenCalledTimes(1);
+    });
+    it.each(["revision", "name", "kind", "role", "parent", "id"] as const)("rejects an incompatible adoption %s", async field => {
+      const response = result();
+      if (field === "revision") response.revision = "invalid";
+      else if (field === "name") response.interface.name = "different0";
+      else if (field === "kind") response.interface.kind = "ethernet";
+      else if (field === "role") response.interface.role = "lan";
+      else if (field === "parent") response.interface.vlan.parent = "other0";
+      else response.interface.vlan.id++;
+      body = JSON.stringify(response);
+      await expect(net.adoptVlan(input)).rejects.toMatchObject({ incompatible: true, uncertain: true });
+      expect(adapter).toHaveBeenCalledTimes(1);
+    });
+    it("honors the existing mutation guard", async () => {
+      onMutationCheck(() => "Path-test restoration owns networking");
+      await expect(net.adoptVlan(input)).rejects.toMatchObject({ status: 409 });
+      expect(adapter).not.toHaveBeenCalled();
+    });
+  });
   it("uses bodyless status GET and explicit typed start/cancel POSTs without automatic retries", async () => {
     body = encodeJson(pathTestStatus());
     await net.getPathTests();

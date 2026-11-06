@@ -97,7 +97,7 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
         { title: "Direct", value: "direct" }, { title: "Static address", value: "static" }, { title: "DHCP gateway", value: "dhcp" },
       ], "Defaults to DHCP gateway for IPv4 routes on DHCP interfaces."),
       text("gateway", "Gateway address"),
-      number("metric", "Metric", "1..2147483647"),
+      number("metric", "Metric", "0..2147483647"),
     ];
     case "firewall": return [
       text("source", "Source network (blank = Any)"), text("destination", "Destination network (blank = Any)"),

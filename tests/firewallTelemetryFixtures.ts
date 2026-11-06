@@ -28,6 +28,11 @@ export function firewallCounters(settings: Config = config()): FirewallCounters 
     add("input", "generated/input/loopback");
     add("input", "generated/input/established_related");
   } else if (settings.firewall.allow_all_icmp) add("input", "generated/input/policy", "0");
+  for (const link of settings.interfaces.filter(link => link.dhcp_relay.enabled)) {
+    add("input", `generated/input/dhcp_relay/${link.name}/clients`);
+    add("input", `generated/input/dhcp_relay/${link.name}/servers`, "0");
+    rules.at(-1)!.expanded_rules = link.dhcp_relay.servers.length;
+  }
   const ownership = ruleOwnershipEntries(settings);
   for (const row of rules) {
     const configured = row.config_path ? ownership.get(row.config_path) : undefined;

@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ProcessHealthView from "@/views/ProcessHealthView.vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
-import { config, processHealthSnapshot, state } from "../fixtures";
+import { config, processHealthSnapshot, runtime, state } from "../fixtures";
+import type { RuntimeState } from "@/types/domain";
 import * as api from "@/services/netcontrol";
 import { ApiFailure } from "@/services/api";
 
@@ -26,12 +27,64 @@ beforeEach(() => {
   store.platform.data = processHealthSnapshot();
   store.platform.stale = false; store.platform.lastSuccess = Date.now();
   vi.spyOn(store, "refreshPlatformStatus").mockResolvedValue();
+  vi.spyOn(store, "refreshRuntime").mockResolvedValue();
 });
 afterEach(() => { wrapper?.unmount(); useControllerStore().$dispose(); vi.useRealTimers(); });
 function render() { wrapper = mount(ProcessHealthView, { global: { stubs } }); return wrapper; }
 function row(resource: string) { return wrapper.findAll("tbody tr").find(item => item.findAll("td")[1]?.text() === resource)!; }
 
 describe("Process health diagnostics", () => {
+  function receipt(phase: NonNullable<RuntimeState["host_takeover"]>["phase"]): NonNullable<RuntimeState["host_takeover"]> {
+    return {
+      mode: "console", phase, error: phase === "failed" ? "Unsupported state cleanup failed" : "",
+      connectivity_confirmation_required: false,
+      items: [{ resource: "eth0", disposition: "imported", reason: "Supported Ethernet" }, { resource: "bridge0", disposition: "disabled", reason: "Unsupported bridge" }],
+    };
+  }
+  it.each(["captured", "applying", "owned", "failed", "complete"] as const)("keeps %s takeover details in a collapsed diagnostic without mutation controls", phase => {
+    const store = useControllerStore();
+    store.runtime.data = { ...runtime(), host_takeover: receipt(phase) };
+    store.runtime.stale = false; store.runtime.lastSuccess = Date.now();
+    render();
+    const details = wrapper.get('details[aria-label="Host takeover"]');
+    expect(details.attributes("open")).toBeUndefined();
+    expect(details.text()).toContain(phase);
+    expect(details.text()).toContain("console");
+    expect(details.findAll("tbody tr").map(row => row.text())).toEqual(["eth0importedSupported Ethernet", "bridge0disabledUnsupported bridge"]);
+    expect(details.text().includes("Takeover is incomplete")).toBe(phase !== "complete");
+    if (phase === "failed") expect(details.get('[role="alert"]').text()).toBe("Unsupported state cleanup failed");
+    expect(details.findAll("button")).toHaveLength(0);
+    expect(store.refreshRuntime).toHaveBeenCalledTimes(1);
+    expect(store.draft).toBeNull();
+  });
+  it.each(["success", "failure"] as const)("keeps a pending takeover read neutral until %s", async outcome => {
+    const store = useControllerStore();
+    let finish!: () => void;
+    vi.mocked(store.refreshRuntime).mockImplementationOnce(() => {
+      store.runtime.loading = true;
+      return new Promise<void>(resolve => {
+        finish = () => {
+          store.runtime.loading = false;
+          if (outcome === "success") {
+            store.runtime.data = { ...runtime(), host_takeover: receipt("complete") };
+            store.runtime.lastSuccess = Date.now(); store.runtime.stale = false;
+          } else store.runtime.error = "Runtime read denied";
+          resolve();
+        };
+      });
+    });
+    render();
+    expect(wrapper.find('[aria-label="Host takeover"]').exists()).toBe(false);
+    finish(); await flushPromises();
+    expect(wrapper.get('[aria-label="Host takeover"]').text()).toContain(outcome === "success" ? "complete" : "Runtime read denied");
+    expect(wrapper.text()).not.toContain("Takeover is incomplete");
+  });
+  it.each([undefined, null])("omits takeover displays when the backend returns %j", host_takeover => {
+    const store = useControllerStore();
+    store.runtime.data = { ...runtime(), host_takeover };
+    render();
+    expect(wrapper.find('[aria-label="Host takeover"]').exists()).toBe(false);
+  });
   it("shows aggregate, daemon and component observations without a large page heading", () => {
     render();
     expect(wrapper.find("h1").exists()).toBe(false);
@@ -129,7 +182,7 @@ describe("Process health diagnostics", () => {
     const reconcile = vi.spyOn(store, "reconcile").mockResolvedValue();
     render();
     expect(store.draft).toEqual(draft);
-    expect(refreshState).not.toHaveBeenCalled(); expect(refreshRuntime).not.toHaveBeenCalled();
+    expect(refreshState).not.toHaveBeenCalled(); expect(refreshRuntime).toHaveBeenCalledTimes(1);
     expect(reconcile).not.toHaveBeenCalled();
     expect(wrapper.findAll("button")).toHaveLength(3);
     expect(wrapper.get('button[aria-label="Restart ntp"]').attributes("data-icon")).toBe("mdi-restart");

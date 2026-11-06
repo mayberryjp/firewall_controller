@@ -3,7 +3,7 @@ import { defineStore } from "pinia";
 import { ApiFailure, onMutationCheck, onUnauthorized, setApiDevice } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import {
-  configSchema, knownStatuses, terminal,
+  configSchema, knownStatuses, terminal, adoptVlanRequestSchema, type AdoptVlanRequest, type AdoptVlanResponse,
   type Config, type StateView, type RuntimeState, type Transaction, type PlatformStatus,
   type Statistics, type Revision, type RevisionMetadata, type GatewayStatisticsPage, type RepairService, type UpgradeStatus,
   type BGPStatus, type BGPRoutes, type BGPAdvertisedRoutes, type VnStatReporting, type DiscoveredInterface,
@@ -41,6 +41,13 @@ export const useControllerStore = defineStore("controller", () => {
   const pathTests = dataset<PathTestStatus>(), pathInterfaces = dataset<DiscoveredInterface[]>();
   const pathTestsUnsupported = ref(false), pathTestPending = ref<"" | "start" | "cancel">("");
   const pathTestUncertain = ref(false), pathTestActionError = ref("");
+  const vlanAdoptionPending = ref(false), vlanAdoptionRecoveryRequired = ref(false);
+  let vlanAdoptionSubmitting = false;
+  const vlanAdoptionWriteBlockedReason = computed(() => vlanAdoptionPending.value
+    ? "VLAN adoption is in progress. Wait for saved-state verification before making changes."
+    : vlanAdoptionRecoveryRequired.value
+      ? "VLAN adoption or saved-state verification needs recovery. Reconnect and inspect saved state and backend recovery before writing; do not automatically repeat adoption."
+      : "");
   let pathSubmitting = false;
   const pathTestWriteBlockedReason = computed(() => {
     if (pathTestPending.value) return "A path-test operation is pending. Conflicting writes are blocked.";
@@ -48,8 +55,14 @@ export const useControllerStore = defineStore("controller", () => {
     if (pathTests.data?.active) return "A path test or its restoration owns temporary networking state. Wait for the lease to be released.";
     return "";
   });
-  onMutationCheck(path => path === "/diagnostics/path-tests" && pathTestPending.value === "start" &&
-    !pathTests.data?.active && !pathTestUncertain.value ? "" : pathTestWriteBlockedReason.value);
+  onMutationCheck(path => {
+    if (vlanAdoptionWriteBlockedReason.value) {
+      if (path === "/interfaces/adopt-vlan" && vlanAdoptionSubmitting) vlanAdoptionSubmitting = false;
+      else return vlanAdoptionWriteBlockedReason.value;
+    }
+    return path === "/diagnostics/path-tests" && pathTestPending.value === "start" &&
+      !pathTests.data?.active && !pathTestUncertain.value ? "" : pathTestWriteBlockedReason.value;
+  });
   const bgpStatus = dataset<BGPStatus>(), bgpRoutes = dataset<BGPRoutes>();
   const bgpAdvertisedRoutes = dataset<BGPAdvertisedRoutes>();
   const bgpRouteDirection = ref<"received" | "advertised">("received"), bgpAdvertisedRoutesExpired = ref(true);
@@ -153,7 +166,7 @@ export const useControllerStore = defineStore("controller", () => {
   const ignoredFields = ref<string[]>([]);
   const uncertain = ref<{ operation: string; id?: string; priorIDs: string[]; base: string | null; startedAt: string } | null>(null);
   const editorDirty = ref(false), monitoring = ref(false), gatewayMonitoring = ref(false);
-  const ipv6Enabled = computed(() => (draft.value ?? state.data?.active_transaction?.candidate ?? state.data?.desired)?.ipv6_enabled !== false);
+  const ipv6Enabled = computed(() => (draft.value ?? state.data?.active_transaction?.candidate ?? state.data?.desired)?.ipv6_enabled === true);
   const supportsDhcpGatewayMonitors = computed(() => !runtime.stale && !runtime.error &&
     runtime.data?.capabilities?.gateway_monitor_modes?.includes("dhcp") === true &&
     runtime.data.capabilities.dhcp_gateway_monitor_address_families?.includes("ipv4") === true);
@@ -192,9 +205,11 @@ export const useControllerStore = defineStore("controller", () => {
     (b.submitted_at ?? "").localeCompare(a.submitted_at ?? "") || a.id.localeCompare(b.id)));
   const readOnlyBlock = computed(() => {
     if (!connected.value) return "Sign in and select a registered firewall.";
+    if (vlanAdoptionWriteBlockedReason.value) return vlanAdoptionWriteBlockedReason.value;
     if (pathTestWriteBlockedReason.value) return pathTestWriteBlockedReason.value;
     if (restartPending.value || restartReconnecting.value) return "A process restart is in progress. Your local draft is preserved.";
     if (busy.value || submitted.value || uncertain.value) return "A submitted snapshot or uncertain write is frozen. Reconcile its server outcome first.";
+    if (activeTransactions.value.some(item => item.status === "applying_local" || item.confirmation_deadline === null)) return "Console provisioning is in progress or requires recovery. Resolve it from the console; your draft is preserved.";
     return "";
   });
   const readOnlyNotice = computed(() => connecting.value && !connected.value ? "" : readOnlyBlock.value);
@@ -212,6 +227,7 @@ export const useControllerStore = defineStore("controller", () => {
   const canApply = computed(() => !applyBlockedReason.value);
   function operationBlock(ignorePathTest = false): string {
     if (!connected.value) return "Select a connected firewall.";
+    if (vlanAdoptionWriteBlockedReason.value) return vlanAdoptionWriteBlockedReason.value;
     if (!ignorePathTest && pathTestWriteBlockedReason.value) return pathTestWriteBlockedReason.value;
     if (restartPending.value || restartReconnecting.value) return "A restart is already in progress.";
     if (busy.value || submitted.value || uncertain.value) return "Resolve the pending configuration operation first.";
@@ -220,6 +236,42 @@ export const useControllerStore = defineStore("controller", () => {
     return "";
   }
   const operationBlockedReason = computed(() => operationBlock());
+  const vlanAdoptionBlockedReason = computed(() => operationBlockedReason.value ||
+    (editorDirty.value || draft.value ? "Save or discard local changes before adopting a VLAN." : "") ||
+    (!state.data || state.stale || state.error || transactions.stale || transactions.error || incompatible.value
+      ? `Fresh compatible configuration and transaction state are required before VLAN adoption.${state.error || transactions.error ? ` ${state.error || transactions.error}` : ""}` : "") ||
+    (state.data?.drift ? "Resolve configuration drift before adopting a VLAN." : ""));
+
+  async function adoptVlan(input: AdoptVlanRequest): Promise<AdoptVlanResponse | undefined> {
+    const value = adoptVlanRequestSchema.parse(input);
+    if (vlanAdoptionBlockedReason.value) throw new Error(vlanAdoptionBlockedReason.value);
+    const session = epoch, controller = new AbortController();
+    aborts.add(controller); vlanAdoptionPending.value = true; vlanAdoptionSubmitting = true;
+    let accepted = false;
+    try {
+      const result = await api.adoptVlan(value, controller.signal);
+      if (session !== epoch) return;
+      accepted = true;
+      await flights.get(state);
+      if (session !== epoch) return;
+      await refreshState();
+      if (session !== epoch) return;
+      if (state.stale || state.error || state.data?.revision !== result.revision ||
+          !state.data.desired.interfaces.some(link => stableJson(link) === stableJson(result.interface))) {
+        vlanAdoptionRecoveryRequired.value = true;
+        throw new Error(`VLAN adoption completed, but saved state could not be verified. ${state.error ?? "The saved revision or interface differs from the adoption response."} Reconnect and inspect saved state before editing; do not repeat adoption.`);
+      }
+      baseline.value = null; baseRevision.value = null;
+      return result;
+    } catch (failure) {
+      if (session !== epoch) return;
+      if (!accepted && (!(failure instanceof ApiFailure) || failure.uncertain)) vlanAdoptionRecoveryRequired.value = true;
+      throw new Error(`${message(failure)}${accepted ? "" : " Ownership recovery may be pending. No automatic retry was made; inspect backend state before another attempt."}`);
+    } finally {
+      aborts.delete(controller);
+      if (session === epoch) { vlanAdoptionPending.value = false; vlanAdoptionSubmitting = false; }
+    }
+  }
   function firewallDeletionBlock(includePendingReads: boolean): string {
     if (operationBlockedReason.value) return operationBlockedReason.value;
     if (incompatible.value) return "Resolve the incompatible configuration or transaction state first.";
@@ -240,6 +292,7 @@ export const useControllerStore = defineStore("controller", () => {
     stopSoftwareCheck(); softwareCheckDenied.value = false; softwareCheckNotice.value = "";
     epoch++;
     sessionVersion.value++;
+    vlanAdoptionPending.value = false; vlanAdoptionRecoveryRequired.value = false; vlanAdoptionSubmitting = false;
     pathTests.data = null; pathInterfaces.data = null;
     pathTestsUnsupported.value = false; pathTestPending.value = ""; pathTestUncertain.value = false;
     pathTestActionError.value = ""; pathSubmitting = false;
@@ -319,7 +372,7 @@ export const useControllerStore = defineStore("controller", () => {
         if (pathTests.data.active) throw new Error("The existing path test must finish restoration before starting another.");
         if (!pathInterfaces.data || pathInterfaces.stale || pathInterfaces.error) throw new Error(pathInterfaces.error || "Refresh live interfaces before starting.");
         validatePathInterfaces(request, pathInterfaces.data);
-        if (request.source_address.includes(":") && state.data?.desired.ipv6_enabled === false) throw new Error("IPv6 must be enabled in committed configuration.");
+        if (request.source_address.includes(":") && state.data?.desired.ipv6_enabled !== true) throw new Error("IPv6 must be enabled in committed configuration.");
       } else {
         await refreshPathTests();
         if (version !== epoch) return;
@@ -642,6 +695,7 @@ export const useControllerStore = defineStore("controller", () => {
     } catch (error) { if (session === epoch) actionError.value = message(error); return null; }
   }
   async function mutate(operation: string, action: () => Promise<Transaction | RuntimeState>, id?: string): Promise<Transaction | null> {
+    if (vlanAdoptionWriteBlockedReason.value) throw new Error(vlanAdoptionWriteBlockedReason.value);
     if (pathTestWriteBlockedReason.value) throw new Error(pathTestWriteBlockedReason.value);
     if (!connected.value || busy.value) throw new Error("Connect and wait for the current operation");
     busy.value = true; actionError.value = null; notice.value = null;
@@ -707,6 +761,7 @@ export const useControllerStore = defineStore("controller", () => {
   async function lifecycle(id: string, action: "confirm" | "rollback"): Promise<Transaction | null> {
     const transaction = await readTransaction(id);
     if (!transaction || !knownStatuses.includes(transaction.status)) throw new Error("Unable to obtain a compatible fresh transaction");
+    if (transaction.confirmation_deadline === null || transaction.status === "applying_local") throw new Error("Console provisioning requires console recovery, not remote confirmation or rollback.");
     if (action === "confirm" && (transaction.status !== "pending_confirmation" || Date.parse(transaction.confirmation_deadline) <= Date.now())) throw new Error("Confirmation is not currently available; await server outcome");
     if (action === "rollback" && !["pending_confirmation", "recovery_failed"].includes(transaction.status)) throw new Error("Rollback is not available in this state");
     const result = await mutate(action === "confirm" ? "Confirm configuration" : "Roll back", () =>
@@ -745,7 +800,7 @@ export const useControllerStore = defineStore("controller", () => {
   async function reconcile(service: RepairService = "softflowd"): Promise<void> {
     await checkMaintenance();
     if (incompatible.value || uncertain.value || activeTransactions.value.some((item) =>
-      ["applying", "rolling_back", "recovery_failed"].includes(item.status))) throw new Error("Service reconciliation is blocked by safety state");
+      item.confirmation_deadline === null || ["applying", "applying_local", "rolling_back", "recovery_failed"].includes(item.status))) throw new Error("Service reconciliation is blocked by safety state");
     await mutate("Reconcile managed services", () => api.reconcileServices(service));
     if (actionError.value) throw new Error(actionError.value);
   }
@@ -795,6 +850,7 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale && !comparisonRevision.data.current) revisionCache.set(id, comparisonRevision.data);
   }
   return {
+    adoptVlan, vlanAdoptionPending, vlanAdoptionBlockedReason,
     pathTests, pathInterfaces, pathTestsUnsupported, pathTestPending, pathTestUncertain, pathTestActionError,
     pathTestWriteBlockedReason, refreshPathTests, refreshPathInterfaces, startPathTest, cancelPathTest,
     udpRelayStatus, udpRelayStatusCurrent, refreshUDPRelayStatus,

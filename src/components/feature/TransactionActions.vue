@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import type { Transaction } from "@/types/domain";
 import { useTimestamps } from "@/composables/useTimestamps";
@@ -9,9 +9,16 @@ const emit = defineEmits<{ updated: [transaction: Transaction] }>();
 const store = useControllerStore();
 const now = ref(Date.now()), dialog = ref<"rollback" | null>(null);
 const error = ref<string | null>(null);
-const timer = setInterval(() => { now.value = Date.now(); }, 1000);
+let timer: ReturnType<typeof setInterval> | undefined;
+const timed = computed(() => props.transaction.confirmation_deadline !== null && props.transaction.status !== "applying_local");
+watch(() => [props.transaction.status, props.transaction.confirmation_deadline], () => {
+  clearInterval(timer); now.value = Date.now();
+  if (!timed.value) dialog.value = null;
+  if (timed.value && props.transaction.status === "pending_confirmation") timer = setInterval(() => { now.value = Date.now(); }, 1000);
+}, { immediate: true });
 onUnmounted(() => clearInterval(timer));
-const remaining = computed(() => Math.max(0, Math.ceil((Date.parse(props.transaction.confirmation_deadline) - now.value) / 1000)));
+const remaining = computed(() => timed.value && props.transaction.confirmation_deadline !== null
+  ? Math.max(0, Math.ceil((Date.parse(props.transaction.confirmation_deadline) - now.value) / 1000)) : 0);
 async function execute(action: "confirm" | "rollback"): Promise<void> {
   if (store.busy || (action === "confirm" && (!remaining.value || props.transaction.status !== "pending_confirmation"))) return;
   error.value = null;
@@ -35,18 +42,18 @@ async function execute(action: "confirm" | "rollback"): Promise<void> {
       {{ error }}
     </v-alert>
     <p
-      v-if="transaction.status === 'pending_confirmation'"
+      v-if="timed && transaction.status === 'pending_confirmation'"
       class="my-2"
     >
       Confirm before automatic rollback: <time
-        :datetime="transaction.confirmation_deadline"
+        :datetime="transaction.confirmation_deadline ?? undefined"
         :title="`${formatTimestamp(transaction.confirmation_deadline)} ${timeZone}`"
       >{{ formatTimestamp(transaction.confirmation_deadline) }}</time> {{ timeZone }}
       · {{ remaining ? `${remaining}s remaining` : "Deadline reached; awaiting server outcome" }}
     </p>
     <div class="d-flex flex-wrap ga-2">
       <v-btn
-        v-if="transaction.status === 'pending_confirmation'"
+        v-if="timed && transaction.status === 'pending_confirmation'"
         color="success"
         :disabled="!remaining || store.busy"
         @click="execute('confirm')"
@@ -54,7 +61,7 @@ async function execute(action: "confirm" | "rollback"): Promise<void> {
         Confirm changes
       </v-btn>
       <v-btn
-        v-if="['pending_confirmation', 'recovery_failed'].includes(transaction.status)"
+        v-if="timed && ['pending_confirmation', 'recovery_failed'].includes(transaction.status)"
         color="error"
         variant="outlined"
         :disabled="store.busy"

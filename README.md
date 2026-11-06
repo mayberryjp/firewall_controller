@@ -498,7 +498,7 @@ or appliance acceptance.
 | `/diagnostics/traffic-flow` | Compatibility redirect to `/overview` |
 | `/diagnostics/process-health` | Read-only daemon/component health, recovery states, collection freshness and active alerts |
 | `/diagnostics/interface-capabilities` | Saved per-interface performance capabilities shown as color-coded chips: green Enabled, amber Disabled, blue Supported (activation unknown), red Unsupported, and neutral Unknown or N/A. Hover a chip for its separate support and enabled states. No Details controls or collection-error lists. **Refresh capabilities** explicitly scans hardware and saves observations; opening the page only reads the saved snapshot. No automatic scans, tuning, retries or configuration edits. Unknown and simulated results are not treated as measured support; partial results replace older evidence and failed requests retain the previous snapshot marked stale with an inline request error. Collection time uses the saved system timezone. |
-| `/diagnostics/api` | GET API explorer; most endpoints are read-only, but interface-capability refresh explicitly scans hardware and saves. Focus the response box and use Ctrl+A (Cmd+A on macOS) to select only its body, or use its copy icon to copy the displayed response with full numeric precision. Clipboard access requires browser support and HTTPS or localhost; errors appear inline. |
+| `/diagnostics/api` | API explorer with GET inspection, explicit interface-capability scan/save, and explicit POST adoption of an existing unmanaged VLAN. Focus the response box and use Ctrl+A (Cmd+A on macOS) to select only its body, or use its copy icon to copy the displayed response with full numeric precision. Clipboard access requires browser support and HTTPS or localhost; errors appear inline. |
 | `/diagnostics/rps` | RPS Configuration: CPU steering for managed Ethernet and kernel WireGuard RX queues, staged through the shared SAVE flow. No NIC inventory snapshot is required. |
 | `/diagnostics/nic-offloads` | NIC Offloads: all settings for one interface in the General settings layout, with Enabled/Disabled dropdowns initialized from reported state. Settings have detailed descriptions and Linux names on hover. |
 | `/diagnostics/path-tests` | Path MTU/MSS: explicitly approved two-firewall packet-size and TCP MSS tests, temporary MTU/permission changes, live progress, directional measurements, cancellation and restoration. Requires a native backend with the path-test API; unsupported older backends stay disabled. |
@@ -521,6 +521,24 @@ retain the previous displayed snapshot explicitly marked stale and show the
 current error. Capability snapshots never enter configuration drafts or revisions.
 Hardware identity revision strings are preserved as reported, not interpreted as
 configuration revision IDs.
+
+To explicitly adopt an existing unmanaged VLAN, select
+`/api/v1/interfaces/adopt-vlan` in Diagnostics > **API explorer**, enter exactly
+`{"name":"vlan30","parent":"eth0","id":30}` with the actual identities, and press
+**POST: Adopt VLAN**. Names must be distinct, 1..15 ASCII letters/digits/underscore/
+hyphen/dot, excluding `lo`, `.` and `..`; VLAN ID is 1..4094. The parent must
+already be managed Ethernet. Requires `interfaces.write` and `transactions.write`
+on a backend supporting native VLAN adoption; host/networkd prerequisites are
+enforced by the backend. No query parameters are accepted.
+This immediately imports ownership without a confirmation timer, preserving
+supported live settings with role **unassigned**. Finish/discard local edits and
+active transactions first. The client validates the response and refreshes saved
+state before allowing further editing; the next draft uses the refreshed revision.
+Assign role/address/firewall/NAT separately through **SAVE** and confirmed apply.
+Rollback retains the adopted baseline. Selection never sends a request; failures
+show backend detail and are never automatically retried. After interrupted,
+uncertain or unverifiable adoption, reconnect and inspect backend recovery before
+another write; do not delete appliance state or VLANs to bypass recovery.
 
 Diagnostics > **RPS Configuration** provides controls for observed,
 managed physical Ethernet and kernel WireGuard RX queues. Receive Packet Steering
@@ -719,7 +737,9 @@ the app's shared theme colors; rainbow accents are reserved for traffic streams.
 The appliance's front label carries the lime Modan mark beside MODAN,
 with KNOW YOUR NETWORK beneath it.
 The generic enclosure omits Ethernet jacks so it does not imply a physical port count.
-The caption beside the pause control shows the configured hostname and domain.
+The caption beside the pause control shows the configured hostname and domain,
+followed by the first eight characters of the backend device ID in parentheses
+(not the registry connection ID). The full ID is preserved in API data.
 Full Interfaces, Gateways, WireGuard, BGP peers, System stats and Interface counters
 cards live in **Diagnostics > SYSTEM OVERVIEW**, which remains the default
 Diagnostics page. They retain the diagram's rounded cards, theme surfaces and
@@ -776,6 +796,11 @@ Stale observations are marked unknown rather than healthy; native collection
 failures and retained alerts remain visible. Health timestamps use system-timezone seconds.
 This is local process health, not verification of remote delivery or forwarding.
 Viewing the page does not modify configuration, disturb drafts or restart workers.
+When the backend returns a host-takeover receipt, a collapsed **Host takeover**
+section on this page shows its console mode, phase, errors and imported/disabled
+decisions. It reads `/runtime`; absent/null receipts add no display. Incomplete
+or failed receipts direct recovery to the console, with no browser retry action.
+Stale receipts remain last-known observations, not proof of connectivity.
 
 The top navbar selects Interfaces, Routing, Firewall, VPN, Services, Diagnostics, or the Settings
 gear. Hover over the Settings gear to see the committed hostname.domain; when only
@@ -1240,6 +1265,18 @@ Upload over HTTPS or a trusted management channel. Appliance password files are
 private but unencrypted; discarded uploads still count toward the 256-reference
 limit. Prefer `mqtts://` with a trusted broker certificate.
 
+The consolidated MQTT backend publishes retained discovery at
+`homeassistant/device/netcontrol_<device_id>/config` and complete samples at
+`netcontrol/<device_id>/state` (QoS 1, nonretained), with a 32 MiB payload cap.
+When migrating from the superseded split-topic backend, stop the old publisher,
+allow these topics in broker ACLs, configure payload limits of at least
+33,554,432 bytes and packet limits of at least 33,558,528 bytes, and clear each
+old retained per-sensor discovery topic individually before enabling the new
+publisher. Do not clear the current device-discovery topic or publish to a
+wildcard. Custom consumers read complete `/state` objects rather than assembling
+shards. Preserve device identity and verify Home Assistant entity continuity;
+broker acknowledgments alone do not prove ingestion or resolve missing sources.
+
 The Publisher row shows only the current state and actionable errors. Broker
 timestamps, attempt/retry counters and retained failure history are not displayed.
 Recovery clears the current error without marking a running publisher unhealthy.
@@ -1508,6 +1545,43 @@ name, availability and error; missing link details display as Unknown. Missing
 parent datasets and malformed rows still fail validation rather than appearing
 as an empty inventory.
 
+### November 7 console takeover compatibility
+
+Deploy these frontend changes with the matching backend:
+
+- Omitted `ipv6_enabled` now means **false**, including fresh configuration and
+  factory reset. Explicit saved true survives normal restart and is preserved
+  in drafts, imports and submissions. IPv6 literals and IPv6-only filters require
+  explicit enablement, including retained disabled resources. Disabling IPv6
+  reports conflicts inline rather than deleting them. Use IPv4 management and
+  console recovery; IPv6-only access and `::1` dependencies stop when disabled.
+- Console provisioning imports supported Ethernet/veth, dummy/VLAN, IPv4 routes,
+  DHCP/DNS and representable nftables policy. It preserves WAN settings and
+  other imported configuration, changing selected LAN addressing and assigned
+  port roles rather than replacing everything with a factory firewall/NAT plan.
+  Static-route metrics accept **0..2147483647**, preserving zero on edits/export.
+- Initial takeover can disable unsupported topology, routing, firewall rules,
+  traffic control/BPF and known competing managers. It is console-only, with
+  no connectivity confirmation or automatic restoration of unsupported state.
+  Review actual input/forwarding/NAT policy and the selected LAN subnet;
+  role labels do not establish protection, NAT or management continuity.
+  Keep private capture/state files; correct failures from the console, not by
+  deleting evidence or resetting configured devices.
+- Console transaction records may report `applying_local` and a null
+  `confirmation_deadline`. These remain nonterminal while applying, block
+  conflicting operations, and have no browser countdown, confirm or rollback
+  controls. Normal remote submissions retain timed confirmation and rollback;
+  drafts and unknown-write safeguards are unchanged.
+- Updated installer/hardening scripts stop/mask Snap management and disable
+  automatic Ubuntu APT checks, downloads and installation, **including security
+  updates**. Operators must schedule manual OS patching. Manual APT and backend
+  release checks remain available. Existing hosts require explicit reviewed
+  console hardening; a normal daemon upgrade or factory reset does not apply
+  these OS policies.
+
+The installer requires a backend advertising `console-host-takeover`. Repository
+tests do not establish production installation, reboot or management continuity.
+
 ### October 23 host networking, DHCP and DNS
 
 - The Interfaces screen shows read-only discovered NICs independently of managed
@@ -1590,6 +1664,16 @@ fields are rejected as incompatible rather than silently stripped.
   dummy/VLAN link, servers and a configured unicast IPv4 address. The selected
   address/subnet is the first eligible canonical prefix in lexicographic order;
   enabled interfaces must have distinct selected relay addresses.
+- Backends implementing the November 6 automatic DHCP permits derive narrowly
+  scoped IPv4 UDP input accepts for enabled relays before user input drops.
+  No manual DHCP input rule or `firewall.write` permission is required solely
+  for relay enablement. Disabling relay withdraws its generated exceptions, not
+  existing manual rules or established flows. Generated client/server counters
+  appear as read-only System rows linked to the managed interface; relay edits
+  invalidate measurements until they match the applied configuration again.
+  Deploy the supporting backend before relying on these permits. Routes, server
+  scopes, return paths and external firewall permissions remain operator-owned;
+  a running worker or matching counter alone does not establish lease delivery.
 - Runtime comes from the independently polled `/runtime` dataset, including
   `dhcp_relay` rows and top-level errors. Missing rows are Unknown, not disabled;
   simulated is explicitly not real relay activity. Running is local process/socket
@@ -1621,7 +1705,7 @@ Install trusted relay-capable dnsmasq on the backend host. Configure
 Do not launch a second DHCP service on UDP 67 in that namespace. Operators supply
 upstream routes, server return paths and other firewalls' UDP 67/68 permissions.
 WAN/LAN role does not select upstream links or limit relay enablement.
-There is no DHCP server, DHCPv6, DNS, automatic firewall/NAT/routes, daemon
+There is no DHCP server, DHCPv6, DNS, automatic forwarding/NAT/routes, daemon
 installation or service-identity editor in the controller.
 
 Before release, verify simulator confirmation/rollback/restart/history and run

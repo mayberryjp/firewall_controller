@@ -115,12 +115,12 @@ export function importSando(
   for (const device of devices) {
     try {
       policyHostAddress(device.ip_address);
-      if (config.ipv6_enabled === false && numericAddress(device.ip_address).kind() === "ipv6") throw new Error("IPv6 is disabled");
+      if (config.ipv6_enabled !== true && numericAddress(device.ip_address).kind() === "ipv6") throw new Error("IPv6 is disabled");
       const addresses = [device.ip_address];
       if (device.ip6_address && device.ip6_address !== device.ip_address) {
         policyHostAddress(device.ip6_address);
         if (numericAddress(device.ip6_address).kind() !== "ipv6") throw new Error("ip6_address must be IPv6");
-        if (config.ipv6_enabled === false) throw new Error("IPv6 is disabled");
+        if (config.ipv6_enabled !== true) throw new Error("IPv6 is disabled");
         addresses.push(device.ip6_address);
       }
       const owners = policies.hosts.filter(host => host.addresses.some(address => addresses.includes(address)));
@@ -138,7 +138,7 @@ export function importSando(
   for (const connection of connections ?? []) {
     try {
       const source = policyHostAddress(connection.src_ip);
-      if (config.ipv6_enabled === false && source.kind() === "ipv6") throw new Error("IPv6 is disabled");
+      if (config.ipv6_enabled !== true && source.kind() === "ipv6") throw new Error("IPv6 is disabled");
       const destination = connection.dst_ip === "*" ? undefined : policyHostAddress(connection.dst_ip);
       if (destination && source.kind() !== destination.kind()) throw new Error("source and destination address families differ");
       const protocol = connection.protocol === 6 ? "tcp" : connection.protocol === 17 ? "udp"

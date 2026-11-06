@@ -21,6 +21,7 @@ vi.mock("@/services/netcontrol", async importOriginal => ({
   getFirewallCounters: vi.fn(), getFirewallDenyLog: vi.fn(),
 }));
 const stubs = {
+  RouterLink: { props: ["to"], template: '<a :href="`/interfaces/${encodeURIComponent(to.params.name)}`"><slot /></a>' },
   VTable: { template: "<table><slot /></table>" },
   VBtn: { props: ["disabled", "loading"], template: '<button :disabled="disabled"><slot /></button>' },
   VIcon: true, VChip: { props: ["color", "size"], template: '<span :data-color="color" :data-size="size"><slot /></span>' }, VProgressLinear: true,
@@ -167,6 +168,101 @@ describe("firewall drop history", () => {
 });
 
 describe("firewall rule totals", () => {
+  function relaySettings() {
+    const settings = hostPolicyConfig();
+    settings.interfaces[0]!.dhcp_relay = { enabled: true, servers: ["198.51.100.40"] };
+    settings.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ action: "drop" }] }] };
+    return settings;
+  }
+  it("shows DHCP counters in the existing system section before user drops, with linked interfaces and no editor", async () => {
+    const store = useControllerStore(), settings = relaySettings();
+    store.state.data!.desired = settings;
+    vi.mocked(getFirewallCounters).mockResolvedValue(firewallCounters(settings));
+    wrapper = mount(FirewallRuleTable, { props: { scope: "input", owner: "lab0" }, global: { stubs } });
+    await flushPromises();
+    const rows = wrapper.findAll(".rule-section--system .counter-summary");
+    expect(rows).toHaveLength(2);
+    expect(rows.map(row => row.get("a").text())).toEqual(["LAB0", "LAB0"]);
+    expect(rows[0]!.get("a").attributes("href")).toBe("/interfaces/lab0");
+    expect(rows[0]!.findAll(".counter-value").map(value => value.text())).toEqual(["9007199254740993", "18446744073709551616"]);
+    expect(rows[1]!.findAll(".counter-value")[0]!.text()).toBe("0");
+    for (const row of rows) {
+      expect(row.get(".rule-origin").text()).toBe("System");
+      expect(row.findAll("button, input, select, [data-rule-index]")).toHaveLength(0);
+      expect(row.findAll("td").reduce((total, cell) => total + Number(cell.attributes("colspan") ?? 1), 0))
+        .toBe(wrapper.findAll("thead th").length);
+    }
+    expect(wrapper.get(".rule-section--user").text()).not.toContain("DHCP");
+    expect(store.draft).toBeNull();
+    expect(store.state.data!.desired).toEqual(settings);
+    const manual = cloneConfig(settings).firewall;
+    await wrapper.get('[aria-label="Edit rule 1"]').trigger("click");
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(store.draft!.firewall).toEqual(manual);
+  });
+  it("shows generated DHCP counters without requiring an input policy or inventing them on older backends", async () => {
+    const store = useControllerStore(), settings = relaySettings();
+    delete settings.firewall.input;
+    settings.firewall.allow_all_icmp = false;
+    store.state.data!.desired = settings;
+    vi.mocked(getFirewallCounters).mockResolvedValue(firewallCounters(settings));
+    wrapper = mount(FirewallInputView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    expect(wrapper.text()).toContain("No host input filter configured.");
+    expect(wrapper.findAll("a").map(link => link.text())).toEqual(["LAB0", "LAB0"]);
+    const older = firewallCounters(settings);
+    older.rules = older.rules.filter(row => !row.id.includes("/dhcp_relay/"));
+    vi.mocked(getFirewallCounters).mockResolvedValue(older);
+    document.dispatchEvent(new Event("visibilitychange")); await flushPromises();
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(0);
+    expect(store.draft).toBeNull();
+  });
+  it.each(["success", "failure"] as const)("keeps initial counter loading neutral until %s", async outcome => {
+    const store = useControllerStore(), settings = relaySettings();
+    store.state.data!.desired = settings;
+    let resolve!: (sample: FirewallCounters) => void, reject!: (error: Error) => void;
+    vi.mocked(getFirewallCounters).mockImplementationOnce(() => new Promise((done, fail) => { resolve = done; reject = fail; }));
+    wrapper = mount(FirewallRuleTable, { props: { scope: "input", owner: "lab0" }, global: { stubs } });
+    expect(wrapper.text()).toContain("Loading firewall counters");
+    expect(wrapper.text()).not.toContain("unavailable");
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(0);
+    if (outcome === "success") resolve(firewallCounters(settings));
+    else reject(new ApiFailure("Counter read failed", 503));
+    await flushPromises();
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(outcome === "success" ? 2 : 0);
+    if (outcome === "failure") expect(wrapper.text()).toContain("Counter read failed");
+  });
+  it("invalidates relay draft counters and refreshes after apply and rollback without caching ruleset identities", async () => {
+    const store = useControllerStore(), settings = relaySettings();
+    store.state.data!.desired = settings;
+    vi.mocked(getFirewallCounters).mockResolvedValue(firewallCounters(settings));
+    wrapper = mount(FirewallRuleTable, { props: { scope: "input", owner: "lab0" }, global: { stubs } });
+    await flushPromises();
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    store.draft = cloneConfig(settings);
+    store.draft.interfaces[0]!.dhcp_relay.servers = ["198.51.100.41"];
+    await flushPromises();
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(0);
+    expect(wrapper.findAll(".counter-value").every(value => value.text() === "—")).toBe(true);
+    const pending = transaction();
+    pending.candidate = cloneConfig(store.draft);
+    store.draft = null;
+    const applied = { ...firewallCounters(pending.candidate), transaction_id: pending.id, ruleset_id: "c".repeat(64) };
+    vi.mocked(getFirewallCounters).mockResolvedValue(applied);
+    store.state.data = { ...store.state.data!, active_transaction: pending };
+    await flushPromises();
+    expect(getFirewallCounters).toHaveBeenCalledTimes(2);
+    expect(wrapper.text()).toContain("Sampled (UTC)");
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    const rolledBack = firewallCounters(settings);
+    rolledBack.ruleset_id = "d".repeat(64);
+    vi.mocked(getFirewallCounters).mockResolvedValue(rolledBack);
+    store.state.data = { ...store.state.data!, active_transaction: undefined };
+    await flushPromises();
+    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    expect(getFirewallCounters).toHaveBeenCalledTimes(3);
+    expect(store.state.data!.desired.firewall).toEqual(settings.firewall);
+  });
   function mountRules(scope: "host" | "interface" | "input" = "host", owner = "desk") {
     const store = useControllerStore(); store.state.data!.desired = hostPolicyConfig();
     if (scope === "input") store.state.data!.desired.firewall.input = { policy: "drop", interfaces: [{ interface: "unused0", rules: [] }, { interface: "lab0", rules: [{ action: "accept" }] }] };

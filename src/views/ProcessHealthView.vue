@@ -11,6 +11,7 @@ const { formatTimestamp, timeZone } = useTimestamps();
 type ComponentHealth = PlatformStatus["process_health"]["components"][number];
 const store = useControllerStore();
 const health = computed(() => store.healthStatus);
+const takeover = computed(() => store.runtime.data?.host_takeover);
 const overallLabels: Record<string, string> = { healthy: "Healthy", unhealthy: "Unhealthy", unknown: "Unknown" };
 const overallLabel = computed(() => {
   if (!health.value || health.value.stale) return "Unknown";
@@ -69,7 +70,9 @@ async function restart(): Promise<void> {
   restartSelection.value = null;
 }
 watch(() => store.sessionVersion, () => { restartSelection.value = null; });
-onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
+onMounted(() => {
+  if (store.connected) { void store.refreshPlatformStatus(); void store.refreshRuntime(); }
+});
 </script>
 
 <template>
@@ -78,6 +81,47 @@ onMounted(() => { if (store.connected) void store.refreshPlatformStatus(); });
       :query="store.platform"
       label="Process health"
     />
+    <details
+      v-if="takeover || store.runtime.error"
+      class="mb-4"
+      aria-label="Host takeover"
+    >
+      <summary>Host takeover</summary>
+      <DatasetStatus
+        :query="store.runtime"
+        label="Host takeover"
+      />
+      <template v-if="takeover">
+        <dl class="record-metadata mt-3">
+          <dt>Mode</dt><dd>{{ takeover.mode }}</dd>
+          <dt>Phase</dt><dd>{{ takeover.phase }}</dd>
+        </dl>
+        <p
+          v-if="takeover.error"
+          role="alert"
+          class="text-error my-2"
+        >
+          {{ takeover.error }}
+        </p>
+        <p
+          v-if="takeover.phase !== 'complete'"
+          class="my-2"
+        >
+          Takeover is incomplete. Correct any errors and retry provisioning from the console.
+        </p>
+        <v-table v-if="takeover.items.length">
+          <thead><tr><th>Resource</th><th>Decision</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr
+              v-for="(item, index) in takeover.items"
+              :key="index"
+            >
+              <td>{{ item.resource }}</td><td>{{ item.disposition }}</td><td>{{ item.reason }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </template>
+    </details>
     <div class="health-summary mb-3">
       <strong>Overall health</strong>
       <v-chip

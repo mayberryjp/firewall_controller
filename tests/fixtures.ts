@@ -61,6 +61,7 @@ export function gatewayStatistics(): GatewayStatistics {
 }
 export function config(): Config {
   return {
+    ipv6_enabled: true,
     interfaces: [{ name: "lab0", kind: "dummy", role: "lan", mtu: 1500, up: true, addresses: ["192.0.2.10/24", "2001:db8::10/64"], dhcp_relay: { enabled: false, servers: [] } }],
     routes: [{ enabled: true, destination: "198.51.100.0/24", interface: "lab0", table: 10000, metric: 1 }],
     firewall: { allow_all_icmp: true, policy: "accept", rules: [{ source: "192.0.2.0/24", action: "accept" }], nat: { masquerade: [{ family: "ipv4", out_interface: "lab0" }] } },

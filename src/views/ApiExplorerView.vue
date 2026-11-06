@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { parse, stringify } from "lossless-json";
 import { inspectApiPath } from "@/services/api";
 import { useControllerStore } from "@/stores/controller";
+import { adoptVlanRequestSchema } from "@/types/domain";
+import { decodeJson, encodeJson } from "@/services/json";
+import { isInitialLoad } from "@/services/datasets";
 
 const store = useControllerStore();
 const path = ref("/api/v1/services/vnstat/status");
@@ -11,15 +14,20 @@ const response = ref<{ path: string; status: number; body: string } | null>(null
 const copying = ref(false), copied = ref(false), copyError = ref("");
 const capabilitiesPath = "/api/v1/interface-capabilities";
 const refreshPath = `${capabilitiesPath}/refresh`;
+const adoptionPath = "/api/v1/interfaces/adopt-vlan";
+const adoptionBody = ref('{"name":"","parent":"","id":1}');
 const savedCapabilities = ref<typeof response.value>(null);
 const capabilitiesStale = ref(false), refreshDenied = ref(false);
 const selectedPath = computed(() => path.value.trim().split("?")[0]);
 const refreshingCapabilities = computed(() => selectedPath.value === refreshPath);
 const readingCapabilities = computed(() => selectedPath.value === capabilitiesPath);
+const adoptingVlan = computed(() => selectedPath.value === adoptionPath);
+const adoptionInitializing = computed(() => store.connected && !store.state.error && !store.transactions.error &&
+  (isInitialLoad(store.state) || isInitialLoad(store.transactions)));
 const staleResponse = computed(() => capabilitiesStale.value && response.value !== null && response.value === savedCapabilities.value);
 let controller: AbortController | undefined;
 const endpoints = [
-  "/state", "/runtime", "/platform/status", "/interfaces/discovered", "/gateway-monitors",
+  "/state", "/runtime", "/platform/status", "/interfaces/discovered", "/interfaces/adopt-vlan", "/gateway-monitors",
   "/interface-capabilities", "/interface-capabilities/refresh",
   "/diagnostics/path-tests",
   "/statistics", "/statistics/host", "/statistics/link-diagnostics", "/statistics/connections", "/statistics/performance",
@@ -31,7 +39,8 @@ const endpoints = [
   "/transactions", "/revisions", "/revisions/latest", "/system/upgrade", "/system/timezones",
 ].map(endpoint => `/api/v1${endpoint}`).sort().map(value => ({
   value,
-  title: value === capabilitiesPath ? `${value} (Read saved interface capabilities)` :
+  title: value === adoptionPath ? `${value} (POST: Adopt existing VLAN)` :
+    value === capabilitiesPath ? `${value} (Read saved interface capabilities)` :
     value === refreshPath ? `${value} (Scans hardware and saves)` : value,
 }));
 const formattedBody = computed(() => {
@@ -75,6 +84,7 @@ function reset(): void {
 }
 watch(() => store.sessionVersion, () => {
   reset(); savedCapabilities.value = null; capabilitiesStale.value = false; refreshDenied.value = false;
+  adoptionBody.value = '{"name":"","parent":"","id":1}';
 }, { flush: "sync" });
 onBeforeUnmount(reset);
 
@@ -82,7 +92,16 @@ async function send(): Promise<void> {
   if (!store.connected || loading.value) return;
   const requestPath = path.value.trim();
   const isRefresh = refreshingCapabilities.value;
+  const isAdoption = adoptingVlan.value;
   const isCapabilities = isRefresh || readingCapabilities.value;
+  if (isAdoption && requestPath !== adoptionPath) {
+    error.value = "VLAN adoption accepts no query parameters.";
+    return;
+  }
+  if (isAdoption && store.vlanAdoptionBlockedReason) {
+    error.value = store.vlanAdoptionBlockedReason;
+    return;
+  }
   if (isRefresh && store.pathTestWriteBlockedReason) {
     error.value = store.pathTestWriteBlockedReason;
     return;
@@ -95,6 +114,12 @@ async function send(): Promise<void> {
   loading.value = true; error.value = "";
   response.value = isCapabilities ? savedCapabilities.value : null;
   try {
+    if (isAdoption) {
+      const input = adoptVlanRequestSchema.parse(decodeJson(adoptionBody.value));
+      const result = await store.adoptVlan(input);
+      if (controller === active && result) response.value = { path: requestPath, status: 200, body: encodeJson(result) };
+      return;
+    }
     const result = await inspectApiPath(requestPath, active.signal);
     if (controller !== active) return;
     if (isCapabilities && result.status === 403) refreshDenied.value = true;
@@ -143,18 +168,50 @@ async function send(): Promise<void> {
         type="submit"
         prepend-icon="mdi-play"
         :loading="loading"
-        :disabled="!store.connected || loading || !path || (refreshingCapabilities && (refreshDenied || Boolean(store.pathTestWriteBlockedReason)))"
+        :disabled="!store.connected || loading || !path || (adoptingVlan && Boolean(store.vlanAdoptionBlockedReason)) || (refreshingCapabilities && (refreshDenied || Boolean(store.pathTestWriteBlockedReason)))"
       >
-        {{ refreshingCapabilities ? "GET: Scan & save" : "GET" }}
+        {{ adoptingVlan ? "POST: Adopt VLAN" : refreshingCapabilities ? "GET: Scan & save" : "GET" }}
       </v-btn>
       <v-btn
-        v-if="loading && !refreshingCapabilities"
+        v-if="loading && !refreshingCapabilities && !adoptingVlan"
         icon="mdi-stop"
         title="Cancel request"
         aria-label="Cancel request"
         variant="text"
         @click="reset"
       />
+      <template v-if="adoptingVlan">
+        <p class="adoption-body">
+          Explicitly imports an existing unmanaged VLAN using interfaces.write and transactions.write.
+          The parent must be managed Ethernet. This changes ownership immediately, without a confirmation timer;
+          supported live settings are preserved and the imported role is unassigned.
+          Assign LAN role, addresses, firewall or NAT afterward through SAVE and the confirmed configuration workflow.
+          Interrupted ownership recovery may need backend recovery. This POST is never sent on selection or automatically retried.
+        </p>
+        <v-textarea
+          v-model="adoptionBody"
+          label="VLAN adoption JSON"
+          aria-label="VLAN adoption JSON"
+          :disabled="loading || store.vlanAdoptionPending"
+          rows="3"
+          variant="outlined"
+          class="adoption-body"
+        />
+        <p
+          v-if="adoptionInitializing"
+          class="adoption-body"
+          role="status"
+        >
+          Loading configuration and transaction state...
+        </p>
+        <p
+          v-else-if="store.vlanAdoptionBlockedReason"
+          class="adoption-body"
+          role="status"
+        >
+          {{ store.vlanAdoptionBlockedReason }}
+        </p>
+      </template>
     </form>
     <details class="mt-3">
       <summary>Paired path-test API methods</summary>
@@ -242,6 +299,7 @@ async function send(): Promise<void> {
 <style scoped>
 .api-request { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .api-path { flex: 1 1 320px; min-width: 0; }
+.adoption-body { flex: 1 1 100%; min-width: 0; }
 .api-response-heading { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; overflow-wrap: anywhere; }
 .api-response { margin-top: 12px; padding: 16px; max-height: 70vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 4px; background: rgb(var(--v-theme-surface)); }
 </style>

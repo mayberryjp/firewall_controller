@@ -29,7 +29,7 @@ export function normalize(config: Config): Config {
   if (result.kernel && !Object.keys(result.kernel.offloads ?? {}).length) delete result.kernel.offloads;
   if (result.kernel?.rfs === null) delete result.kernel.rfs;
   if (result.sando && stableJson(result.sando) === stableJson(sandoSchema.parse({}))) delete result.sando;
-  if (result.ipv6_enabled === true) delete result.ipv6_enabled;
+  if (result.ipv6_enabled === false) delete result.ipv6_enabled;
   if (result.mqtt && stableJson(result.mqtt) === stableJson(mqttSchema.parse({}))) delete result.mqtt;
   if (!result.dynamic_dns?.length) delete result.dynamic_dns;
   if (result.blackhole && stableJson(result.blackhole) === stableJson(blackholeSchema.parse({}))) delete result.blackhole;
@@ -149,9 +149,9 @@ export interface Difference {
 export function differences(before: Config, after: Config): Difference[] {
   const old = normalize(before), next = normalize(after);
   const result: Difference[] = [];
-  if ((old.ipv6_enabled !== false) !== (next.ipv6_enabled !== false)) result.push({
+  if ((old.ipv6_enabled === true) !== (next.ipv6_enabled === true)) result.push({
     area: "ipv6", identity: "Enable IPv6", kind: "modified",
-    before: old.ipv6_enabled !== false, after: next.ipv6_enabled !== false,
+    before: old.ipv6_enabled === true, after: next.ipv6_enabled === true,
   });
   function named<T>(area: string, a: T[], b: T[], key: (value: T) => string): void {
     const previous = new Map(a.map((value) => [key(value), value]));
@@ -255,7 +255,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     if (!doc.dns) delete doc.dns;
     if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
   } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel", "bgp", "udp_broadcast_relay", "sando"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
-  else if (change.area === "ipv6") doc.ipv6_enabled = change.after === false ? false : undefined;
+  else if (change.area === "ipv6") doc.ipv6_enabled = change.after === true;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
   else if (change.area === "firewall-policies") doc.firewall.policies = change.after as Config["firewall"]["policies"];
@@ -393,7 +393,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     });
   }
   const issue = (path: string, message: string, page: string) => issues.push({ path, message, page });
-  if (config.ipv6_enabled === false) {
+  if (config.ipv6_enabled !== true) {
     for (const path of ipv6Conflicts(config)) issue(path, "IPv6 is disabled globally. Enable IPv6 in General settings or remove this setting.", "/settings/general");
   }
   function check(path: string, page: string, action: () => void): void {
@@ -684,14 +684,14 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       issue(`${path}.gateway`, "DHCP gateways require DHCPv4 on the selected managed Ethernet interface", page);
     }
     if (route.table !== 254) bound(route.table, 10000, 19999, `${path}.table`, page);
-    bound(route.metric, 1, 2147483647, `${path}.metric`, page);
+    bound(route.metric, 0, 2147483647, `${path}.metric`, page);
     const key = `${route.table}/${route.destination}/${route.metric}`;
     if (routeIDs.has(key)) issue(path, "Duplicate table/destination/metric", page);
     routeIDs.add(key);
   });
   let legacyExpanded = 0;
   config.firewall.rules.forEach((rule, index) => check(`firewall.rules.${index}`, "/firewall", () => {
-    const protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled !== false);
+    const protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled === true);
     const ports = parseFirewallPorts(rule.destination_ports);
     if (ports.length && !supportsFirewallPorts(rule.protocol)) throw new Error("Destination ports require TCP or UDP");
     legacyExpanded += Math.max(1, ports.length);
@@ -748,7 +748,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         const rulePath = `${path}.rules.${ruleIndex}`, ports = rule.destination_ports ?? [];
         expanded += Math.max(1, ports.length);
         let protocolFamily: "ipv4" | "ipv6" | undefined;
-        check(`${rulePath}.protocol`, page, () => { protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled !== false); });
+        check(`${rulePath}.protocol`, page, () => { protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled === true); });
         if (rule.destination) check(`${rulePath}.destination`, page, () => {
           const destination = prefix(rule.destination!, true);
           if (protocolFamily && destination.family !== protocolFamily) throw new Error("Destination must match the selected protocol's address family");
@@ -826,7 +826,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     const validateRules = (rules: NonNullable<Config["firewall"]["policies"]>["hosts"][number]["rules"], path: string, sources: string[]) => {
       if (rules.length > 64) issue(path, "At most 64 ordered rules per host/interface", page);
       rules.forEach((rule, index) => check(`${path}.${index}`, page, () => {
-        const protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled !== false);
+        const protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled === true);
         if (rule.destination && rule.destination_host) throw new Error("Choose a destination host or network, not both");
         if (rule.out_interface && (!validName(rule.out_interface) || !interfaces.has(rule.out_interface))) throw new Error("Select a managed egress interface");
         const ports = rule.destination_ports ?? [];

@@ -9,6 +9,7 @@ import type { Config } from "@/types/domain";
 import type { Field } from "@/types/forms";
 import { useFirewallCounters } from "@/composables/useFirewallCounters";
 import FirewallCounterCells from "@/components/feature/FirewallCounterCells.vue";
+import FirewallCounterRows from "@/components/feature/FirewallCounterRows.vue";
 import { firewallSystemRules, type FirewallSystemRule } from "@/services/firewallTelemetry";
 import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
 import { manualRuleOwnership } from "@/services/ruleOwnership";
@@ -99,7 +100,8 @@ const sections = computed(() => {
       ...configured.filter(item => item.rule.order === "Default"),
       ...system.filter(item => item.rule.order === "Default"),
     ] },
-  ].filter(section => section.rows.length || section.key === "user");
+  ].filter(section => section.rows.length || section.key === "user" ||
+    (section.key === "system" && props.scope === "input" && counters.relaySummaries.value.length));
 });
 function display(rule: Rule, order: string, path: string, ingress = "Any"): FirewallSystemRule {
   return {
@@ -404,6 +406,12 @@ function move(from: number, to: number): void {
             </td>
           </tr>
         </template>
+        <FirewallCounterRows
+          v-if="section.key === 'system' && scope === 'input'"
+          :rows="counters.relaySummaries.value"
+          :columns="columns.length + 4"
+          origin-column
+        />
         <tr v-if="section.key === 'user' && !section.rows.length && editing === null">
           <td :colspan="columns.length + 4">
             {{ scope === 'host' ? 'No explicit rules for this host.' : 'No explicit ingress rules for this interface.' }}

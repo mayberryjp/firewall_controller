@@ -106,7 +106,7 @@ export function validateMDNS(config: Config): ValidationIssue[] {
     }
   }
   if (settings.enabled) {
-    if (!settings.ipv4 && !(settings.ipv6 && config.ipv6_enabled !== false)) {
+    if (!settings.ipv4 && !(settings.ipv6 && config.ipv6_enabled === true)) {
       issue("ipv4", "Enable at least one effective address family; global IPv6 off suppresses IPv6.");
     }
     if (!settings.reflection.enabled && !publishing.enabled) issue("enabled", "Enable reflection or publishing before enabling mDNS.");

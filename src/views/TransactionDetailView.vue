@@ -106,7 +106,7 @@ onUnmounted(() => { disposed = true; generation++; });
           {{ current.error }}
         </v-alert>
         <TransactionActions
-          v-if="['pending_confirmation', 'recovery_failed'].includes(current.status)"
+          v-if="current.confirmation_deadline !== null && ['pending_confirmation', 'recovery_failed'].includes(current.status)"
           :transaction="current"
           :show-details="false"
         />

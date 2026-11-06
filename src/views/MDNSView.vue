@@ -60,7 +60,7 @@ const usage = computed(() => form.value.reflection.filters.map(value => {
     const filter = normalizeMDNSFilter(value);
     const settings = applied?.mdns;
     const equalNames = (left: string[], right: string[]) => stableJson([...left].sort()) === stableJson([...right].sort());
-    const families = settings ? [settings.ipv4 ? "ipv4" : "", settings.ipv6 && applied?.ipv6_enabled !== false ? "ipv6" : ""].filter(Boolean) : [];
+    const families = settings ? [settings.ipv4 ? "ipv4" : "", settings.ipv6 && applied?.ipv6_enabled === true ? "ipv6" : ""].filter(Boolean) : [];
     const appliedFilters = settings?.reflection.filters.map(normalizeMDNSFilter) ?? [];
     if (!applied || !settings?.enabled || !settings.reflection.enabled ||
       !equalNames(form.value.interfaces, mdnsInterfaces(applied)) ||
@@ -89,9 +89,9 @@ function stage(): void {
       enabled: filters.length > 0,
       interface_mode: "allow",
       ipv4: true,
-      ipv6: candidate.ipv6_enabled !== false,
+      ipv6: candidate.ipv6_enabled === true,
       reflection: { enabled: true, filters },
-      publishing: { ...form.value.publishing, enabled: false, a_on_ipv6: candidate.ipv6_enabled !== false && form.value.publishing.a_on_ipv6 },
+      publishing: { ...form.value.publishing, enabled: false, a_on_ipv6: candidate.ipv6_enabled === true && form.value.publishing.a_on_ipv6 },
     });
     normalizeMDNS(candidate.mdns);
     const issues = validateConfig(candidate).filter(issue => issue.path.startsWith("mdns."));

@@ -12,6 +12,7 @@ vi.mock("@/services/netcontrol", () => ({
   restoreRevision: vi.fn(), reconcileServices: vi.fn(),
   getSystemUpgrade: vi.fn(), startSystemUpgrade: vi.fn(), checkSoftwareRelease: vi.fn(),
   getPlatformStatus: vi.fn(), getVnStatReporting: vi.fn(),
+  adoptVlan: vi.fn(),
 }));
 beforeEach(() => {
   setActivePinia(createPinia()); vi.resetAllMocks();
@@ -29,6 +30,106 @@ async function connected() {
   await store.refresh();
   return store;
 }
+describe("console provisioning transactions", () => {
+  it.each(["applying_local", "recovery_failed"])("recognizes %s and preserves drafts while blocking conflicting operations", async status => {
+    const store = await connected(), draft = config();
+    draft.routes[0]!.metric = 0; store.stage(draft);
+    const local = { ...transaction(status), confirmation_deadline: null };
+    store.transactions.data = { [local.id]: local };
+    expect(store.incompatible).toBe(false);
+    expect(store.canApply).toBe(false);
+    expect(store.readOnlyReason).toContain("console");
+    await expect(store.reconcile()).rejects.toThrow("safety state");
+    expect(api.reconcileServices).not.toHaveBeenCalled();
+    expect(store.draft).toEqual(draft);
+    store.transactions.data = { [local.id]: { ...local, status: "committed" } };
+    expect(store.readOnlyReason).toBe("");
+    expect(store.canApply).toBe(true);
+    store.$dispose();
+  });
+  it.each(["confirm", "rollback"] as const)("never sends remote %s for a freshly read null-deadline transaction", async action => {
+    const store = await connected();
+    vi.mocked(api.getTransaction).mockResolvedValue({ ...transaction("pending_confirmation"), confirmation_deadline: null });
+    await expect(store.lifecycle("tx-test", action)).rejects.toThrow("console recovery");
+    expect(api.confirmTransaction).not.toHaveBeenCalled();
+    expect(api.rollbackTransaction).not.toHaveBeenCalled();
+    store.$dispose();
+  });
+});
+describe("VLAN ownership adoption", () => {
+  const input = { name: "vlan30", parent: "eth0", id: 30 };
+  const result = () => ({
+    revision: "2026.11.06.9", interface: {
+      ...config().interfaces[0]!, name: input.name, kind: "vlan" as const, role: "unassigned" as const,
+      vlan: { parent: input.parent, id: input.id }, addresses: ["192.0.2.30/24"], mtu: 1450,
+    },
+  });
+  it("verifies saved state and uses its revision for the next draft without submitting a transaction", async () => {
+    const store = await connected(), adopted = result();
+    vi.mocked(api.adoptVlan).mockResolvedValue(adopted);
+    const saved = state();
+    saved.revision = adopted.revision; saved.desired.interfaces.push(adopted.interface);
+    vi.mocked(api.getState).mockResolvedValue(saved);
+    await expect(store.adoptVlan(input)).resolves.toEqual(adopted);
+    expect(store.state.data).toEqual(saved); expect(store.draft).toBeNull();
+    store.stage(saved.desired);
+    expect(store.baseRevision).toBe(adopted.revision);
+    expect(api.adoptVlan).toHaveBeenCalledExactlyOnceWith(input, expect.any(AbortSignal));
+    expect(api.submitPackage).not.toHaveBeenCalled();
+    store.$dispose();
+  });
+  it.each(["draft", "editor", "transaction", "stale", "drift", "path-test"] as const)("blocks adoption during %s", async condition => {
+    const store = await connected();
+    if (condition === "draft") store.stage(config());
+    else if (condition === "editor") store.editorDirty = true;
+    else if (condition === "transaction") store.transactions.data = { active: transaction() };
+    else if (condition === "stale") store.state.stale = true;
+    else if (condition === "drift") store.state.data = { ...store.state.data!, drift: true };
+    else store.pathTestUncertain = true;
+    await expect(store.adoptVlan(input)).rejects.toThrow();
+    expect(api.adoptVlan).not.toHaveBeenCalled();
+    store.$dispose();
+  });
+  it("blocks concurrent writes and duplicate submits until saved-state verification finishes", async () => {
+    const store = await connected();
+    let reject!: (reason: Error) => void;
+    vi.mocked(api.adoptVlan).mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    const adoption = store.adoptVlan(input);
+    expect(store.vlanAdoptionPending).toBe(true);
+    expect(() => store.stage(config())).toThrow("adoption");
+    await expect(store.adoptVlan(input)).rejects.toThrow("adoption");
+    expect(api.adoptVlan).toHaveBeenCalledTimes(1);
+    reject(new ApiFailure("Managed parent required", 422));
+    await expect(adoption).rejects.toThrow("Managed parent required");
+    expect(store.vlanAdoptionPending).toBe(false);
+    expect(store.vlanAdoptionBlockedReason).toBe("");
+    store.$dispose();
+  });
+  it.each(["transport", "refresh", "mismatch"] as const)("requires recovery after %s without repeating the mutation", async condition => {
+    const store = await connected();
+    if (condition === "transport") vi.mocked(api.adoptVlan).mockRejectedValue(new ApiFailure("Connection lost", undefined, undefined, true));
+    else {
+      vi.mocked(api.adoptVlan).mockResolvedValue(result());
+      if (condition === "refresh") vi.mocked(api.getState).mockRejectedValue(new Error("State refresh failed"));
+    }
+    await expect(store.adoptVlan(input)).rejects.toThrow(condition === "transport" ? "Connection lost" : "saved state");
+    expect(store.readOnlyReason).toContain("recovery");
+    await expect(store.adoptVlan(input)).rejects.toThrow("recovery");
+    expect(api.adoptVlan).toHaveBeenCalledTimes(1);
+    store.$dispose();
+  });
+  it("does not apply an old-session response to another connection", async () => {
+    const store = await connected();
+    let resolve!: (value: ReturnType<typeof result>) => void;
+    vi.mocked(api.adoptVlan).mockReturnValue(new Promise(done => { resolve = done; }));
+    const adoption = store.adoptVlan(input);
+    store.disconnect();
+    resolve(result());
+    await expect(adoption).resolves.toBeUndefined();
+    expect(store.state.data).toBeNull(); expect(store.vlanAdoptionPending).toBe(false);
+    store.$dispose();
+  });
+});
 describe("manual software release checks", () => {
   async function ready(repository: string | null = "operator/appliance") {
     const snapshot = state();

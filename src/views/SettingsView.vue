@@ -7,7 +7,7 @@ import { getTimezones } from "@/services/netcontrol";
 const store = useControllerStore();
 const selectedConfig = computed(() => store.draft ?? store.state.data?.desired);
 const allowICMP = ref(true);
-const enableIPv6 = ref(true);
+const enableIPv6 = ref(false);
 const overrideDhcpDns = ref(true);
 const dnsOverrideChanged = ref(false);
 const dnsOverrideMixed = computed(() => {
@@ -25,7 +25,7 @@ const blocked = computed(() => Boolean(store.readOnlyReason) || !selectedConfig.
 watch(() => selectedConfig.value?.firewall.allow_all_icmp, value => {
   if (value !== undefined) allowICMP.value = value;
 }, { immediate: true });
-watch(() => selectedConfig.value?.ipv6_enabled, value => { enableIPv6.value = value !== false; }, { immediate: true });
+watch(() => selectedConfig.value?.ipv6_enabled, value => { enableIPv6.value = value === true; }, { immediate: true });
 watch(selectedConfig, value => {
   overrideDhcpDns.value = value?.interfaces.every(link => value.dns?.[link.name]?.override_dhcp_dns !== false) ?? true;
   dnsOverrideChanged.value = false;
@@ -50,7 +50,7 @@ function stage(): void {
   }
   try {
     const candidate = cloneConfig(selectedConfig.value);
-    if (candidate.ipv6_enabled !== undefined || !enableIPv6.value) candidate.ipv6_enabled = enableIPv6.value;
+    candidate.ipv6_enabled = enableIPv6.value;
     if (!enableIPv6.value) {
       const conflicts = ipv6Conflicts(candidate);
       if (conflicts.length) throw new Error(`Remove IPv6 settings before disabling IPv6: ${conflicts.join(", ")}.`);

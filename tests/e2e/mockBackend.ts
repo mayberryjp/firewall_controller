@@ -42,7 +42,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       effective_interfaces: settings?.enabled ? mdnsInterfaces(activeConfig()) : [],
       effective_families: settings?.enabled ? [
         ...(settings.ipv4 ? ["ipv4"] : []),
-        ...(settings.ipv6 && activeConfig().ipv6_enabled !== false ? ["ipv6"] : []),
+        ...(settings.ipv6 && activeConfig().ipv6_enabled === true ? ["ipv6"] : []),
       ] : [],
       reflection_enabled: Boolean(settings?.enabled && settings.reflection.enabled),
       publishing_enabled: Boolean(settings?.enabled && settings.publishing.enabled),

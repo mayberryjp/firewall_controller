@@ -22,7 +22,7 @@ let timer: ReturnType<typeof setTimeout> | undefined, generation = 0, failures =
 function stopReading(): void { generation++; clearTimeout(timer); }
 function scheduleRead(): void {
   clearTimeout(timer);
-  if (!open.value || !store.connected || !current.value || !["applying", "pending_confirmation", "rolling_back"].includes(current.value.status)) return;
+  if (!open.value || !store.connected || !current.value || !["applying", "applying_local", "pending_confirmation", "rolling_back"].includes(current.value.status)) return;
   const version = generation, id = current.value.id;
   timer = setTimeout(async () => {
     if (version !== generation) return;

@@ -15,6 +15,7 @@ test("Overview enlarges only the diagram to 140% at normal browser zoom", async 
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   const map = page.getByRole("region", { name: "Overview", exact: true });
+  await expect(map.locator(".appliance-name")).toHaveText("edge-fw-01 (aaaaaaaa)");
   await expect(map.locator(".flow-node")).toHaveCount(2);
   await expect(map.locator(".flow-board")).toHaveCSS("zoom", "1.4");
   await expect(page.locator(".app-header")).toHaveCSS("zoom", "1");

@@ -1019,8 +1019,8 @@ describe("October 17 frontend workflows", () => {
     wrapper.unmount();
   });
   it.each([
-    { component: RoutesView, path: "/routes", section: "routes" as const, identity: "203.0.113.0/24", invalid: "metric", valid: 10,
-      values: { destination: "203.0.113.0/24", interface: "lab0", table: 10000, metric: 10 } },
+    { component: RoutesView, path: "/routes", section: "routes" as const, identity: "203.0.113.0/24", invalid: "metric", valid: 0,
+      values: { destination: "203.0.113.0/24", interface: "lab0", table: 10000, metric: 0 } },
     { component: GatewayMonitorsView, path: "/gateway-monitors", section: "gateway_monitors" as const, identity: "backup", invalid: "probe_interval_ms", valid: 1000,
       values: { name: "backup", interface: "lab0", target: "198.51.100.1", routing_table: 10001 } },
   ])("adds and validates $section inline while protecting dirty input", async ({ component, path, section, identity, invalid, valid, values }) => {
@@ -1377,7 +1377,7 @@ describe("October 17 frontend workflows", () => {
     const wrapper = await render(InterfaceInventory, "/loopbacks", { loopbacks: true });
     try {
       const cells = wrapper.get("tbody tr").findAll("td").map(cellValue);
-      expect(cells).toEqual(["KERNEL0", "Loopback", up ? "Up" : "Down", "65536", addresses.join(", ") || "None", "Static", "Read-only"]);
+      expect(cells).toEqual(["KERNEL0", "Loopback", up ? "Up" : "Down", "65536", addresses.filter(address => !address.includes(":")).join(", ") || "None", "Static", "Read-only"]);
       expect(wrapper.find("tbody button, tbody select, tbody input").exists()).toBe(false);
       expect(store.draft).toBeNull();
       expect(submit).not.toHaveBeenCalled();
@@ -2465,7 +2465,8 @@ describe("October 17 frontend workflows", () => {
     store.runtime.data = null; store.runtime.error = "Runtime denied";
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([{ name: "lo", kind: "loopback", index: 1, mac: null, mtu: 65536, up: true, ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] }]);
     const wrapper = await render(LoopbacksView, "/loopbacks");
-    expect(wrapper.find("tbody").text()).toContain("::1/128");
+    expect(wrapper.find("tbody").text()).toContain("127.0.0.1/8");
+    expect(wrapper.find("tbody").text()).not.toContain("::1/128");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
     vi.mocked(api.getDiscoveredInterfaces).mockRejectedValue(new Error("Discovery failed"));
     await wrapper.getComponent(InterfaceInventory).vm.refresh(); await flushPromises();
@@ -2700,6 +2701,27 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).not.toContain(store.readOnlyReason);
     wrapper.unmount();
   });
+  it("defaults omitted IPv6 off and stages an explicit enable without deleting imported configuration", async () => {
+    const store = useControllerStore(), initial = config();
+    delete initial.ipv6_enabled;
+    initial.interfaces[0]!.addresses = ["192.0.2.10/24"];
+    initial.routes[0]!.metric = 0;
+    initial.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ action: "drop" }] }] };
+    initial.interfaces[0]!.metadata = { display_name: "Imported LAN", description: "Preserved" };
+    store.state.data = { ...state(), desired: initial };
+    const wrapper = await render(SettingsView, "/settings/general");
+    const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-ipv6")!;
+    expect(toggle.props("modelValue")).toBe(false);
+    expect(store.ipv6Enabled).toBe(false);
+    toggle.vm.$emit("update:modelValue", true);
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(store.draft!.ipv6_enabled).toBe(true);
+    expect(store.draft!.interfaces).toEqual(initial.interfaces);
+    expect(store.draft!.routes).toEqual(initial.routes);
+    expect(store.draft!.firewall).toEqual(initial.firewall);
+    expect(store.state.data.desired.ipv6_enabled).toBeUndefined();
+    wrapper.unmount();
+  });
   it("saves the global IPv6 setting above ICMP and preserves other draft settings", async () => {
     const store = useControllerStore(), initial = config();
     initial.interfaces.forEach(link => { link.addresses = link.addresses.filter(address => !address.includes(":")); });
@@ -2716,7 +2738,7 @@ describe("October 17 frontend workflows", () => {
     await wrapper.get("form").trigger("submit");
     expect(store.draft?.ipv6_enabled).toBe(false); expect(store.ipv6Enabled).toBe(false);
     expect(store.draft?.routes[0]?.metric).toBe(42);
-    expect(store.state.data!.desired.ipv6_enabled).toBeUndefined();
+    expect(store.state.data!.desired.ipv6_enabled).toBe(true);
     expect(submit).not.toHaveBeenCalled();
     toggles[0]!.vm.$emit("update:modelValue", true);
     await wrapper.get("form").trigger("submit");
@@ -2937,7 +2959,12 @@ describe("October 17 frontend workflows", () => {
     await flushPromises();
     expect(store.draft?.interfaces[0]).toEqual({ ...original.interfaces[0], dhcp_relay: { enabled: true, servers: ["198.51.100.10", "198.51.100.20"] } });
     expect(store.draft?.routes).toEqual(original.routes);
+    expect(store.draft?.firewall).toEqual(original.firewall);
     expect(store.state.data!.desired.interfaces[0]!.dhcp_relay).toEqual(original.interfaces[0]!.dhcp_relay);
+    wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("aria-label") === "Relay enabled for lab0")!.vm.$emit("update:modelValue", false);
+    await flushPromises();
+    expect(store.draft?.interfaces[0]!.dhcp_relay).toEqual({ enabled: false, servers: ["198.51.100.10", "198.51.100.20"] });
+    expect(store.draft?.firewall).toEqual(original.firewall);
     expect(submit).not.toHaveBeenCalled();
   });
   it("preserves relay settings when editing interface properties", async () => {

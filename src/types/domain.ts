@@ -112,6 +112,17 @@ export const interfaceSchema = z.discriminatedUnion("kind", [
   z.object({ ...interfaceFields, kind: z.literal("wireguard"),
     wireguard: z.object({ key_ref: z.string(), listen_port: integer, peers: list(peerSchema) }).strict() }).strict(),
 ]);
+const adoptionNameSchema = z.string().regex(/^[A-Za-z0-9_.-]{1,15}$/, "Use 1..15 ASCII letters, digits, underscores, hyphens or dots")
+  .refine(name => !["lo", ".", ".."].includes(name), "This interface name cannot be adopted");
+export const adoptVlanRequestSchema = z.object({
+  name: adoptionNameSchema, parent: adoptionNameSchema, id: integer.min(1).max(4094),
+}).strict().refine(value => value.name !== value.parent, { path: ["parent"], message: "VLAN and parent names must differ" });
+export const adoptVlanResponseSchema = z.object({
+  revision: revisionSchema,
+  interface: interfaceSchema.refine(link => link.kind === "vlan" && link.role === "unassigned", "Adoption must return an unassigned VLAN"),
+}).strict();
+export type AdoptVlanRequest = z.infer<typeof adoptVlanRequestSchema>;
+export type AdoptVlanResponse = z.infer<typeof adoptVlanResponseSchema>;
 export const discoveredInterfacesSchema = z.array(z.object({
   name: z.string(), kind: z.string(), index: integer.nullable(), mac: z.string().nullable(),
   mtu: integer, up: z.boolean(), addresses: z.array(z.string()), ownership: z.enum(["managed", "unmanaged", "loopback"]),
@@ -321,7 +332,7 @@ export const configSchema = z.object({
 export const transactionSchema = z.object({
   id: z.string(), actor: z.string(), status: z.string(),
   base_revision: revisionSchema, committed_revision: revisionSchema.nullable().default(null), candidate: configSchema, previous: configSchema,
-  confirmation_deadline: timestamp, error: optionalText, description: optionalText,
+  confirmation_deadline: timestamp.nullable(), error: optionalText, description: optionalText,
   submitted_at: timestamp.nullable(), committed_at: timestamp.nullable(),
   committed_by: optionalText, restored_from_revision: revisionSchema.optional(),
   kernel_before: kernelSchema.optional(), kernel_after: kernelSchema.optional(),
@@ -508,6 +519,13 @@ export const runtimeSchema = z.preprocess(value => {
   }
   return value;
 }, z.object({
+  host_takeover: z.object({
+    mode: z.literal("console"), phase: z.enum(["captured", "applying", "owned", "failed", "complete"]),
+    error: z.string(), connectivity_confirmation_required: z.boolean(),
+    items: z.array(z.object({
+      resource: z.string(), disposition: z.enum(["imported", "disabled"]), reason: z.string(),
+    }).strict()),
+  }).strict().nullable().optional(),
   bgp: bgpStatusSchema.optional(),
   ...platformFields,
   capabilities: z.object({
@@ -647,6 +665,6 @@ export interface PackageRequest {
   config: Config;
   description?: string;
 }
-export const knownStatuses = ["applying", "pending_confirmation", "committed", "rolling_back", "rolled_back", "recovery_failed"];
+export const knownStatuses = ["applying", "applying_local", "pending_confirmation", "committed", "rolling_back", "rolled_back", "recovery_failed"];
 export const terminal = (transaction: Transaction): boolean =>
   transaction.status === "committed" || transaction.status === "rolled_back";
