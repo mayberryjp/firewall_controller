@@ -3,7 +3,7 @@ import { ref } from "vue";
 import { z } from "zod";
 import { overviewLayoutSchema, type OverviewLayout } from "./overviewLayout";
 
-const configuredBase = import.meta.env.VITE_REGISTRY_API_URL;
+const configuredBase = window.__MODAN_CONFIG__?.registryApiUrl || import.meta.env.VITE_REGISTRY_API_URL;
 const baseUrl = configuredBase ? new URL(configuredBase) : new URL(window.location.origin);
 if (!configuredBase) {
   baseUrl.port = "3031";

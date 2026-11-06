@@ -1900,6 +1900,7 @@ simulated states. There is no offline mutation queue.
 | `VITE_DEPLOYMENT_LABEL` | `Unknown` | Operator-supplied lab/deployment label |
 | `VITE_BACKEND_MODE` | `Unknown` | Operator-supplied mode label, not API-discovered capability |
 | `VITE_REGISTRY_API_URL` | Same host, port `3031`, path `/api/v1` | Public central-registry URL compiled into the frontend; no secrets |
+| `REGISTRY_API_URL` | Empty (use build-time setting or same-host default) | Public registry URL supplied to the frontend container at startup, ending in `/api/v1`; overrides `VITE_REGISTRY_API_URL`, no secrets |
 | `BUILD_SOURCEMAP` | `false` | Explicit opt-in build sourcemaps |
 | `REGISTRY_ADMIN_PASSWORD` | Required | Registry administrator password (at least 16 characters) |
 | `REGISTRY_ENCRYPTION_KEY` | Required | Fernet key used to encrypt stored device credentials |
@@ -1912,7 +1913,25 @@ For the published-image Compose setup, only `REGISTRY_ADMIN_PASSWORD` and
 `REGISTRY_ENCRYPTION_KEY` are unconditionally required. Set `REGISTRY_UI_ORIGINS`
 to the exact public frontend origin when not using the localhost defaults.
 The images already define the registry database path and listen port; no frontend
-runtime environment variables are required.
+runtime environment variables are required for same-host defaults. To select a
+registry IP without rebuilding the frontend, set the frontend service environment
+in Compose (or set `REGISTRY_API_URL` for the supplied Compose interpolation):
+
+```yaml
+services:
+  frontend:
+    environment:
+      REGISTRY_API_URL: "http://192.168.1.50:3031/api/v1"
+  registry:
+    environment:
+      REGISTRY_UI_ORIGINS: "http://192.168.1.50:3030"
+```
+
+These are public addresses reachable from users' browsers, not Docker-internal
+service names or container IPs. Recreate the frontend container after changing
+the URL; no image rebuild is needed. The container writes an uncached
+`runtime-config.js` at startup, loaded before the application. Empty runtime
+configuration preserves the existing build-time setting and same-host fallback.
 The fetch adapter refuses controller redirects rather than forwarding
 Authorization elsewhere; normal API calls omit cookies and set `cache: no-store`. Session login, restore, and sign-out include the registry cookie. Error
 text redacts the registry session token.
@@ -1969,8 +1988,9 @@ controller verifies certificates when connecting to HTTPS firewall APIs.
 The supplied Compose stack uses HTTP internally and omits built-in registry TLS
 settings and certificate mounts. Terminate HTTPS at an external reverse proxy
 for network deployments; do not expose the HTTP ports directly to untrusted networks. Set
-`VITE_REGISTRY_API_URL` at frontend build time if the registry is not reachable
-at the website hostname on port 3031. The container CSP permits registry
+`REGISTRY_API_URL` in the frontend's Compose environment if the registry is not
+reachable at the website hostname on port 3031; `VITE_REGISTRY_API_URL` remains
+available for build-time configuration outside Docker. The container CSP permits registry
 `connect-src` connections to `http:` and `https:` origins.
 
 Nginx returns SPA fallback for browser routes. Hashed assets are
