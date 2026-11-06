@@ -23,7 +23,7 @@ const stubs = {
   },
   VSelect: {
     inheritAttrs: false, props: ["modelValue", "items"], emits: ["update:modelValue"],
-    template: '<select v-bind="$attrs" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option value="">Select</option><option v-for="item in items" :key="item" :value="item">{{ item }}</option></select>',
+    template: '<select v-bind="$attrs" :value="modelValue" @change="$emit(\'update:modelValue\', $event.target.value)"><option value="">Select</option><option v-for="item in items" :key="item.value ?? item" :value="item.value ?? item">{{ item.title ?? item }}</option></select>',
   },
 };
 const render = () => mount(PathTestsView, { global: { stubs } });
@@ -76,7 +76,7 @@ describe("paired path diagnostics", () => {
     if (outcome === "success") resolve(pathTestInterfaces());
     else reject(new ApiFailure("Discovery failed", 503));
     await flushPromises();
-    if (outcome === "success") expect(wrapper.get('[aria-label="Local interface"]').text()).toContain("gre0");
+    if (outcome === "success") expect(wrapper.get('[aria-label="Local interface"]').text()).toContain("GRE0");
     else expect(wrapper.text()).toContain("Discovery failed");
     wrapper.unmount();
   });
@@ -109,7 +109,7 @@ describe("paired path diagnostics", () => {
     const storage = vi.spyOn(Storage.prototype, "setItem");
     const wrapper = render(); await flushPromises();
     const interfaces = wrapper.get('[aria-label="Local interface"]').findAll("option").map(option => option.text());
-    expect(interfaces).toContain("gre0");
+    expect(interfaces).toContain("GRE0");
     await fill(wrapper);
     expect(wrapper.get('[aria-label="Local source IP"]').findAll("option").map(option => option.text())).not.toContain("fe80::1");
     await button(wrapper, "Add ancestor").trigger("click");

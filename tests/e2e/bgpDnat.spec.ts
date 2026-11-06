@@ -99,7 +99,7 @@ test("BGP peers and DNAT stage inline, preserve the complete package, and surviv
   await bgp.getByRole("button", { name: "Add BGP peer", exact: true }).click();
   await bgp.getByLabel("Peer name", { exact: true }).fill("second");
   await bgp.getByLabel("Peer address", { exact: true }).fill("192.0.2.3");
-  await select(page, "Peer interface", "lab0");
+  await select(page, "Peer interface", "LAB0");
   await select(page, "Local address", "192.0.2.10");
   await bgp.getByRole("button", { name: "Save peer", exact: true }).click();
   await expect(bgp).toContainText("second");
@@ -109,7 +109,7 @@ test("BGP peers and DNAT stage inline, preserve the complete package, and surviv
   await navigate(page, "DNAT");
   const dnat = page.getByRole("region", { name: "DNAT", exact: true });
   await dnat.getByRole("button", { name: "Add DNAT rule", exact: true }).click();
-  await select(page, "WAN", "wan0"); await select(page, "Protocol", "udp"); await select(page, "Target interface", "lab0");
+  await select(page, "WAN", "WAN0"); await select(page, "Protocol", "udp"); await select(page, "Target interface", "LAB0");
   await dnat.getByLabel("Target address", { exact: true }).fill("192.0.2.53");
   await dnat.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dnat).toContainText("192.0.2.53");

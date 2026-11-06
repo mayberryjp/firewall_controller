@@ -53,13 +53,13 @@ test("paired diagnostics require explicit approval, preserve cleanup ownership a
     await view.getByRole("combobox", { name: label, exact: true }).press("ArrowDown");
     await page.getByRole("option", { name: value, exact: true }).click();
   };
-  await select("Local interface", "vlan100");
+  await select("Local interface", "VLAN100");
   await expect(view.getByLabel("Maximum MTU (bytes)", { exact: true })).toHaveValue("");
   await select("Local source IP", "192.0.2.1");
   await view.getByLabel("Peer IP", { exact: true }).fill("192.0.2.2");
   await view.getByLabel("Maximum MTU (bytes)", { exact: true }).fill("9000");
   await view.getByRole("button", { name: "Add ancestor", exact: true }).click();
-  await select("Ancestor 1", "eno1");
+  await select("Ancestor 1", "ENO1");
   await view.getByLabel("Ancestor 1 maximum MTU (bytes)", { exact: true }).fill("9100");
   await view.getByLabel("One-time pairing secret", { exact: true }).fill(pathTestRequest().pairing_secret);
   const start = view.getByRole("button", { name: "Start paired test", exact: true });

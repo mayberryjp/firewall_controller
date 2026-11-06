@@ -47,10 +47,10 @@ test("offloads show reported Enabled or Disabled in each dropdown without Origin
   await expect(view).not.toContainText("Cached:");
   await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Enabled");
   await choose("Desired rx-checksum for eno1", "Disabled");
-  await choose("Interface", "eno2");
+  await choose("Interface", "ENO2");
   await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno2", exact: true })).toHaveValue("Disabled");
   await choose("Desired rx-checksum for eno2", "Enabled");
-  await choose("Interface", "eno1");
+  await choose("Interface", "ENO1");
   await expect(view.getByRole("combobox", { name: "Desired rx-checksum for eno1", exact: true })).toHaveValue("Disabled");
   for (const feature of nicOffloadFeatures) {
     const control = view.getByRole("combobox", { name: `Desired ${feature} for eno1`, exact: true });

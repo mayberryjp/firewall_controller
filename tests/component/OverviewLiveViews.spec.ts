@@ -203,9 +203,10 @@ describe("Overview live views", () => {
     wrapper = mount(OverviewCounters, { global: { stubs, plugins: [router] } });
     expect(wrapper.get("h2 a").attributes("href")).toBe("/diagnostics/traffic");
     const link = wrapper.get("tbody th a");
-    expect(link.attributes("href")).toBe(`/diagnostics/traffic?interface=${encodeURIComponent(link.text())}`);
+    expect(link.text()).toBe("LAB0");
+    expect(link.attributes("href")).toBe("/diagnostics/traffic?interface=lab0");
     expect(link.classes()).toContain("counter-link");
     await link.trigger("click"); await flushPromises();
-    expect(router.currentRoute.value.query.interface).toBe(link.text());
+    expect(router.currentRoute.value.query.interface).toBe("lab0");
   });
 });

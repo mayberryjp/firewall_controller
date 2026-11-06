@@ -89,7 +89,7 @@ test("applied host, interface, input and NAT rule counters preserve exact totals
         ? ["System Rules", "Interface Overrides", "Host Rules", "Default Rules"] : ["System Rules", "User Rules", "Default Rules"]);
       if (path === "/firewall") {
         await expect(system.getByRole("columnheader", { name: "Ingress", exact: true })).toBeVisible();
-        await expect(system.locator(".interface-rule .rule-value--ingress")).toHaveText(["lab0"]);
+        await expect(system.locator(".interface-rule .rule-value--ingress")).toHaveText(["LAB0"]);
         await expect(system.locator(".interface-rule").locator("button, input, select")).toHaveCount(0);
         await expect(system.locator(".system-rule--default .rule-value--order")).toHaveText("Global");
       }

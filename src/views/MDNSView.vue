@@ -6,6 +6,7 @@ import { eligibleMDNSInterface, mdnsInterfaces, mdnsPresets, normalizeMDNS, norm
 import { mdnsSchema, type MDNSConfig, type MDNSFilterCounters } from "@/types/domain";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import { useTimestamps } from "@/composables/useTimestamps";
+import { interfaceNameChoices } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const { formatTimestamp, timeZone } = useTimestamps();
@@ -140,7 +141,7 @@ function stage(): void {
     >
       <v-select
         v-model="form.interfaces"
-        :items="choices"
+        :items="interfaceNameChoices(choices)"
         label="LAN links"
         multiple
         chips

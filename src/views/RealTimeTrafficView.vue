@@ -9,6 +9,7 @@ import { isInitialLoad } from "@/services/datasets";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { trafficFrame, trafficHistoryLimit, usableTrafficSample, type TrafficCounter, type TrafficFrame } from "@/services/traffic";
 import type { Statistics } from "@/types/domain";
+import { compareInterfaceNames, formatInterfaceName, interfaceNameChoices } from "@/services/interfaceNames";
 const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
@@ -20,11 +21,11 @@ watch(() => route.query.interface, value => {
 const display = ref("both");
 const history = ref<TrafficFrame[]>([]);
 let previous: Statistics | null = null;
-const interfaceNames = computed(() => (store.statistics.data?.interfaces ?? []).map(item => item.name).sort((a, b) => a.localeCompare(b)));
+const interfaceNames = computed(() => (store.statistics.data?.interfaces ?? []).map(item => item.name).sort(compareInterfaceNames));
 const watchedInterfaces = computed(() => selectedInterface.value ? [selectedInterface.value] : interfaceNames.value);
 const interfaceOptions = computed(() => [
   { title: "All interfaces", value: "" },
-  ...interfaceNames.value.map(name => ({ title: name, value: name })),
+  ...interfaceNameChoices(interfaceNames.value),
 ]);
 const displayOptions = [
   { title: "Both graphs", value: "both" },
@@ -78,7 +79,7 @@ watch(() => [store.statistics.data, store.statistics.stale, store.statistics.err
 });
 function series(incoming: TrafficCounter, outgoing: TrafficCounter) {
   return watchedInterfaces.value.map(name => ({
-    name,
+    name: formatInterfaceName(name),
     data: history.value.map(frame => ({
       x: frame.time,
       y: combinedRate(frame, name, incoming, outgoing),

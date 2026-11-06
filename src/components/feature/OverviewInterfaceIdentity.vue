@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useControllerStore } from "@/stores/controller";
+import { formatInterfaceName } from "@/services/interfaceNames";
 
 const props = defineProps<{ name: string; loopback?: boolean }>();
 const store = useControllerStore();
@@ -17,8 +18,8 @@ const role = computed(() => {
     <div class="interface-heading">
       <span
         class="interface-name"
-        :title="name"
-      ><slot>{{ name }}</slot></span>
+        :title="formatInterfaceName(name)"
+      ><slot>{{ formatInterfaceName(name) }}</slot></span>
       <span
         v-if="role"
         class="interface-role text-medium-emphasis"

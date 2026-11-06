@@ -4,6 +4,7 @@ import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import { useControllerStore } from "@/stores/controller";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { isInitialLoad } from "@/services/datasets";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 const { formatTimestamp, timeZone } = useTimestamps();
 
 const props = defineProps<{ kind: "interfaces" | "queues" | "windows" | "capture" }>();
@@ -25,9 +26,10 @@ const current = computed(() => Boolean(data.value?.status === "available" && !st
   data.value.age_ms !== null && store.linkDiagnostics.lastSuccess !== null &&
   data.value.age_ms + Math.max(0, now.value - store.linkDiagnostics.lastSuccess) <= 5000));
 const sampleState = computed(() => data.value?.status === "available" && !current.value ? "stale" : data.value?.status ?? "unavailable");
-const rows = computed(() => props.kind === "interfaces" ? data.value?.interfaces :
-  props.kind === "queues" ? data.value?.queues : props.kind === "capture"
-    ? data.value?.packet_headers ? [data.value.packet_headers] : null : data.value?.packet_headers?.interfaces);
+const rows = computed(() => props.kind === "interfaces" ? data.value?.interfaces && sortByInterface(data.value.interfaces, row => row.name) :
+  props.kind === "queues" ? data.value?.queues && sortByInterface(data.value.queues, row => row.name ?? "") : props.kind === "capture"
+    ? data.value?.packet_headers ? [data.value.packet_headers] : null :
+      data.value?.packet_headers?.interfaces && sortByInterface(data.value.packet_headers.interfaces, row => row.name ?? ""));
 const emptyLabel = computed(() => rows.value === null || rows.value === undefined
   ? isInitialLoad(store.linkDiagnostics) ? "" : "Measurements unavailable." : "No observations.");
 function value(item: string | number | null | undefined): string | number { return item ?? "Unavailable"; }
@@ -150,7 +152,7 @@ onMounted(() => {
       </thead>
       <tbody>
         <tr
-          v-for="row in data?.interfaces ?? []"
+          v-for="row in sortByInterface(data?.interfaces ?? [], row => row.name)"
           :key="`${row.index}/${row.name}`"
         >
           <td :title="`Interface index ${row.index}`">
@@ -159,7 +161,7 @@ onMounted(() => {
               variant="tonal"
               color="info"
             >
-              {{ row.name }}
+              {{ formatInterfaceName(row.name) }}
             </v-chip>
           </td>
           <td>
@@ -245,7 +247,7 @@ onMounted(() => {
               variant="tonal"
               color="info"
             >
-              {{ row.name ?? `Interface ${row.index}` }}
+              {{ row.name ? formatInterfaceName(row.name) : `Interface ${row.index}` }}
             </v-chip>
           </td>
           <td>
@@ -355,7 +357,7 @@ onMounted(() => {
         <thead><tr><th>Interface</th><th>TCP ACK packets</th><th>Zero-window observations</th><th>Zero-window transitions</th><th>Window decreases (% of ACKs)</th><th>Minimum raw window</th><th>Maximum raw window</th></tr></thead>
         <tbody>
           <tr
-            v-for="row in data?.packet_headers?.interfaces ?? []"
+            v-for="row in sortByInterface(data?.packet_headers?.interfaces ?? [], row => row.name ?? '')"
             :key="row.index"
           >
             <td :title="`Interface index ${row.index}`">
@@ -364,7 +366,7 @@ onMounted(() => {
                 variant="tonal"
                 color="info"
               >
-                {{ row.name ?? `Interface ${row.index}` }}
+                {{ row.name ? formatInterfaceName(row.name) : `Interface ${row.index}` }}
               </v-chip>
             </td>
             <td>

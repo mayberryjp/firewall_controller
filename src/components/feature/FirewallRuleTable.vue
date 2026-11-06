@@ -2,7 +2,8 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import FieldInput from "@/components/base/FieldInput.vue";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
-import { interfaceChoice } from "@/services/resourceCollections";
+import { interfaceChoices } from "@/services/resourceCollections";
+import { formatInterfaceName } from "@/services/interfaceNames";
 import { useControllerStore } from "@/stores/controller";
 import type { Config } from "@/types/domain";
 import type { Field } from "@/types/forms";
@@ -69,7 +70,7 @@ const fields = computed<Field[]>(() => editing.value === "default"
     { key: "ports", label: "Destination ports (comma separated)", kind: "text", disabled: !supportsFirewallPorts(form.value.protocol) },
     ...(props.scope === "input" ? [] : [{
       key: "out_interface", label: "Egress interface", kind: "select" as const,
-      choices: [{ title: "Any", value: "" }, ...(selected.value?.interfaces ?? []).map(interfaceChoice)],
+      choices: [{ title: "Any", value: "" }, ...interfaceChoices(selected.value?.interfaces ?? [])],
     }]),
     { key: "action", label: "Action", kind: "select", choices: ["accept", "drop"].map(value => ({ title: value, value })) },
   ]);
@@ -102,13 +103,13 @@ const sections = computed(() => {
 });
 function display(rule: Rule, order: string, path: string, ingress = "Any"): FirewallSystemRule {
   return {
-    order, name: "", label: "", match: "", counterPath: path, ingress,
+    order, name: "", label: "", match: "", counterPath: path, ingress: ingress === "Any" ? ingress : formatInterfaceName(ingress),
     destination: rule.destination_host
       ? selected.value?.firewall.policies?.hosts.find(host => host.id === rule.destination_host)?.name ?? `Unknown host (${rule.destination_host})`
       : rule.destination || "Any",
     protocol: formatFirewallProtocol(rule.protocol),
     ports: rule.destination_ports?.join(", ") || "Any",
-    egress: rule.out_interface || "Any", action: rule.action,
+    egress: rule.out_interface ? formatInterfaceName(rule.out_interface) : "Any", action: rule.action,
   };
 }
 watch(form, () => { if (editing.value !== null) store.editorDirty = stableJson(form.value) !== initial.value; }, { deep: true });

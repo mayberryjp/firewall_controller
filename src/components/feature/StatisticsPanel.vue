@@ -3,6 +3,7 @@ import { useControllerStore } from "@/stores/controller";
 import { useTimestamps } from "@/composables/useTimestamps";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import JsonPanel from "@/components/base/JsonPanel.vue";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 const { formatTimestamp, timeZone } = useTimestamps();
 const store = useControllerStore();
 </script>
@@ -39,11 +40,11 @@ const store = useControllerStore();
         <thead><tr><th>Interface / ownership</th><th>Administrative / operational</th><th>Status</th><th>RX bytes</th><th>TX bytes</th><th>Details</th></tr></thead>
         <tbody>
           <tr
-            v-for="item in store.statistics.data.interfaces"
+            v-for="item in sortByInterface(store.statistics.data.interfaces, item => item.name)"
             :key="`${item.name}/${item.index}`"
           >
             <td class="mono">
-              {{ item.name }}<br>{{ item.kind }} · {{ item.ownership }}
+              {{ formatInterfaceName(item.name) }}<br>{{ item.kind }} · {{ item.ownership }}
             </td>
             <td>{{ item.admin_up ? "Admin up" : "Admin down" }} / {{ item.oper_state }}<br>MTU {{ item.mtu }}</td>
             <td>

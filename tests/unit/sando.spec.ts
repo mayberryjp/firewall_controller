@@ -120,11 +120,37 @@ describe("Sando API and persistence", () => {
     expect(fetcher.mock.calls.map(call => call[0])).toEqual(["https://sando.example/api/localhosts", "https://sando.example/api/ignorelist/ip/192.0.2.20"]);
     expect(fetcher).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ credentials: "omit", redirect: "error", headers: { Accept: "application/json" } }));
   });
+  it("ignores inventory records without IP addresses while retaining and importing valid devices", async () => {
+    const raw = [
+      { ip_address: null, first_seen: "2026-11-06 14:24:32", original_flow: null },
+      device(),
+      { dhcp_hostname: "no-address" },
+      { ip_address: "" },
+      { ip_address: " \t " },
+      device("192.0.2.21"),
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(raw))));
+    const devices = await getSandoDevices("https://sando.example", new AbortController().signal);
+    expect(devices).toEqual([device(), device("192.0.2.21")]);
+    const result = importSando(emptyConfig(), devices.map(row => ({ ...row, ip6_address: null })), undefined, "drop");
+    expect(result.hostsAdded).toBe(2);
+    expect(result.skipped).toEqual([]);
+    expect(validateConfig(result.config)).toEqual([]);
+  });
+  it("returns an empty inventory when every record has no IP address", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify([
+      { ip_address: null }, {}, { ip_address: "" }, { ip_address: "  " },
+    ]))));
+    await expect(getSandoDevices("https://sando.example", new AbortController().signal)).resolves.toEqual([]);
+  });
   it.each([
     new Response('{"error":"unavailable"}', { status: 503 }),
     new Response("<html>login</html>"),
     new Response('{"success":false}'),
     new Response('[{"ip_address":42}]'),
+    new Response('[{"ip_address":null},{"ip_address":42}]'),
+    new Response('[null]'),
+    new Response('[[]]'),
   ])("rejects failed or incompatible responses", async response => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
     await expect(getSandoDevices("https://sando.example", new AbortController().signal)).rejects.toThrow("Unable to import from Sando");

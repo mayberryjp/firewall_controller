@@ -4,6 +4,7 @@ import { useControllerStore } from "@/stores/controller";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { generatePairingSecret, pathAddresses, pathTestRequestSchema, validatePathInterfaces } from "@/services/pathTests";
 import PathTestResults from "@/components/feature/PathTestResults.vue";
+import { formatInterfaceName, interfaceNameChoices, sortByInterface } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const { formatTimestamp, timeZone } = useTimestamps();
@@ -11,7 +12,7 @@ const selected = ref(""), source = ref(""), peer = ref(""), port = ref("49872"),
 const secret = ref(""), approved = ref(false), error = ref("");
 const copied = ref(false);
 const parents = ref<Array<{ interface: string; maximum: string; approved: boolean }>>([]);
-const links = computed(() => store.pathInterfaces.data ?? []);
+const links = computed(() => sortByInterface(store.pathInterfaces.data ?? [], link => link.name));
 const eligible = computed(() => links.value.filter(link => pathAddresses(link).length).map(link => link.name));
 const local = computed(() => links.value.find(link => link.name === selected.value));
 const sources = computed(() => local.value ? pathAddresses(local.value) : []);
@@ -182,11 +183,11 @@ async function cancel() {
         <thead><tr><th>Interface</th><th>Approval</th><th>Original bytes</th><th>Maximum bytes</th><th>Observed bytes</th><th>Identity matches</th><th>Restored</th></tr></thead>
         <tbody>
           <tr
-            v-for="row in status.mtu_changes"
+            v-for="row in sortByInterface(status.mtu_changes, row => row.interface)"
             :key="row.index"
           >
             <th scope="row">
-              {{ row.interface }} ({{ row.kind }})
+              {{ formatInterfaceName(row.interface) }} ({{ row.kind }})
             </th><td>{{ row.approved ? 'Approved' : 'Context only' }}</td>
             <td>{{ row.original_mtu }}</td><td>{{ row.maximum_mtu }}</td><td>{{ row.observed_mtu ?? 'Unavailable' }}</td>
             <td>{{ row.identity_matches ? 'Yes' : 'No' }}</td><td>{{ row.restored ? 'Yes' : 'No' }}</td>
@@ -204,7 +205,7 @@ async function cancel() {
         <legend>Start a paired test on this firewall</legend>
         <v-select
           v-model="selected"
-          :items="eligible"
+          :items="interfaceNameChoices(eligible)"
           label="Local interface"
           aria-label="Local interface"
         />
@@ -246,7 +247,7 @@ async function cancel() {
         >
           <v-select
             v-model="row.interface"
-            :items="links.map(link => link.name).filter(name => name !== selected)"
+            :items="interfaceNameChoices(links.map(link => link.name).filter(name => name !== selected))"
             :label="`Ancestor ${index + 1}`"
             :aria-label="`Ancestor ${index + 1}`"
             @update:model-value="row.maximum = ''; row.approved = false"
@@ -312,7 +313,7 @@ async function cancel() {
           Disruption warning: temporarily raising MTUs can affect unrelated traffic and management on every approved interface. Only peer/interface/test-port-scoped permissions are opened. No persistent configuration or MSS clamp is changed.
         </v-alert>
         <p v-if="local">
-          Review: {{ selected }} ({{ source || 'select source' }}) to {{ peer || 'select peer' }}, UDP/TCP {{ port }}; maximum {{ maximum || 'enter maximum' }} bytes (current {{ local.mtu }}). Approved ancestors: {{ parents.filter(row => row.approved).map(row => `${row.interface}: ${row.maximum} bytes`).join(', ') || 'none' }}.
+          Review: {{ formatInterfaceName(selected) }} ({{ source || 'select source' }}) to {{ peer || 'select peer' }}, UDP/TCP {{ port }}; maximum {{ maximum || 'enter maximum' }} bytes (current {{ local.mtu }}). Approved ancestors: {{ sortByInterface(parents.filter(row => row.approved), row => row.interface).map(row => `${formatInterfaceName(row.interface)}: ${row.maximum} bytes`).join(', ') || 'none' }}.
         </p>
         <v-checkbox
           v-model="approved"

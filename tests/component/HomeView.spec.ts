@@ -277,7 +277,7 @@ describe("compact overview dashboard", () => {
       const widget = wrapper.get('[aria-label="Interfaces"]');
       expect(widget.findAll("thead th").map(cell => cell.text())).toEqual(["Name", "Admin state", "Operational state", "Active IP", "Mode"]);
       expect(widget.findAll("tbody tr").map(row => row.findAll("td").map(cell => cell.text()).slice(3))).toEqual([
-        ["192.0.2.99/24", "Static"], ["198.51.100.20/24", "DHCP"], ["None", "-"],
+        ["None", "-"], ["192.0.2.99/24", "Static"], ["198.51.100.20/24", "DHCP"],
       ]);
       expect(widget.text()).not.toContain("192.0.2.10");
       vi.mocked(api.getDiscoveredInterfaces).mockRejectedValueOnce(new Error("Discovery failed"));
@@ -302,8 +302,8 @@ describe("compact overview dashboard", () => {
     expect(widget.findAll("tbody tr").map(row => [
       row.get(".interface-name").text(), ...row.findAll("td").map(cell => cell.text()),
     ])).toEqual([
-      ["lab0", "11", "12", "18.45 EB", "14 B", "15", "16"],
-      ["eth1", "21", "22", "23 B", "24 B", "25", "26"],
+      ["ETH1", "21", "22", "23 B", "24 B", "25", "26"],
+      ["LAB0", "11", "12", "18.45 EB", "14 B", "15", "16"],
     ]);
   });
   it.each([
@@ -359,7 +359,7 @@ describe("compact overview dashboard", () => {
       expect(widget.findAll(".status-chip").map(chip => chip.attributes("title"))).toEqual([
         "+50 packets since previous poll", "+123,456 packets since previous poll",
       ]);
-      expect(widget.findAll("tbody tr")[1]!.find(".status-chip").exists()).toBe(false);
+      expect(widget.findAll("tbody tr")[0]!.find(".status-chip").exists()).toBe(false);
       const unchanged = packetSnapshot("9007199254741043", "223456", 6);
       store.statistics.data = unchanged; await flushPromises();
       expect(widget.findAll(".status-chip").map(chip => chip.text())).toEqual(["+0", "+0"]);
@@ -422,7 +422,7 @@ describe("compact overview dashboard", () => {
     );
     store.statistics.data!.interfaces.push({ ...store.statistics.data!.interfaces[0]!, name: "eth1", kind: "ethernet", ownership: "unmanaged" });
     const widget = dashboard().get('[aria-label="Interfaces"]');
-    expect(widget.findAll(".interface-name").map(cell => cell.text())).toEqual(["lab0", "eth1", "vlan30", "wg0"]);
+    expect(widget.findAll(".interface-name").map(cell => cell.text())).toEqual(["ETH1", "LAB0", "VLAN30", "WG0"]);
     expect(widget.find("tbody a").exists()).toBe(false);
     expect(navigationSections.flatMap(section => section.pages).some(page => page.path === "/parents")).toBe(false);
   });
@@ -436,7 +436,7 @@ describe("compact overview dashboard", () => {
     store.statistics.data!.interfaces.push({ name: "wg0", kind: "wireguard", ownership: "managed", mtu: 1420, admin_up: true, oper_state: "UP", status: "available", counters: null });
     store.runtime.data = runtime(); store.runtime.stale = false;
     const widget = dashboard().get('[aria-label="WireGuard"]');
-    expect(widget.text()).not.toContain("wg0"); expect(widget.text()).toContain("Unavailable");
+    expect(widget.text()).not.toContain("WG0"); expect(widget.text()).toContain("Unavailable");
     expect(widget.get("tbody td").text()).toBe("—");
     expect(widget.find("tbody a").exists()).toBe(false);
     expect(widget.findAll("th").map(cell => cell.text())).toEqual(["Peer", "Last handshake", "Received", "Sent"]);

@@ -4,7 +4,8 @@ import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
 import { bgpNeighborSchema, bgpSchema, type BGPNeighbor } from "@/types/domain";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
-import { interfaceChoice } from "@/services/resourceCollections";
+import { interfaceChoices } from "@/services/resourceCollections";
+import { formatInterfaceName } from "@/services/interfaceNames";
 import { bgpPeerStatus } from "@/services/bgp";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 
@@ -261,7 +262,7 @@ onMounted(() => { if (store.connected) void store.refreshBGPStatus(); });
               <td>
                 <v-select
                   v-model="form.interface"
-                  :items="interfaces.map(interfaceChoice)"
+                  :items="interfaceChoices(interfaces)"
                   label="Peer interface"
                   density="compact"
                   hide-details
@@ -320,7 +321,7 @@ onMounted(() => { if (store.connected) void store.refreshBGPStatus(); });
               <td :title="peer.metadata?.description">
                 {{ peer.metadata?.display_name || peer.name }}
               </td>
-              <td>{{ peer.address }}</td><td>{{ peer.interface }}</td><td>{{ peer.local_address }}</td><td>{{ peer.remote_asn }}</td>
+              <td>{{ peer.address }}</td><td>{{ formatInterfaceName(peer.interface) }}</td><td>{{ peer.local_address }}</td><td>{{ peer.remote_asn }}</td>
               <td>
                 <v-chip
                   size="small"

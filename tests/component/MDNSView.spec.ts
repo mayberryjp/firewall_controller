@@ -291,7 +291,7 @@ describe("mDNS / Discovery", () => {
       ...store.state.data!.desired.interfaces[0]!, name: "vlan10", kind: "vlan", role: "unassigned", vlan: { parent: "lan0", id: 10 },
     });
     const wrapper = mount(MDNSView, { global });
-    expect(wrapper.get('select[aria-label="LAN links"]').findAll("option").map(option => option.text())).toContain("vlan10");
+    expect(wrapper.get('select[aria-label="LAN links"]').findAll("option").map(option => option.text())).toContain("VLAN10");
     await wrapper.get('select[aria-label="LAN links"]').setValue(["lan0", "vlan10"]);
     await setServices(wrapper, "_ipp._tcp");
     await wrapper.get("form").trigger("submit");

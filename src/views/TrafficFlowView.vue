@@ -12,6 +12,7 @@ import {
   type FlowRole,
 } from "@/services/trafficFlow";
 import type { StateView, Statistics } from "@/types/domain";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const id = `traffic-flow-${useId()}`;
@@ -23,7 +24,7 @@ const sample = shallowRef<Statistics | null>(null), excludedState = shallowRef<S
 const capabilities = shallowRef<InterfaceCapabilitySnapshot | null>(null), capabilitiesError = ref("");
 const config = computed(() => store.state.data === excludedState.value ? undefined :
   store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
-const ports = computed(() => flowPorts(config.value, sample.value, frame.value, capabilities.value));
+const ports = computed(() => sortByInterface(flowPorts(config.value, sample.value, frame.value, capabilities.value), port => port.name));
 const zones = computed(() => ([
   { role: "wan" as const, label: "WAN", nodes: ports.value.filter(port => port.role === "wan") },
   { role: "lan" as const, label: "LAN", nodes: ports.value.filter(port => port.role === "lan") },
@@ -176,7 +177,7 @@ onUnmounted(() => {
                     :to="{ name: 'real-time-traffic', query: { interface: port.name } }"
                     :aria-label="`View traffic history for ${port.name}`"
                   >
-                    {{ port.name }}
+                    {{ formatInterfaceName(port.name) }}
                   </router-link>
                   <span class="node-kind">{{ port.kind }}</span>
                   <span

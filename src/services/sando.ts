@@ -18,6 +18,11 @@ export const sandoDeviceSchema = z.object({
   total_bytes_dst: integer, ip6_address: text, alert_if_offline: integer, domain_name: text,
 }).passthrough();
 export type SandoDevice = z.infer<typeof sandoDeviceSchema>;
+const sandoDevicesSchema = z.array(z.unknown()).transform(rows => rows.filter(row => {
+  if (typeof row !== "object" || row === null || Array.isArray(row)) return true;
+  if (!("ip_address" in row)) return false;
+  return row.ip_address != null && (typeof row.ip_address !== "string" || row.ip_address.trim() !== "");
+})).pipe(z.array(sandoDeviceSchema));
 export const sandoConnectionSchema = z.object({
   ignorelist_id: z.union([z.string(), z.number()]).nullish().transform(value => value == null ? undefined : String(value)),
   src_ip: z.string().nullable().transform(value => value ?? ""), dst_ip: z.string().nullable().transform(value => value ?? ""),
@@ -55,7 +60,7 @@ async function getSando<T extends z.ZodTypeAny>(endpoint: string, resource: stri
   }
 }
 export const getSandoDevices = (endpoint: string, signal: AbortSignal) =>
-  getSando(endpoint, "localhosts", z.array(sandoDeviceSchema), signal);
+  getSando(endpoint, "localhosts", sandoDevicesSchema, signal);
 export async function getSandoConnections(endpoint: string, signal: AbortSignal, hosts: string[]): Promise<SandoConnection[]> {
   const entries = new Map<string, SandoConnection>();
   for (const host of new Set(hosts)) {

@@ -8,6 +8,7 @@ import { formatTimestamp } from "@/services/timestamps";
 import { isInitialLoad } from "@/services/datasets";
 import { useTimestamps } from "@/composables/useTimestamps";
 import type { ManagedInterface } from "@/types/domain";
+import { formatInterfaceName, interfaceNameChoices, sortByInterface } from "@/services/interfaceNames";
 
 type Tunnel = Extract<ManagedInterface, { kind: "wireguard" }>;
 const props = defineProps<{ name?: string }>();
@@ -26,7 +27,7 @@ const learnedNotice = computed(() => {
 watch([() => store.connected, () => store.sessionVersion, () => applied.value?.bgp?.enabled], () => {
   if (store.connected && applied.value?.bgp?.enabled && document.visibilityState !== "hidden") void store.refreshBGPRoutes();
 }, { immediate: true });
-const tunnels = computed(() => (selected.value?.interfaces ?? []).filter((link): link is Tunnel => link.kind === "wireguard"));
+const tunnels = computed(() => sortByInterface((selected.value?.interfaces ?? []).filter((link): link is Tunnel => link.kind === "wireguard"), link => link.name));
 const filter = ref(props.name ?? "");
 const live = computed(() => new Map((store.runtime.data?.wireguard ?? []).map(item => [item.interface, item])));
 const dns = computed(() => store.state.data?.runtime?.wireguard_dns ?? store.runtime.data?.wireguard_dns);
@@ -140,7 +141,7 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
         v-model="filter"
         aria-label="Tunnel"
         class="tunnel-filter"
-        :items="[{ title: 'All tunnels', value: '' }, ...tunnels.map(item => ({ title: item.name, value: item.name }))]"
+        :items="[{ title: 'All tunnels', value: '' }, ...interfaceNameChoices(tunnels.map(item => item.name))]"
         density="compact"
         hide-details
       />
@@ -229,7 +230,7 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
                 variant="text"
                 @click="expanded = expanded === `${item.tunnel}/${item.peer.public_key}` ? null : `${item.tunnel}/${item.peer.public_key}`"
               />
-              {{ item.tunnel }}
+              {{ formatInterfaceName(item.tunnel) }}
             </th>
             <td
               class="mono"
@@ -435,7 +436,7 @@ const short = (key: string) => key.length > 14 ? `${key.slice(0, 8)}…${key.sli
         <v-select
           v-model="form.tunnel"
           label="Tunnel"
-          :items="tunnels.map(item => item.name)"
+          :items="interfaceNameChoices(tunnels.map(item => item.name))"
           :disabled="blocked || !adding"
           density="compact"
           hide-details="auto"

@@ -40,12 +40,12 @@ test("Diagnostics renders combined traffic per interface and drills into one liv
   await expect.poll(() => reads, { timeout: 12000 }).toBeGreaterThanOrEqual(trafficReads + 3);
   await expect.poll(() => bytes.locator(".apexcharts-line-series .apexcharts-line").first().evaluate(path => (path as SVGPathElement).getTotalLength())).toBeGreaterThan(30);
   await expect(bytes.locator(".apexcharts-line-series .apexcharts-series")).toHaveCount(2);
-  await expect(bytes.locator(".apexcharts-legend")).toContainText("eth0");
-  await expect(bytes.locator(".apexcharts-legend")).toContainText("eth1");
+  await expect(bytes.locator(".apexcharts-legend")).toContainText("ETH0");
+  await expect(bytes.locator(".apexcharts-legend")).toContainText("ETH1");
   await expect(bytes.locator(".apexcharts-legend")).not.toContainText("Inbound");
   await expect(packets.locator(".apexcharts-line-series .apexcharts-series")).toHaveCount(2);
-  await expect(packets.locator(".apexcharts-legend")).toContainText("eth0");
-  await expect(packets.locator(".apexcharts-legend")).toContainText("eth1");
+  await expect(packets.locator(".apexcharts-legend")).toContainText("ETH0");
+  await expect(packets.locator(".apexcharts-legend")).toContainText("ETH1");
   await expect(bytes).toContainText("Time (UTC)");
   await expect(bytes).toContainText("bytes/s");
   await expect(packets).toContainText("packets/s");
@@ -60,12 +60,12 @@ test("Diagnostics renders combined traffic per interface and drills into one liv
   const interfaceSelect = page.locator(".v-select").filter({ has: page.getByRole("combobox", { name: "Watch interface", exact: true }) });
   const graphSelect = page.locator(".v-select").filter({ has: page.getByRole("combobox", { name: "Show graphs", exact: true }) });
   await interfaceSelect.click();
-  await page.getByRole("option", { name: "eth1", exact: true }).click();
-  await expect(interfaceSelect).toContainText("eth1");
+  await page.getByRole("option", { name: "ETH1", exact: true }).click();
+  await expect(interfaceSelect).toContainText("ETH1");
   for (const graph of [bytes, packets]) {
     await expect(graph.locator(".apexcharts-line-series .apexcharts-series")).toHaveCount(1);
-    await expect(graph.locator(".apexcharts-legend")).toContainText("eth1");
-    await expect(graph.locator(".apexcharts-legend")).not.toContainText("eth0");
+    await expect(graph.locator(".apexcharts-legend")).toContainText("ETH1");
+    await expect(graph.locator(".apexcharts-legend")).not.toContainText("ETH0");
   }
   await graphSelect.click();
   await page.getByRole("option", { name: "Packets", exact: true }).click();

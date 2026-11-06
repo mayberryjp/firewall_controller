@@ -9,10 +9,10 @@ import { config, runtime, transaction } from "../fixtures";
 describe("interface dropdown labels", () => {
   it("uses display names without changing interface identities", () => {
     expect(interfaceChoice({ name: "eno1", metadata: { display_name: "WAN", description: "" } }))
-      .toEqual({ title: "eno1 (WAN)", value: "eno1" });
-    expect(interfaceChoice({ name: "eno1" })).toEqual({ title: "eno1", value: "eno1" });
+      .toEqual({ title: "ENO1 (WAN)", value: "eno1" });
+    expect(interfaceChoice({ name: "eno1" })).toEqual({ title: "ENO1", value: "eno1" });
     expect(interfaceChoice({ name: "eno1", metadata: { display_name: "", description: "Notes" } }))
-      .toEqual({ title: "eno1", value: "eno1" });
+      .toEqual({ title: "ENO1", value: "eno1" });
   });
   it("keeps unmanaged parent names and named managed parents as separate choices", () => {
     const managed = interfaceChoice({ name: "eno1", metadata: { display_name: "WAN", description: "" } });

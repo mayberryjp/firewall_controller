@@ -264,7 +264,7 @@ describe("reviewed and staged RPS controls", () => {
       const wrapper = render(); await flushPromises();
       expect(wrapper.find(wgToggle).exists()).toBe(false);
       expect(wrapper.find('[aria-label="New WireGuard interface"]').exists()).toBe(false);
-      if (condition === "error") expect(wrapper.text()).toContain("wg0: WireGuard queue read failed");
+      if (condition === "error") expect(wrapper.text()).toContain("WG0: WireGuard queue read failed");
     });
     it("allows explicit unverified queues for newly staged tunnels without guessing a queue or CPU mask", async () => {
       const store = useControllerStore(), candidate = cloneConfig(store.state.data!.desired);
@@ -476,7 +476,7 @@ describe("reviewed and staged RPS controls", () => {
     expect(wrapper.find('[aria-label="Desired rx-checksum for eno1"]').exists()).toBe(false);
     await wrapper.get('[aria-label="Desired rx-gro for eno2"]').setValue("enabled");
     await wrapper.get('[aria-label="Offload interface"]').setValue("eno3");
-    expect(wrapper.text()).toContain("No configurable offloads were reported for eno3");
+    expect(wrapper.text()).toContain("No configurable offloads were reported for ENO3");
     expect(wrapper.findAll(".setting-row")).toHaveLength(0);
     await wrapper.get("form").trigger("submit"); await flushPromises();
     expect(store.draft?.kernel?.offloads).toEqual({ eno1: { "rx-checksum": false }, eno2: { "rx-gro": true } });

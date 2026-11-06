@@ -7,6 +7,7 @@ import { cloneConfig, stableJson, validateConfig } from "@/services/configuratio
 import { useTimestamps } from "@/composables/useTimestamps";
 import { useInterfaceCapabilities } from "@/composables/useInterfaceCapabilities";
 import { nicOffloadFeatures, tuningSettings } from "@/services/tuning";
+import { compareInterfaceNames, formatInterfaceName, interfaceNameChoices, sortByInterface } from "@/services/interfaceNames";
 
 type OffloadMode = "enabled" | "disabled";
 type Mode = OffloadMode | "unmanaged";
@@ -53,9 +54,9 @@ const formValue = computed(() => stableJson(props.mode === "rps" ? rows.value : 
 const initial = ref(formValue.value), initialTuning = ref("");
 const editing = computed(() => store.draft ?? store.state.data?.desired);
 const dirty = computed(() => formValue.value !== initial.value);
-const rpsInterfaces = computed(() => (diagnostics.value?.interfaces ?? []).filter(link => link.managed &&
+const rpsInterfaces = computed(() => sortByInterface((diagnostics.value?.interfaces ?? []).filter(link => link.managed &&
   editing.value?.interfaces.some(item => item.name === link.name &&
-    (item.kind === "ethernet" && link.physical || item.kind === "wireguard" && !link.physical))));
+    (item.kind === "ethernet" && link.physical || item.kind === "wireguard" && !link.physical))), link => link.name));
 const physical = computed(() => rpsInterfaces.value.filter(link => link.physical && !link.errors.length));
 const newWireGuard = computed(() => (editing.value?.interfaces ?? []).filter(item => item.kind === "wireguard" &&
   !store.state.data?.desired.interfaces.some(saved => saved.name === item.name)).map(item => item.name));
@@ -64,13 +65,13 @@ const queues = computed(() => {
     target: `${link.name}/${queue.name}`, observed: queue.rps_cpus, verified: true,
   })));
   const targets = new Set([...manualTargets.value, ...Object.keys(editing.value?.kernel?.rps ?? {})]);
-  return [...observed, ...[...targets].filter(target => newWireGuard.value.includes(target.split("/")[0]!) &&
+  return sortByInterface([...observed, ...[...targets].filter(target => newWireGuard.value.includes(target.split("/")[0]!) &&
     !observed.some(queue => queue.target === target)).map(target => ({
     target, observed: null, verified: false,
-  }))];
+  }))], queue => queue.target);
 });
 const supportsOffloads = computed(() => diagnostics.value?.configured_offloads !== undefined);
-const offloadInterfaces = computed(() => [...new Set([...physical.value.map(link => link.name), ...offloadRows.value.map(row => row.interface)])].sort());
+const offloadInterfaces = computed(() => [...new Set([...physical.value.map(link => link.name), ...offloadRows.value.map(row => row.interface)])].sort(compareInterfaceNames));
 const visibleOffloads = computed(() => offloadRows.value.filter(row => row.interface === selectedOffloadInterface.value));
 watch(offloadInterfaces, names => {
   if (!names.includes(selectedOffloadInterface.value)) selectedOffloadInterface.value = names[0] ?? "";
@@ -417,7 +418,7 @@ async function stage() {
         :key="link.name"
         role="status"
       >
-        {{ link.name }}: {{ link.errors.join("; ") }}
+        {{ formatInterfaceName(link.name) }}: {{ link.errors.join("; ") }}
       </p>
       <form
         @submit.prevent="stage"
@@ -441,7 +442,7 @@ async function stage() {
           >
             <v-select
               v-model="newInterface"
-              :items="newWireGuard"
+              :items="interfaceNameChoices(newWireGuard)"
               aria-label="New WireGuard interface"
               placeholder="Select interface"
               :disabled="rpsDisabled"
@@ -484,7 +485,7 @@ async function stage() {
                 :key="row.target"
               >
                 <th scope="row">
-                  {{ row.target }}<small v-if="advancedMask">Observed mask: {{ queues.find(queue => queue.target === row.target)?.observed ?? "Unknown" }}</small>
+                  {{ row.target.replace(/^[^/]+/, formatInterfaceName) }}<small v-if="advancedMask">Observed mask: {{ queues.find(queue => queue.target === row.target)?.observed ?? "Unknown" }}</small>
                   <small v-if="queues.find(queue => queue.target === row.target)?.verified === false">Queue support unverified until apply</small>
                 </th>
                 <td>
@@ -539,7 +540,7 @@ async function stage() {
             <div class="offload-selectors">
               <v-select
                 v-model="selectedOffloadInterface"
-                :items="offloadInterfaces"
+                :items="interfaceNameChoices(offloadInterfaces)"
                 label="Interface"
                 aria-label="Offload interface"
                 density="compact"
@@ -557,7 +558,7 @@ async function stage() {
               class="offload-settings"
             >
               <p v-if="!visibleOffloads.length && offloadRows.length">
-                No configurable offloads were reported for {{ selectedOffloadInterface }}. Refresh capabilities to scan again.
+                No configurable offloads were reported for {{ formatInterfaceName(selectedOffloadInterface) }}. Refresh capabilities to scan again.
               </p>
               <div
                 v-for="row in visibleOffloads"

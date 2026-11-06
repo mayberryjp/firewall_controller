@@ -5,6 +5,7 @@ import { isInitialLoad } from "@/services/datasets";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import { uploadMqttPassword } from "@/services/netcontrol";
 import { mqttSchema } from "@/types/domain";
+import { interfaceNameChoices } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.desired);
@@ -150,7 +151,7 @@ async function stage(): Promise<void> {
             id="mqtt-interface"
             v-model="form.source_interface"
             aria-label="Source interface"
-            :items="interfaces"
+            :items="interfaceNameChoices(interfaces)"
             :disabled="blocked"
             density="compact"
             hide-details

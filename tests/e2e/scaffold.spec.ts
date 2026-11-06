@@ -254,7 +254,7 @@ test("Home Assistant MQTT configuration and system stats use the staged confirme
   await settings.getByLabel("Enable MQTT", { exact: true }).check();
   await settings.getByLabel("Broker URL", { exact: true }).fill("mqtts://broker.example.test:8883");
   await settings.getByLabel("Source interface", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await page.getByRole("option", { name: "LAB0", exact: true }).click();
   await settings.getByLabel("Username", { exact: true }).fill("publisher");
   const password = settings.getByLabel("Replacement password", { exact: true });
   await expect(password).toHaveAttribute("type", "password"); await password.fill("synthetic-mqtt-password");
@@ -342,7 +342,7 @@ test("masquerading adds and edits inline without popups on desktop and mobile", 
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByLabel("Source network (blank = Any)", { exact: true }).fill("not-a-network");
   await page.getByLabel("Managed egress with family address", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await page.getByRole("option", { name: "LAB0", exact: true }).click();
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("alert")).toBeVisible();
   await expect(editor).toBeVisible();
@@ -512,7 +512,7 @@ test("INTERFACE RULES is the first Firewall/NAT page with selectable ordered rul
   const region = page.getByRole("region", { name: "INTERFACE RULES", exact: true });
   await expect(region.locator(".host-rule:not(.host-rule--default) .rule-value")).toHaveText(["1", "203.0.113.99/32", "Any", "Any", "Any", "drop"]);
   await region.locator(".v-select .v-field").click();
-  await page.getByRole("option", { name: "wan0", exact: true }).click();
+  await page.getByRole("option", { name: "WAN0", exact: true }).click();
   await expect(region.locator(".host-rule:not(.host-rule--default) .rule-value")).toHaveText(["1", "Server", "TCP", "443", "Any", "accept"]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await navigation.getByRole("tab", { name: "PROTECTED HOSTS", exact: true }).click();
@@ -640,7 +640,7 @@ test("compact overview contains live status widgets without diagnostic clutter",
   const interfaceWidget = dashboard.getByRole("region", { name: "Interfaces", exact: true });
   await expect(interfaceWidget.getByRole("columnheader")).toHaveText(["Name", "Admin state", "Operational state", "Active IP", "Mode"]);
   await expect(interfaceWidget.locator(".v-chip.text-success")).toHaveCount(3);
-  for (const name of ["lab0", "wg0", "lo"]) {
+  for (const name of ["LAB0", "WG0", "LO"]) {
     const row = interfaceWidget.getByRole("row").filter({ has: page.locator(".interface-name").filter({ hasText: new RegExp(`^${name}$`) }) });
     await expect(row.getByRole("cell").nth(1)).toHaveText("Up");
     await expect(row.getByRole("cell").nth(2)).toHaveText("-");
@@ -958,15 +958,15 @@ test("loopbacks edits dummy interfaces and keeps lo read-only outside Physical i
   ] });
   await connect(page); await navigate(page, "Physical interfaces");
   const physical = page.getByRole("region", { name: "Physical interfaces", exact: true });
-  await expect(physical.getByRole("cell", { name: "lo", exact: true })).toHaveCount(0);
-  await expect(physical.getByRole("cell", { name: original.name, exact: true })).toHaveCount(0);
+  await expect(physical.getByRole("cell", { name: "LO", exact: true })).toHaveCount(0);
+  await expect(physical.getByRole("cell", { name: original.name.toUpperCase(), exact: true })).toHaveCount(0);
   await navigate(page, "Loopbacks");
   const view = page.getByRole("region", { name: "Loopbacks", exact: true });
-  const loopback = view.getByRole("row").filter({ has: page.getByRole("cell", { name: "lo", exact: true }) });
+  const loopback = view.getByRole("row").filter({ has: page.getByRole("cell", { name: "LO", exact: true }) });
   await expect(loopback).toContainText("127.0.0.1/8, ::1/128");
   await expect(loopback).toContainText("Read-only"); await expect(loopback.getByRole("button")).toHaveCount(0);
   await expect(view.getByRole("columnheader", { name: "Reload DHCP", exact: true })).toHaveCount(0);
-  const dummy = view.getByRole("row").filter({ has: page.getByRole("cell", { name: original.name, exact: true }) });
+  const dummy = view.getByRole("row").filter({ has: page.getByRole("cell", { name: original.name.toUpperCase(), exact: true }) });
   await expect(dummy).toContainText("192.0.2.99/24");
   await dummy.getByRole("button", { name: "Edit / stage", exact: true }).click();
   const editor = view.getByRole("row", { name: "Loopback editor", exact: true });
@@ -1061,21 +1061,21 @@ test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ p
   await expect(view.getByRole("columnheader", { name: "Active Addresses", exact: true })).toHaveCount(0);
   await expect(view.getByRole("columnheader")).toHaveCount(8);
   await expect(view.getByRole("columnheader", { name: "Mode", exact: true })).toHaveCount(1);
-  await expect(view.getByRole("row").filter({ hasText: "eno1" })).toContainText("Static");
+  await expect(view.getByRole("row").filter({ hasText: "ENO1" })).toContainText("Static");
   await expect(view.getByRole("button", { name: /Reload DHCP/ })).toHaveCount(0);
   await expect(view.getByRole("columnheader", { name: "Configured Static Addresses", exact: true })).toHaveCount(0);
-  const dhcp = view.getByRole("row").filter({ has: page.getByRole("cell", { name: "enp3s0", exact: true }) });
+  const dhcp = view.getByRole("row").filter({ has: page.getByRole("cell", { name: "ENP3S0", exact: true }) });
   await expect(dhcp).toContainText("192.0.2.123/24");
   await expect(dhcp).toContainText("DHCP");
-  await dhcp.getByRole("cell", { name: "enp3s0", exact: true }).click();
+  await dhcp.getByRole("cell", { name: "ENP3S0", exact: true }).click();
   const dhcpEditor = page.getByRole("row", { name: "Configure enp3s0", exact: true });
   await expect(dhcpEditor.getByRole("button", { name: /Reload DHCP/ })).toHaveCount(0);
   await expect(dhcpEditor.getByLabel("IPv4 addresses / prefixes", { exact: true })).toHaveValue("192.0.2.123/24");
   await expect(dhcpEditor.getByLabel("IPv4 addresses / prefixes", { exact: true })).toBeDisabled();
   await dhcpEditor.getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(view.getByRole("cell", { name: "lo", exact: true })).toHaveCount(0);
-  await expect(view.getByRole("row").filter({ hasText: "spare0" })).toContainText("Down");
-  await expect(view.getByRole("row").filter({ hasText: "br0" })).toContainText("Read-only");
+  await expect(view.getByRole("cell", { name: "LO", exact: true })).toHaveCount(0);
+  await expect(view.getByRole("row").filter({ hasText: "SPARE0" })).toContainText("Down");
+  await expect(view.getByRole("row").filter({ hasText: "BR0" })).toContainText("Read-only");
   await expect(view.getByRole("cell", { name: "172.16.10.2/24", exact: true })).toBeVisible();
   await expect(view.getByRole("textbox")).toHaveCount(0);
   await expect(view.getByRole("combobox")).toHaveCount(0);
@@ -1085,7 +1085,7 @@ test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ p
   await expect(view).not.toContainText("Full configured");
   await expect(view.getByRole("table")).not.toContainText("[");
   await expect(view.getByRole("table")).not.toContainText("{");
-  if (!isMobile) expect((await view.getByRole("row").filter({ hasText: "eno1" }).boundingBox())!.height).toBeLessThanOrEqual(80);
+  if (!isMobile) expect((await view.getByRole("row").filter({ hasText: "ENO1" }).boundingBox())!.height).toBeLessThanOrEqual(80);
   const layout = await view.locator(".v-table__wrapper").evaluate(element => ({
     width: element.clientWidth, content: element.scrollWidth,
     columns: [...element.querySelectorAll("thead th")].map(cell => ({ name: cell.textContent?.trim(), width: cell.getBoundingClientRect().width })),
@@ -1093,9 +1093,9 @@ test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ p
   expect(layout.content, JSON.stringify(layout)).toBeLessThanOrEqual(layout.width);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("interfaces-clean.png"), fullPage: true, animations: "disabled" });
-  const row = view.getByRole("row").filter({ hasText: "eno1" });
-  await row.getByRole("cell", { name: "eno1", exact: true }).click();
-  await expect(view.getByRole("link", { name: "eno1", exact: true })).toHaveCount(0);
+  const row = view.getByRole("row").filter({ hasText: "ENO1" });
+  await row.getByRole("cell", { name: "ENO1", exact: true }).click();
+  await expect(view.getByRole("link", { name: "ENO1", exact: true })).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const settings = page.getByRole("row", { name: "Configure eno1", exact: true });
   await expect(view.getByRole("row")).toHaveCount(6);
@@ -1131,7 +1131,7 @@ test("physical interfaces stay compact and show DHCP IPv4 read-only", async ({ p
   await page.screenshot({ path: testInfo.outputPath("interface-inline.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(settings).toHaveCount(0);
-  await expect(row).toContainText("Primary uplink"); await expect(row).toContainText("eno1");
+  await expect(row).toContainText("Primary uplink"); await expect(row).toContainText("ENO1");
   await expect(row).toContainText("172.16.10.3/24"); await expect(row).toContainText("2001:db8::2/64");
   await expect(row).not.toContainText("172.16.10.99/24");
   await expect(row).toContainText("WAN");
@@ -1164,7 +1164,7 @@ test("staged changes shows an expanded unified diff without JSON panels", async 
     up: true, addresses: initial.interfaces[0]!.addresses, ownership: "managed", role: null, addressing_type: null,
   }] });
   await connect(page); await navigate(page, "Physical interfaces");
-  await page.getByRole("region", { name: "Physical interfaces", exact: true }).getByRole("cell", { name: "lab0", exact: true }).click();
+  await page.getByRole("region", { name: "Physical interfaces", exact: true }).getByRole("cell", { name: "LAB0", exact: true }).click();
   const editor = page.getByRole("row", { name: "Configure lab0", exact: true });
   await editor.getByLabel("MTU", { exact: true }).fill("1400");
   await editor.getByLabel("Display name", { exact: true }).fill("Office uplink with a long descriptive name to verify horizontal scrolling stays inside the diff");
@@ -1290,7 +1290,7 @@ test("routing pages add and edit inline without overflow", async ({ page }, test
   await expect(route).toBeVisible(); await expect(page.getByRole("dialog")).toHaveCount(0);
   await route.getByLabel("Destination network", { exact: true }).fill("203.0.113.0/24");
   await route.getByLabel("Gateway interface", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await page.getByRole("option", { name: "LAB0", exact: true }).click();
   await route.getByLabel("Metric", { exact: true }).fill("0");
   await route.getByRole("button", { name: "Save", exact: true }).click();
   await expect(route.getByRole("alert")).toContainText("1..2147483647");
@@ -1390,7 +1390,7 @@ test("monitor editor keeps usable fields and compact actions when adding beside 
   await expectUsableEditor();
   await editor.getByLabel("Monitor name", { exact: true }).fill("backup");
   await editor.getByLabel("Interface", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await page.getByRole("option", { name: "LAB0", exact: true }).click();
   await editor.getByLabel("Probe Target", { exact: true }).fill("198.51.100.1");
   await editor.getByRole("button", { name: "Show advanced", exact: true }).click();
   await expect(page.getByLabel("Probe interval (ms)", { exact: true })).toBeVisible();
@@ -1602,6 +1602,8 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   await page.getByLabel("Metric", { exact: true }).fill("42");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await navigate(page, "Firewall destined");
+  await input.getByRole("combobox", { name: "Interface", exact: true }).press("ArrowDown");
+  await page.getByRole("option", { name: "WAN0", exact: true }).click();
   await input.getByRole("button", { name: "Edit rule 1", exact: true }).click();
   await input.getByLabel("Destination ports (comma separated)", { exact: true }).fill("68, 67");
   await input.getByRole("button", { name: "Save rule", exact: true }).click();
@@ -1617,8 +1619,8 @@ test("host input stays separate and survives DHCP WAN full-package edits", async
   await navigate(page, "NAT masquerading");
   await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
   await page.getByLabel("Managed egress with family address", { exact: true }).press("Enter");
-  await expect(page.getByRole("option", { name: "wan0", exact: true })).toBeVisible();
-  await page.getByRole("option", { name: "wan0", exact: true }).click();
+  await expect(page.getByRole("option", { name: "WAN0", exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "WAN0", exact: true }).click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await navigate(page, "SAVE");
   await expect(page.getByRole("main")).toContainText("Host input changes can block management access or DHCP renewal");
@@ -1659,7 +1661,7 @@ test("inline interface settings and multi-server relay stage together without au
   const initial = config(); initial.interfaces[0] = { ...initial.interfaces[0]!, kind: "ethernet" };
   const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: [{ name: "lab0", kind: "ethernet", index: 2, mac: "02:00:00:00:00:02", mtu: 1500, up: true, addresses: ["192.0.2.10/24"], ownership: "managed", role: null, addressing_type: null }] }); await connect(page);
   await navigate(page, "Physical interfaces");
-  await page.getByRole("row", { name: /lab0/ }).first().click();
+  await page.getByRole("row", { name: /LAB0/ }).first().click();
   await page.getByLabel("MTU", { exact: true }).fill("1450");
   await expect(page.getByLabel("Enable DHCPv4 relay", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("DHCPv4 relay servers", { exact: true })).toHaveCount(0);
@@ -1735,7 +1737,7 @@ test("gateway create stages an explicit path and preserves complete package stat
   await page.getByLabel("Monitor name", { exact: true }).fill("uplink");
   await expect(page.getByRole("checkbox")).toHaveCount(0);
   await page.getByLabel("Interface", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await page.getByRole("option", { name: "LAB0", exact: true }).click();
   await expect(page.getByLabel("Gateway", { exact: true })).toHaveCount(0);
   await page.getByLabel("Probe Target", { exact: true }).fill("198.51.100.1");
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -1761,7 +1763,7 @@ test("DHCP gateway monitor saves before a lease and displays live resolved paths
   await editor.getByLabel("Monitor name", { exact: true }).fill("wan-health");
   await expect(editor.getByRole("button", { name: /^(Explicit|DHCP)$/ })).toHaveCount(0);
   await editor.getByLabel("Interface", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await page.getByRole("option", { name: "LAB0", exact: true }).click();
   await editor.getByLabel("Probe Target", { exact: true }).fill("1.1.1.1");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("dhcp-monitor-editor.png"), fullPage: true, animations: "disabled" });
@@ -1895,14 +1897,15 @@ test("gateway fractional metrics, null gaps and stale health remain distinct", a
   await expect(summary.locator('[data-metric="Loss"]')).toHaveAttribute("title", "33.33 %");
   await expect(summary).toContainText("1.25 ms"); await expect(summary).toContainText("RTT variation");
   await expect(summary).toContainText("Unavailable");
-  await expect(monitors.getByRole("columnheader")).toHaveText(["Name", "Interface", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions"]);
-  await expect(monitorRow.getByRole("cell")).toHaveCount(9);
+  await expect(monitors.getByRole("columnheader")).toHaveText(["Name", "Interface", "Probe Target", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions"]);
+  await expect(monitorRow.getByRole("cell")).toHaveCount(10);
+  await expect(monitorRow.getByRole("cell").nth(2)).toContainText(initial.gateway_monitors[0]!.target);
   await expect(summary.locator('[data-metric="Health"] .v-chip')).toHaveText("unknown");
   await expect(summary.locator(".v-chip")).toHaveCount(5);
   for (const metric of ["Loss", "Mean RTT", "Stddev", "RTT variation"]) {
     await expect(summary.locator(`[data-metric="${metric}"] .v-chip`)).toHaveAttribute("aria-label", /Unrated/);
   }
-  await expect(monitorRow).not.toContainText(initial.gateway_monitors[0]!.target);
+  await expect(monitorRow).toContainText(initial.gateway_monitors[0]!.target);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("monitor-probe-statistics.png"), fullPage: true, animations: "disabled" });
   await toggle.click();
@@ -2018,7 +2021,7 @@ test("operational pages keep content compact with readable details", async ({ pa
     await navigate(page, entry.title);
     const main = page.getByRole("main");
     await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(/^\/(settings|connections|config\/(upgrade|editor))/.test(entry.path) ? 1 : 0);
+    await expect(main.getByRole("heading", { level: 1 })).toHaveCount(entry.path !== "/settings/remote-dns" && /^\/(settings|connections|config\/(upgrade|editor))/.test(entry.path) ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
     await expect(main).not.toContainText("Operator prerequisites");
     await expect(main).not.toContainText("Last successful read");
@@ -2063,9 +2066,9 @@ test("new WireGuard tunnels are created only from their owning page", async ({ p
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue("tun_wg0");
   await page.getByLabel("Private Key", { exact: true }).fill("new-tunnel-key");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("row", { name: /tun_wg0/ })).toContainText("51820");
+  await expect(page.getByRole("row", { name: /TUN_WG0/ })).toContainText("51820");
   await navigate(page, "Physical interfaces");
-  await expect(page.getByRole("link", { name: "tun_wg0", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "TUN_WG0", exact: true })).toHaveCount(0);
   await navigate(page, "WireGuard peers");
   await page.getByRole("button", { name: "Add peer", exact: true }).click();
   await page.getByLabel("Public key", { exact: true }).fill(btoa("\x01".repeat(32)));
@@ -2088,7 +2091,7 @@ test("VLANs have a dedicated route while Interfaces edits physical behavior only
   await connect(page); await navigate(page, "VLANs");
   await expect(page.getByRole("columnheader", { name: "Parent", exact: true })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "VLAN ID", exact: true })).toBeVisible();
-  await expect(page.getByRole("main").getByRole("link", { name: "vlan10", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("link", { name: "VLAN10", exact: true })).toHaveCount(0);
   await page.goto("/vlans/vlan10");
   await expect(page).toHaveURL(/\/vlans\/vlan10$/);
   await page.reload();
@@ -2108,16 +2111,16 @@ test("VLANs have a dedicated route while Interfaces edits physical behavior only
   await page.getByLabel("IPv4 addresses / prefixes", { exact: true }).fill("10.10.0.2/24");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await navigate(page, "Physical interfaces");
-  await expect(page.getByRole("main").getByRole("link", { name: "vlan10", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Physical interfaces", exact: true })).not.toContainText("vlan10");
-  await expect(page.getByRole("region", { name: "Physical interfaces", exact: true })).not.toContainText("unmanaged20");
+  await expect(page.getByRole("main").getByRole("link", { name: "VLAN10", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Physical interfaces", exact: true })).not.toContainText("VLAN10");
+  await expect(page.getByRole("region", { name: "Physical interfaces", exact: true })).not.toContainText("UNMANAGED20");
   await expect(page.getByRole("button", { name: "Add interface", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
   await expect(page.getByLabel("Kind", { exact: true })).toHaveCount(0);
   await page.getByLabel("MTU", { exact: true }).fill("1550");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await navigate(page, "VLANs");
-  await expect(page.getByRole("main").getByRole("link", { name: "lab0", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("link", { name: "LAB0", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Add VLAN", exact: true }).click();
   const editor = page.getByRole("row", { name: "VLAN editor", exact: true });
   await expect(editor).toBeVisible();
@@ -2127,15 +2130,15 @@ test("VLANs have a dedicated route while Interfaces edits physical behavior only
   await expect(page.getByLabel("Kind", { exact: true })).toHaveCount(0);
   await page.getByLabel("Interface name", { exact: true }).fill("vlan30");
   await page.getByLabel("Parent interface", { exact: true }).press("Enter");
-  await page.getByRole("option", { name: "lab0", exact: true }).click();
+  await page.getByRole("option", { name: "LAB0", exact: true }).click();
   await page.getByLabel("VLAN ID", { exact: true }).fill("30");
   await expect(page.getByLabel("Interface address prefixes", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Enable DHCPv4 relay", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
-  await expect(page.getByRole("main").getByRole("link", { name: "vlan30", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("main").getByRole("cell", { name: "vlan30 LAN", exact: true })).toBeVisible();
-  const created = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "vlan30 LAN", exact: true }) });
+  await expect(page.getByRole("main").getByRole("link", { name: "VLAN30", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("cell", { name: "VLAN30 LAN", exact: true })).toBeVisible();
+  const created = page.getByRole("row").filter({ has: page.getByRole("cell", { name: "VLAN30 LAN", exact: true }) });
   await expect(created.locator(".vlan-role")).toHaveText("LAN");
   expect(await created.locator(".vlan-role").evaluate(element =>
     parseFloat(getComputedStyle(element).fontSize) < parseFloat(getComputedStyle(element.parentElement!).fontSize))).toBe(true);

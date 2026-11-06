@@ -6,7 +6,7 @@ import { inputFirewallSchema } from "@/types/domain";
 import type { Field } from "@/types/forms";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import FieldInput from "@/components/base/FieldInput.vue";
-import { interfaceChoice } from "@/services/resourceCollections";
+import { interfaceChoices } from "@/services/resourceCollections";
 import FirewallRuleTable from "@/components/feature/FirewallRuleTable.vue";
 import FirewallCounterOverview from "@/components/feature/FirewallCounterOverview.vue";
 
@@ -28,10 +28,10 @@ const fields: Field[] = [
   { key: "policy", label: "Input default policy", kind: "select", choices: ["accept", "drop"].map(value => ({ title: value, value })) },
 ];
 const selectedInterface = ref("");
-const interfaceOptions = computed(() => [...new Set([
+const interfaceOptions = computed(() => interfaceChoices([...new Set([
   ...(input.value?.interfaces.map(ingress => ingress.interface) ?? []),
   ...(selected.value?.interfaces.map(link => link.name) ?? []),
-])].map(name => interfaceChoice(selected.value?.interfaces.find(link => link.name === name) ?? { name })));
+])].map(name => selected.value?.interfaces.find(link => link.name === name) ?? { name })));
 watch(() => interfaceOptions.value.map(option => option.value), names => {
   if (!names.includes(selectedInterface.value)) selectedInterface.value = names[0] ?? "";
 }, { immediate: true });

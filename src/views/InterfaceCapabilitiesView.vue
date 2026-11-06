@@ -3,6 +3,7 @@ import { useControllerStore } from "@/stores/controller";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { useInterfaceCapabilities } from "@/composables/useInterfaceCapabilities";
 import type { InterfaceCapabilities, PerformanceCapability } from "@/services/interfaceCapabilities";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const { formatTimestamp, timeZone } = useTimestamps();
@@ -119,11 +120,11 @@ function chipTitle(feature?: PerformanceCapability) {
         </thead>
         <tbody>
           <tr
-            v-for="row in snapshot.inventory.interfaces"
+            v-for="row in sortByInterface(snapshot.inventory.interfaces, row => row.name)"
             :key="row.name"
           >
             <th scope="row">
-              {{ row.name }}<small>{{ row.kind }}</small>
+              {{ formatInterfaceName(row.name) }}<small>{{ row.kind }}</small>
             </th>
             <td>{{ row.driver?.name ?? "Unknown" }}</td>
             <td>

@@ -8,6 +8,7 @@ import type { DiscoveredInterface } from "@/types/domain";
 import OverviewWidget from "./OverviewWidget.vue";
 import OverviewInterfaceStatus from "./OverviewInterfaceStatus.vue";
 import OverviewInterfaceIdentity from "./OverviewInterfaceIdentity.vue";
+import { compareInterfaceNames } from "@/services/interfaceNames";
 const store = useControllerStore();
 const interfaceStates = ["admin", "operational"] as const;
 const discovered = ref<DiscoveredInterface[]>([]), addressError = ref("");
@@ -26,7 +27,7 @@ const rows = computed(() => [...new Set([
   ...(store.statistics.data?.interfaces.map(item => item.name) ?? []),
   ...(store.state.data?.desired.interfaces.map(item => item.name) ?? []),
   ...discovered.value.map(item => item.name),
-])].map(name => {
+])].sort(compareInterfaceNames).map(name => {
   const link = discovered.value.find(item => item.name === name);
   return {
     name, sample: store.statistics.data?.interfaces.find(item => item.name === name),

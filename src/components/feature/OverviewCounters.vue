@@ -4,6 +4,7 @@ import { useControllerStore } from "@/stores/controller";
 import { isInitialLoad } from "@/services/datasets";
 import { formatBytes } from "@/services/hostHealth";
 import { isSystemLoopback } from "@/services/resourceCollections";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 import OverviewWidget from "./OverviewWidget.vue";
 import OverviewInterfaceIdentity from "./OverviewInterfaceIdentity.vue";
 const store = useControllerStore();
@@ -104,7 +105,7 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
       </thead>
       <tbody v-if="store.statistics.data?.interfaces.length">
         <tr
-          v-for="item in store.statistics.data.interfaces"
+          v-for="item in sortByInterface(store.statistics.data.interfaces, item => item.name)"
           :key="item.name"
         >
           <th scope="row">
@@ -116,7 +117,7 @@ const note = computed(() => store.statistics.error ? "Unavailable" : isInitialLo
                 :to="{ path: '/diagnostics/traffic', query: { interface: item.name } }"
                 class="counter-link"
               >
-                {{ item.name }}
+                {{ formatInterfaceName(item.name) }}
               </RouterLink>
             </OverviewInterfaceIdentity>
           </th>

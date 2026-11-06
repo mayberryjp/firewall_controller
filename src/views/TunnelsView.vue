@@ -3,13 +3,14 @@ import { computed, ref } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, isWireGuardRoute, validateConfig } from "@/services/configuration";
 import type { ManagedInterface } from "@/types/domain";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 
 type Tunnel = Extract<ManagedInterface, { kind: "wireguard" }>;
 interface TunnelForm { name: string; mtu: number; addresses: string; key_ref: string; listen_port: number }
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.desired);
-const tunnels = computed(() => (selected.value?.interfaces ?? []).flatMap((link, index) => link.kind === "wireguard" ? [{ link, index }] : []));
+const tunnels = computed(() => sortByInterface((selected.value?.interfaces ?? []).flatMap((link, index) => link.kind === "wireguard" ? [{ link, index }] : []), row => row.link.name));
 const types = [{ title: "WireGuard", value: "wireguard" }];
 const editing = ref<string | null>(null), creating = ref(false), type = ref("wireguard");
 const form = ref<TunnelForm>({ name: "", mtu: 1420, addresses: "", key_ref: "", listen_port: 51820 });
@@ -148,7 +149,7 @@ function remove(tunnel: Tunnel): void {
           :key="link.name"
         >
           <th scope="row">
-            {{ link.name }}
+            {{ formatInterfaceName(link.name) }}
           </th>
           <td>WireGuard</td>
           <td>

@@ -152,7 +152,7 @@ describe("PROTECTED HOSTS host navigation", () => {
     expect(rules[0]!.findAllComponents({ name: "VChip" }).map((chip: VueWrapper) => [chip.text(), chip.props()])).toEqual([
       ["TCP", expect.objectContaining({ color: "info", prependIcon: undefined })],
       ["443, 8443", expect.objectContaining({ color: undefined, prependIcon: undefined })],
-      ["lab0", expect.objectContaining({ color: "primary", prependIcon: "mdi-lan-connect" })],
+      ["LAB0", expect.objectContaining({ color: "primary", prependIcon: "mdi-lan-connect" })],
       ["accept", expect.objectContaining({ color: "success", prependIcon: "mdi-check-circle-outline" })],
     ]);
     expect(rules[1]!.findAllComponents({ name: "VChip" }).map((chip: VueWrapper) => [chip.text(), chip.props()])).toEqual([
@@ -173,7 +173,7 @@ describe("PROTECTED HOSTS host navigation", () => {
     expect(wrapper.findAll(".host-link").map(host => host.text())).toEqual(["PHONE", "SERVER", "WORKSTATION"]);
     await wrapper.findAll(".host-link")[2]!.trigger("click");
     expect(rows()).toEqual([
-      ["1", "Server", "TCP", "443, 8443", "lab0", "accept"],
+      ["1", "Server", "TCP", "443, 8443", "LAB0", "accept"],
       ["2", "198.51.100.0/24", "UDP", "53", "Any", "drop"],
       ["3", "Any", "Any", "Any", "Any", "accept"],
       ["Default", "Any", "Any", "Any", "Any", "drop"],

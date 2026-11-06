@@ -3,9 +3,14 @@ import {
 } from "@/types/domain";
 import type { Section } from "@/services/resourceForms";
 import { formatFirewallProtocol } from "@/services/firewallProtocols";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 
 export function interfaceChoice(link: Pick<Config["interfaces"][number], "name" | "metadata">): { title: string; value: string } {
-  return { title: link.metadata?.display_name ? `${link.name} (${link.metadata.display_name})` : link.name, value: link.name };
+  return { title: link.metadata?.display_name ? `${formatInterfaceName(link.name)} (${link.metadata.display_name})` : formatInterfaceName(link.name), value: link.name };
+}
+
+export function interfaceChoices(links: readonly Pick<Config["interfaces"][number], "name" | "metadata">[]): Array<{ title: string; value: string }> {
+  return sortByInterface(links, link => link.name).map(interfaceChoice);
 }
 
 export function isSystemLoopback(link?: { kind: string; ownership?: string }): boolean {
@@ -55,6 +60,7 @@ export function displayResourceValue(value: unknown, key: string): string {
   if (key === "protocol" && (typeof value === "string" || value === undefined)) return formatFirewallProtocol(value);
   if (key === "destination_ports" && (value === undefined || value === "" || Array.isArray(value) && !value.length)) return "Any";
   if (value === undefined || value === null || value === "") return ["source", "destination"].includes(key) ? "Any" : key === "gateway" ? "Direct" : "—";
+  if (["interface", "out_interface", "target_interface", "parent", "source_interface"].includes(key) && typeof value === "string") return formatInterfaceName(value);
   if (key === "up" && typeof value === "boolean") return value ? "Up" : "Down";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value)) return value.length ? value.map(item => displayResourceValue(item, key)).join(", ") : "None";

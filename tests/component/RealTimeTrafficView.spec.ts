@@ -37,9 +37,9 @@ describe("Real Time Traffic", () => {
     wrapper = render();
     await wrapper.vm.$router.push("/diagnostics/traffic?interface=eth1");
     await sample(0); await sample(3, 300n);
-    expect(charts()[0]!.props("series").map((item: { name: string }) => item.name)).toEqual(["eth1"]);
+    expect(charts()[0]!.props("series").map((item: { name: string }) => item.name)).toEqual(["ETH1"]);
     await wrapper.vm.$router.push("/diagnostics/traffic?interface=eth0"); await flushPromises();
-    expect(charts()[0]!.props("series").map((item: { name: string }) => item.name)).toEqual(["eth0"]);
+    expect(charts()[0]!.props("series").map((item: { name: string }) => item.name)).toEqual(["ETH0"]);
     await wrapper.vm.$router.push("/diagnostics/traffic"); await flushPromises();
     expect(charts()[0]!.props("series")).toHaveLength(2);
   });
@@ -60,8 +60,8 @@ describe("Real Time Traffic", () => {
       { size: 0, hover: { size: 0 } },
     ]);
     expect(charts()[0]!.props("series")).toEqual([
-      { name: "eth0", data: [{ x: Date.parse(trafficStatistics().sample.collected_at), y: null }, { x: Date.parse(trafficStatistics(3).sample.collected_at), y: 300 }] },
-      { name: "eth1", data: [{ x: Date.parse(trafficStatistics().sample.collected_at), y: null }, { x: Date.parse(trafficStatistics(3).sample.collected_at), y: 600 }] },
+      { name: "ETH0", data: [{ x: Date.parse(trafficStatistics().sample.collected_at), y: null }, { x: Date.parse(trafficStatistics(3).sample.collected_at), y: 300 }] },
+      { name: "ETH1", data: [{ x: Date.parse(trafficStatistics().sample.collected_at), y: null }, { x: Date.parse(trafficStatistics(3).sample.collected_at), y: 600 }] },
     ]);
     expect(charts()[1]!.props("series")[0].data.at(-1).y).toBe(700);
     expect(charts()[1]!.props("series")[1].data.at(-1).y).toBe(1400);
@@ -70,12 +70,12 @@ describe("Real Time Traffic", () => {
     wrapper = render(); await sample(0); await sample(3, 300n);
     const controls = wrapper.findAllComponents(select);
     expect(controls[0]!.props("items")).toEqual([
-      { title: "All interfaces", value: "" }, { title: "eth0", value: "eth0" }, { title: "eth1", value: "eth1" },
+      { title: "All interfaces", value: "" }, { title: "ETH0", value: "eth0" }, { title: "ETH1", value: "eth1" },
     ]);
     const allColors = charts()[0]!.props("options").colors;
     controls[0]!.vm.$emit("update:modelValue", "eth1"); await flushPromises();
     expect(charts()[0]!.props("series")).toHaveLength(1);
-    expect(charts()[0]!.props("series")[0].name).toBe("eth1");
+    expect(charts()[0]!.props("series")[0].name).toBe("ETH1");
     expect(charts()[0]!.props("series")[0].data.at(-1).y).toBe(600);
     expect(charts()[1]!.props("series")[0].data.at(-1).y).toBe(1400);
     expect(charts()[0]!.props("options").colors).toEqual([allColors[1]]);
@@ -163,7 +163,7 @@ describe("Real Time Traffic", () => {
       store.statistics.data = next; store.statistics.stale = false; await flushPromises();
     }
     for (const chart of charts()) {
-      expect(chart.props("series").map((line: { name: string }) => line.name)).toEqual(["eth0", "eth1", "eth2"]);
+      expect(chart.props("series").map((line: { name: string }) => line.name)).toEqual(["ETH0", "ETH1", "ETH2"]);
       for (const line of chart.props("series")) expect(line.data.at(-1).y).toBe(0);
       expect(new Set(chart.props("options").colors).size).toBe(3);
     }

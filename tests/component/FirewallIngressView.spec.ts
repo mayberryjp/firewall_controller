@@ -35,12 +35,12 @@ describe("Interface ingress", () => {
     const stage = vi.spyOn(store, "stage");
     mountPage();
     expect(wrapper.findAll("option").map(option => [option.text(), option.attributes("value")]))
-      .toEqual([["lab0 (LAN)", "lab0"], ["missing0", "missing0"]]);
+      .toEqual([["LAB0 (LAN)", "lab0"], ["MISSING0", "missing0"]]);
     await wrapper.get("select").setValue("missing0");
     store.draft = cloneConfig(store.state.data!.desired);
     store.draft.interfaces[0]!.metadata!.display_name = "Office";
     await flushPromises();
-    expect(wrapper.findAll("option")[0]!.text()).toBe("lab0 (Office)");
+    expect(wrapper.findAll("option")[0]!.text()).toBe("LAB0 (Office)");
     expect((wrapper.get("select").element as HTMLSelectElement).value).toBe("missing0");
     expect(stage).not.toHaveBeenCalled();
   });
@@ -55,10 +55,10 @@ describe("Interface ingress", () => {
     mountPage();
     expect(wrapper.get("section").attributes("aria-label")).toBe("INTERFACE RULES");
     expect(wrapper.get("select").attributes("aria-label")).toBe("Interface");
-    expect(wrapper.findAll("option").map(option => option.text())).toEqual(["lab0"]);
+    expect(wrapper.findAll("option").map(option => option.text())).toEqual(["LAB0"]);
     expect(rows()).toEqual([
       ["1", "203.0.113.99/32", "Any", "Any", "Any", "drop"],
-      ["2", "Server", "TCP", "443, 8443", "wan0", "accept"],
+      ["2", "Server", "TCP", "443, 8443", "WAN0", "accept"],
       ["3", "Any", "Any", "Any", "Any", "drop"],
       ["4", "Unknown host (missing)", "UDP", "53", "Any", "accept"],
     ]);
@@ -73,7 +73,7 @@ describe("Interface ingress", () => {
     store.state.data!.desired.firewall.policies!.interfaces.push({ interface: "wan0", rules: [] });
     const before = cloneConfig(store.state.data!.desired), stage = vi.spyOn(store, "stage");
     mountPage();
-    expect(wrapper.findAll("option").map(option => option.text())).toEqual(["lab0", "wan0"]);
+    expect(wrapper.findAll("option").map(option => option.text())).toEqual(["LAB0", "WAN0"]);
     await wrapper.get("select").setValue("wan0");
     expect(wrapper.text()).toContain("No explicit ingress rules for this interface.");
     expect(wrapper.get('table[aria-label="Interface rules"]').findAll("thead th")).toHaveLength(10);

@@ -16,7 +16,7 @@ test("DHCP relay interface labels stay on one compact line", async ({ page }) =>
   await page.goto("/services/dhcp-relay");
 
   const table = page.getByRole("region", { name: "DHCPv4 relay", exact: true }).locator(".relay-table");
-  await expect(table.locator(".relay-interface-name")).toHaveText([link.name, "lab1"]);
+  await expect(table.locator(".relay-interface-name")).toHaveText([link.name.toUpperCase(), "LAB1"]);
   await expect(table.locator(".relay-interface-role")).toHaveText(["Unassigned", "LAN"]);
   const description = table.locator(".relay-interface-description");
   await expect(description).toHaveText(link.metadata.display_name);

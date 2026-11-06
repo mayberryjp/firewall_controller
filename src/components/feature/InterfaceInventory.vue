@@ -7,6 +7,7 @@ import { record } from "@/types/forms";
 import type { ResourceRow } from "@/composables/useResourceCollection";
 import ResourceTable from "@/components/feature/ResourceTable.vue";
 import type { DiscoveredInterface } from "@/types/domain";
+import { sortByInterface } from "@/services/interfaceNames";
 
 const props = withDefaults(defineProps<{ expandedName?: string; loopbacks?: boolean; editingRow?: number }>(), { expandedName: undefined, loopbacks: false, editingRow: undefined });
 const emit = defineEmits<{ manage: [link: DiscoveredInterface]; edit: [value: unknown]; delete: [row: ResourceRow] }>();
@@ -27,7 +28,7 @@ const rows = computed<ResourceRow[]>(() => {
   if (props.loopbacks) selected.value?.interfaces.forEach((link, index) => {
     if (link.kind === "dummy" && !links.some(discovered => discovered.name === link.name)) result.push({ index, rowID: link.name, value: record(link) });
   });
-  return result;
+  return sortByInterface(result, row => String(row.value.name));
 });
 let controller: AbortController | undefined;
 async function refresh(): Promise<void> {

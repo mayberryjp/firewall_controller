@@ -46,14 +46,14 @@ test("Overview metric links show live ApexCharts without link styling and drill 
   await system.getByRole("button", { name: "Close live view" }).click();
   await expect(system.locator(".apexcharts-canvas")).toHaveCount(0);
   const counters = page.getByRole("region", { name: "Interface counters", exact: true });
-  const interfaceLink = counters.getByRole("link", { name: "eth1", exact: true });
+  const interfaceLink = counters.getByRole("link", { name: "ETH1", exact: true });
   expect(await interfaceLink.evaluate(element => {
     const style = getComputedStyle(element);
     return style.color === getComputedStyle(element.parentElement!).color && style.textDecorationLine === "none";
   })).toBe(true);
   await interfaceLink.click();
   await expect(page).toHaveURL(/\/diagnostics\/traffic\?interface=eth1$/);
-  await expect(page.locator(".v-select").first()).toContainText("eth1");
+  await expect(page.locator(".v-select").first()).toContainText("ETH1");
   await expect(page.getByRole("region", { name: "Bytes", exact: true }).locator(".apexcharts-canvas")).toBeVisible();
   expect(backend.writes).toHaveLength(0);
   expect(errors).toEqual([]);

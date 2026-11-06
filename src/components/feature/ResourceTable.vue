@@ -16,6 +16,7 @@ import FirewallCounterRows from "@/components/feature/FirewallCounterRows.vue";
 import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
 import { useRuleDrag } from "@/composables/useRuleDrag";
 import { resourceItems } from "@/services/resourceCollections";
+import { formatInterfaceName } from "@/services/interfaceNames";
 const { formatTimestamp, timeZone } = useTimestamps();
 
 const props = defineProps<{ section: Section; rows: ResourceRow[]; total: number; disabled: boolean; detail: boolean; wireguard?: boolean; vlan?: boolean; inventory?: boolean; loopbacks?: boolean; expandedName?: string; editingRow?: number }>();
@@ -61,14 +62,13 @@ const compact = computed(() => physical.value || props.vlan || props.loopbacks |
 const hasChanges = computed(() => !compact.value && store.diff.some(item => item.area === props.section));
 const visibleColumns = computed(() => (physical.value ? ["name", "role", "up", "mtu", "address_mode", "addresses", "ipv6_addresses"] : props.loopbacks ? ["name", "role", "up", "mtu", "active_addresses", "address_mode"] : props.inventory ? ["name", "kind", "ownership", "role", "up", "mtu", "active_addresses"] : props.vlan ? ["name", "id", "up", "mtu", "parent", "addresses"] : props.wireguard ? ["name", "key_ref", "listen_port", "peers"] : resourceColumns[props.section])
   .filter(key => store.ipv6Enabled || key !== "ipv6_addresses"));
-const previewColumns = computed(() => visibleColumns.value.filter(key => props.section !== "gateway_monitors" || key !== "target"));
 const monitorMetrics = ["Health", "Loss", "Mean RTT", "Stddev", "RTT variation"];
 const hasStatus = computed(() => ["routes", "gateway_monitors", "softflowd"].includes(props.section));
 function statusLabel(value: Record<string, unknown>): string {
   if (props.section === "gateway_monitors") return `Monitoring enabled for ${value.name}`;
   return props.section === "softflowd" ? `Export enabled for ${value.name}` : `Route enabled for ${value.destination}`;
 }
-const columns = computed(() => previewColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 3 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)) + Number(counterEnabled.value) * 3);
+const columns = computed(() => visibleColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 3 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)) + Number(counterEnabled.value) * 3);
 function editable(row: ResourceRow): boolean {
   return row.value.name !== "lo" && !isSystemLoopback(row.discovered) && (!row.discovered || (row.index >= 0 && ["ethernet", "veth", "dummy", "vlan", "wireguard"].includes(row.discovered.kind)));
 }
@@ -76,6 +76,7 @@ function adoptable(row: ResourceRow): boolean {
   return Boolean(row.discovered && row.index < 0 && row.discovered.name !== "lo" && row.discovered.ownership === "unmanaged" && (props.loopbacks ? ["dummy"] : ["ethernet", "veth"]).includes(row.discovered.kind) && !store.runtime.data?.parent_interfaces.some(parent => parent.name === row.discovered!.name));
 }
 function cell(value: Record<string, unknown>, key: string, discovered?: DiscoveredInterface): string {
+  if (props.section === "interfaces" && key === "name") return formatInterfaceName(String(value.name));
   if (props.section === "routes" && key === "gateway_mode") {
     return { direct: "Direct", static: "Static address", dhcp: "DHCP gateway" }[routeGatewayMode(value.gateway)];
   }
@@ -204,7 +205,7 @@ function staged(value: unknown): string {
           Position
         </th>
         <th
-          v-for="key in previewColumns"
+          v-for="key in visibleColumns"
           :key="key"
           :class="`column-${key}`"
         >
@@ -272,7 +273,7 @@ function staged(value: unknown): string {
             {{ row.index + 1 }}
           </td>
           <td
-            v-for="key in previewColumns"
+            v-for="key in visibleColumns"
             :key="key"
             :class="{ 'interface-addresses': key === 'addresses' || key === 'active_addresses', 'ipv4-cell': physical && key === 'addresses' }"
             :title="physical && key === 'name' ? `${cell(row.value, 'kind', row.discovered)} · ${row.discovered?.ownership ?? 'managed'}` : undefined"
@@ -321,7 +322,7 @@ function staged(value: unknown): string {
               v-if="key === 'name' && record(row.value.metadata).display_name"
               class="text-caption text-medium-emphasis"
             >
-              {{ physical ? record(row.value.metadata).display_name : row.value.name }}
+              {{ section === 'interfaces' ? record(row.value.metadata).display_name : row.value.name }}
             </div>
             <div
               v-if="vlan && key === 'name'"

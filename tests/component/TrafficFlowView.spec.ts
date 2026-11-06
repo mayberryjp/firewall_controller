@@ -237,7 +237,7 @@ describe("Traffic flow appliance view", () => {
     const draft = trafficFlowConfig(); draft.interfaces[0]!.role = "lan";
     draft.system!.timezone = "America/Los_Angeles"; store.draft = draft;
     await flushPromises();
-    expect(wrapper.get('[aria-label="WAN interfaces"]').text()).toContain("wan0");
+    expect(wrapper.get('[aria-label="WAN interfaces"]').text()).toContain("WAN0");
     expect(wrapper.get('[aria-label="wan0 interface counters"] .node-role').text()).toBe("WAN");
     expect(wrapper.find("footer").exists()).toBe(false);
     expect(wrapper.find("h1").exists()).toBe(false);

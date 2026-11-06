@@ -43,7 +43,7 @@ test("overview interface labels stay compact without table overflow or wrapping"
     expect(await widget.locator("tbody tr").first().evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(40);
   }
   const counters = page.getByRole("region", { name: "Interface counters", exact: true });
-  await expect(counters.getByRole("link", { name: link.name, exact: true })).toHaveAttribute("href", `/diagnostics/traffic?interface=${link.name}`);
+  await expect(counters.getByRole("link", { name: link.name.toUpperCase(), exact: true })).toHaveAttribute("href", `/diagnostics/traffic?interface=${link.name}`);
   await expect(counters.locator('td[title="18446744073709551615"]')).toContainText("18.45 EB");
   expect(await counters.locator(".counter-value > span").evaluateAll(elements => elements.every(element => element.scrollWidth <= element.clientWidth))).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

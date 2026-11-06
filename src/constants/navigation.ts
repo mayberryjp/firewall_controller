@@ -45,7 +45,6 @@ export const navigationSections: NavigationSection[] = [
   { title: "Services", name: "services-section", path: "/services", icon: "mdi-apps", pages: [
     { title: "NetFlow/IPFIX", name: "netflow", path: "/services/netflow", icon: "mdi-chart-timeline-variant" },
     { title: "DHCPv4 relay", name: "dhcp-relay", path: "/services/dhcp-relay", icon: "mdi-lan-connect" },
-    { title: "Remote DNS", name: "remote-dns", path: "/services/remote-dns", icon: "mdi-dns-outline" },
     { title: "mDNS / Discovery", name: "mdns", path: "/services/mdns", icon: "mdi-access-point-network" },
     { title: "UDP BROADCAST RELAY", name: "udp-broadcast-relay", path: "/services/udp-broadcast-relay", icon: "mdi-broadcast" },
     { title: "NTP", name: "ntp", path: "/services/ntp", icon: "mdi-clock-outline" },
@@ -70,6 +69,7 @@ export const navigationSections: NavigationSection[] = [
   ] },
   { title: "Settings", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
     { title: "General", name: "settings-general", path: "/settings/general", icon: "mdi-cog-outline" },
+    { title: "Remote DNS", name: "remote-dns", path: "/settings/remote-dns", icon: "mdi-dns-outline" },
     { title: "MQTT STREAMING", name: "settings-mqtt-streaming", path: "/settings/mqtt-streaming", icon: "mdi-home-assistant" },
     { title: "Dynamic DNS", name: "settings-dynamic-dns", path: "/settings/dynamic-dns", icon: "mdi-dns-outline" },
     { title: "SANDO IMPORT", name: "settings-sando", path: "/settings/sando", icon: "mdi-import" },

@@ -243,7 +243,7 @@ describe("firewall rule totals", () => {
     await flushPromises();
     const table = wrapper.get("table"), overrides = table.get(".rule-section--interfaces");
     const entries = overrides.findAll(".interface-rule");
-    expect(entries.map(row => row.get(".rule-value--ingress").text())).toEqual(["wan0", "lab0"]);
+    expect(entries.map(row => row.get(".rule-value--ingress").text())).toEqual(["WAN0", "LAB0"]);
     expect(entries[1]!.attributes("data-action")).toBe(action);
     expect(entries[1]!.get(".rule-origin").text()).toBe("Import: other_provider");
     expect(entries[1]!.findAll(".counter-value")[0]!.text()).toBe("42");

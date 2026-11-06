@@ -33,9 +33,9 @@ test("UDP Broadcast Relay stages presets and confirms a complete package on desk
   await expect(view.getByRole("checkbox", { name: "Instance enabled", exact: true })).toHaveCount(0);
   const interfaces = view.locator(".v-select").filter({ has: page.getByRole("combobox", { name: "Interfaces", exact: true }) });
   await interfaces.locator(".v-field").click();
-  await expect(page.getByRole("option", { name: "lab0", exact: true })).toHaveCount(0);
-  await page.getByRole("option", { name: "lan0", exact: true }).click();
-  await page.getByRole("option", { name: "iot0", exact: true }).click();
+  await expect(page.getByRole("option", { name: "LAB0", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: "LAN0", exact: true }).click();
+  await page.getByRole("option", { name: "IOT0", exact: true }).click();
   await page.keyboard.press("Escape");
   await view.getByRole("button", { name: "Stage changes", exact: true }).click();
   await expect(view.getByRole("button", { name: "Edit relay 1", exact: true })).toBeEnabled();

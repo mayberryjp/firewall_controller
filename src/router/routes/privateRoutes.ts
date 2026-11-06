@@ -41,7 +41,6 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/services/netflow", name: "netflow", component: () => import("@/views/SoftflowdView.vue") },
     { path: "/services/netflow/:name", name: "netflow-detail", component: () => import("@/views/SoftflowdDetailView.vue"), props: true, meta: { navigationPage: "netflow" } },
     { path: "/services/dhcp-relay", name: "dhcp-relay", component: () => import("@/views/DHCPRelayView.vue") },
-    { path: "/services/remote-dns", name: "remote-dns", component: () => import("@/views/RemoteDnsView.vue") },
     { path: "/services/mdns", name: "mdns", component: () => import("@/views/MDNSView.vue") },
     { path: "/services/udp-broadcast-relay", name: "udp-broadcast-relay", component: () => import("@/views/UDPBroadcastRelayView.vue") },
     { path: "/services/ntp", name: "ntp", component: () => import("@/views/NTPView.vue") },
@@ -69,6 +68,8 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "settings-section": [
     { path: "/settings/general", name: "settings-general", component: () => import("@/views/SettingsView.vue") },
+    { path: "/settings/remote-dns", name: "remote-dns", component: () => import("@/views/RemoteDnsView.vue") },
+    { path: "/services/remote-dns", redirect: { name: "remote-dns" } },
     { path: "/settings/sando", name: "settings-sando", component: () => import("@/views/SandoView.vue") },
     { path: "/settings/advanced", name: "settings-advanced", component: () => import("@/views/AdvancedSettingsView.vue") },
     { path: "/settings/upgrade", name: "settings-upgrade", redirect: { name: "config-upgrade" } },

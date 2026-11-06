@@ -73,11 +73,11 @@ test("PROTECTED HOSTS browses searchable hosts without staging changes and fits 
   await expect(unifi).toHaveCSS("background-color", "rgba(66, 165, 245, 0.2)");
   await expect(unifi).toHaveCSS("border-left", "3px solid rgb(66, 165, 245)");
   await expect(table.locator(".host-rule")).toHaveCount(4);
-  await expect(table.locator(".host-rule").first().locator(".rule-value")).toHaveText(["1", "Any", "Server", "TCP", "443, 8443", "lab0", "accept"]);
+  await expect(table.locator(".host-rule").first().locator(".rule-value")).toHaveText(["1", "Any", "Server", "TCP", "443, 8443", "LAB0", "accept"]);
   await expect(table.locator(".host-rule").last().locator(".rule-value")).toHaveText(["Default", "Any", "Any", "Any", "Any", "Any", "drop"]);
   await expect(table.locator(".host-rule").first().locator(".rule-action")).toHaveClass(/text-success/);
   await expect(table.locator(".host-rule").nth(1).locator(".rule-action")).toHaveClass(/text-error/);
-  await expect(table.locator(".host-rule").first().locator(".v-chip")).toHaveText(["TCP", "443, 8443", "lab0", "accept"]);
+  await expect(table.locator(".host-rule").first().locator(".v-chip")).toHaveText(["TCP", "443, 8443", "LAB0", "accept"]);
   await expect(table.locator(".host-rule").last()).toHaveClass(/host-rule--default/);
   if (!isMobile) {
     const viewport = page.viewportSize()!;

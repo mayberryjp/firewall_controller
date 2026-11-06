@@ -4,7 +4,8 @@ import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
 import { destinationRewriteSchema, type DestinationRewrite } from "@/types/domain";
 import { cloneConfig, numericAddress, stableJson, validateConfig } from "@/services/configuration";
-import { interfaceChoice } from "@/services/resourceCollections";
+import { interfaceChoices } from "@/services/resourceCollections";
+import { formatInterfaceName } from "@/services/interfaceNames";
 import { useFirewallCounters } from "@/composables/useFirewallCounters";
 import FirewallCounterCells from "@/components/feature/FirewallCounterCells.vue";
 import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
@@ -26,11 +27,11 @@ const { dropTarget, pointerStart, pointerMove, drop, cancel: cancelDrag } = useR
   error: message => { error.value = message; },
 });
 const family = computed(() => { try { return numericAddress(form.value.target_address).kind(); } catch { return undefined; } });
-const wanChoices = computed(() => selected.value?.interfaces.filter(link => link.up && link.role === "wan" &&
+const wanChoices = computed(() => interfaceChoices(selected.value?.interfaces.filter(link => link.up && link.role === "wan" &&
   (!family.value || family.value === "ipv4" && selected.value?.dhcp_clients?.[link.name] ||
-    link.addresses.some(address => address.includes(":") === (family.value === "ipv6")))).map(interfaceChoice) ?? []);
-const targetChoices = computed(() => selected.value?.interfaces.filter(link => link.up && link.role === "lan" &&
-  link.addresses.some(address => !family.value || address.includes(":") === (family.value === "ipv6"))).map(interfaceChoice) ?? []);
+    link.addresses.some(address => address.includes(":") === (family.value === "ipv6")))) ?? []));
+const targetChoices = computed(() => interfaceChoices(selected.value?.interfaces.filter(link => link.up && link.role === "lan" &&
+  link.addresses.some(address => !family.value || address.includes(":") === (family.value === "ipv6"))) ?? []));
 const input = () => stableJson(form.value);
 watch(input, () => { store.editorDirty = editing.value !== null && input() !== initial.value; }, { flush: "sync" });
 onUnmounted(() => { store.editorDirty = false; });
@@ -189,7 +190,7 @@ function move(index: number, offset: number): void {
                 variant="tonal"
                 color="info"
               >
-                {{ row.out_interface }}
+                {{ formatInterfaceName(row.out_interface) }}
               </v-chip>
             </td>
             <td>
@@ -201,7 +202,7 @@ function move(index: number, offset: number): void {
                 {{ row.protocol.toUpperCase() }}
               </v-chip>
             </td>
-            <td>{{ row.destination_port }}</td><td>{{ row.target_interface }}</td><td :title="row.metadata?.description">
+            <td>{{ row.destination_port }}</td><td>{{ formatInterfaceName(row.target_interface) }}</td><td :title="row.metadata?.description">
               {{ row.metadata?.display_name ? `${row.metadata.display_name} (${row.target_address})` : row.target_address }}
             </td>
             <td class="actions">

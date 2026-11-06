@@ -5,6 +5,7 @@ import { cloneConfig, stableJson } from "@/services/configuration";
 import { eligibleUDPRelayInterface, validateUDPRelay } from "@/services/udpBroadcastRelay";
 import { udpBroadcastRelaySchema, udpRelayInstanceSchema, type UDPBroadcastRelay, type UDPRelayInstance } from "@/types/domain";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
+import { compareInterfaceNames, formatInterfaceName, interfaceNameChoices } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const applied = computed(() => store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
@@ -188,7 +189,7 @@ async function restart(): Promise<void> {
         <v-select
           v-model="form.interfaces"
           :disabled="blocked"
-          :items="choices"
+          :items="interfaceNameChoices(choices)"
           label="Interfaces"
           multiple
           chips
@@ -267,7 +268,7 @@ async function restart(): Promise<void> {
               />
             </td>
             <td><span class="relay-mobile-label">UDP port</span>{{ row.port }}</td>
-            <td><span class="relay-mobile-label">Interfaces</span>{{ row.interfaces.join(', ') }}</td>
+            <td><span class="relay-mobile-label">Interfaces</span>{{ [...row.interfaces].sort(compareInterfaceNames).map(formatInterfaceName).join(', ') }}</td>
             <td><span class="relay-mobile-label">Multicast Address</span>{{ row.multicast_address || 'Broadcast only' }}</td>
             <td :aria-label="`Usage for relay ${row.id}`">
               <span class="relay-mobile-label">Usage</span>

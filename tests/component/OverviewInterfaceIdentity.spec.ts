@@ -36,8 +36,8 @@ describe.each([
     store.draft.interfaces[0]!.metadata = { display_name: "Unsaved name", description: "" };
     const wrapper = mount(component, { global: { stubs } });
     await flushPromises();
-    expect(wrapper.get(".interface-name").text()).toBe(link.name);
-    expect(wrapper.get(".interface-name").attributes("title")).toBe(link.name);
+    expect(wrapper.get(".interface-name").text()).toBe(link.name.toUpperCase());
+    expect(wrapper.get(".interface-name").attributes("title")).toBe(link.name.toUpperCase());
     expect(wrapper.get(".interface-description").text()).toBe(link.metadata.display_name.trim());
     expect(wrapper.get(".interface-description").attributes("title")).toBe(link.metadata.display_name);
     expect(wrapper.get(".interface-role").text()).toBe(role === "unassigned" ? "Unassigned" : role.toUpperCase());
@@ -65,7 +65,7 @@ describe.each([
     useControllerStore().state.data!.desired.interfaces = [];
     const wrapper = mount(component, { global: { stubs } });
     await flushPromises();
-    expect(wrapper.get(".interface-name").text()).toBe("lab0");
+    expect(wrapper.get(".interface-name").text()).toBe("LAB0");
     expect(wrapper.find(".interface-role").exists()).toBe(false);
     expect(wrapper.find(".interface-description").exists()).toBe(false);
     wrapper.unmount();
@@ -88,7 +88,7 @@ describe.each([
     }]);
     const wrapper = mount(component, { global: { stubs } });
     await flushPromises();
-    expect(wrapper.get(".interface-name").text()).toBe("kernel0");
+    expect(wrapper.get(".interface-name").text()).toBe("KERNEL0");
     expect(wrapper.get(".interface-role").text()).toBe("Loopback");
     expect(wrapper.find(".interface-description").exists()).toBe(false);
     if (component === OverviewInterfaces) expect(wrapper.findAll("tbody td").at(-1)!.text()).toBe("Static");
@@ -109,7 +109,7 @@ describe.each([
     }]);
     const wrapper = mount(component, { global: { stubs } });
     await flushPromises();
-    expect(wrapper.get(".interface-name").text()).toBe("lo-test0");
+    expect(wrapper.get(".interface-name").text()).toBe("LO-TEST0");
     expect(wrapper.find(".interface-role").exists()).toBe(false);
     if (component === OverviewInterfaces) expect(wrapper.findAll("tbody td").at(-1)!.text()).toBe("-");
     wrapper.unmount();

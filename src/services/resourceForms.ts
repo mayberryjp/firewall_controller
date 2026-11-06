@@ -3,14 +3,17 @@ import { timeoutNames } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
 import { manualRuleOwnership } from "@/services/ruleOwnership";
 import { firewallProtocolChoices } from "@/services/firewallProtocols";
+import { compareInterfaceNames, formatInterfaceName } from "@/services/interfaceNames";
 
 export type Section = "interfaces" | "routes" | "firewall" | "nat" | "softflowd" | "gateway_monitors";
 const text = (key: string, label: string, hint?: string): Field => ({ key, label, kind: "text", hint });
 const number = (key: string, label: string, hint?: string): Field => ({ key, label, kind: "number", hint });
-const select = (key: string, label: string, values: Array<string | number | Choice>, hint?: string): Field => ({
-  key, label, kind: "select", choices: values.map(value => typeof value === "object" ? value :
-    { title: key === "kind" ? displayResourceValue(value, key) : String(value), value }), hint,
-});
+const select = (key: string, label: string, values: Array<string | number | Choice>, hint?: string): Field => {
+  const isInterface = ["interface", "parent", "out_interface"].includes(key);
+  const choices = values.map(value => typeof value === "object" ? value :
+    { title: isInterface ? formatInterfaceName(String(value)) : key === "kind" ? displayResourceValue(value, key) : String(value), value });
+  return { key, label, kind: "select", choices: isInterface ? choices.sort((left, right) => compareInterfaceNames(String(left.value), String(right.value))) : choices, hint };
+};
 export const metadataField: Field = { key: "metadata", label: "Labels", kind: "object", fields: [
   text("display_name", "Display name"), text("description", "Description"),
 ] };

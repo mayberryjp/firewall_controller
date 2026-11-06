@@ -89,7 +89,7 @@ describe("October 17 frontend workflows", () => {
     link.role = role;
     link.metadata = { display_name: "Office network ".repeat(8).trim(), description: "Not the display name" };
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
-    expect(wrapper.get(".relay-interface-name").text()).toBe(link.name);
+    expect(wrapper.get(".relay-interface-name").text()).toBe(link.name.toUpperCase());
     expect(wrapper.get(".relay-interface-role").text()).toBe(role === "unassigned" ? "Unassigned" : role.toUpperCase());
     expect(wrapper.get(".relay-interface-description").text()).toBe(link.metadata.display_name);
     expect(wrapper.get(".relay-interface-description").attributes("title")).toBe(link.metadata.display_name);
@@ -101,7 +101,7 @@ describe("October 17 frontend workflows", () => {
     const store = useControllerStore();
     delete store.state.data!.desired.interfaces[0]!.metadata;
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
-    expect(wrapper.get(".relay-interface-name").text()).toBe("lab0");
+    expect(wrapper.get(".relay-interface-name").text()).toBe("LAB0");
     expect(wrapper.get(".relay-interface-role").text()).toBe("LAN");
     expect(wrapper.find(".relay-interface-description").exists()).toBe(false);
     expect(store.draft).toBeNull();
@@ -446,8 +446,9 @@ describe("October 17 frontend workflows", () => {
       expect(measurement("RTT variation")).toBe("Unavailable"); expect(measurement("Loss")).toBe("33.33 %");
       expect(summary.text()).not.toContain("no monitor sample");
       expect(summary.get('[data-metric="Loss"]').attributes("title")).toBe("33.33 %");
-      expect(wrapper.findAll("thead th").map(item => item.text())).toEqual(["Name", "Interface", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions"]);
-      expect(summary.findAll("td")).toHaveLength(9);
+      expect(wrapper.findAll("thead th").map(item => item.text())).toEqual(["Name", "Interface", "Probe Target", "Health", "Loss", "Mean RTT", "Stddev", "RTT variation", "Status", "Actions"]);
+      expect(summary.findAll("td")).toHaveLength(10);
+      expect(cellValue(summary.findAll("td")[2]!)).toBe(monitor().target);
       expect(summary.get(".status-chip").attributes("data-color")).toBe("success");
       expect(summary.get(".status-chip").text()).toBe("up");
       expect(summary.findAll(".status-chip")).toHaveLength(5);
@@ -459,11 +460,11 @@ describe("October 17 frontend workflows", () => {
       const row = summary.element.closest("tr")!;
       expect(row.textContent).toContain("uplink");
       expect(row.querySelector('[aria-label="Monitoring enabled for uplink"]')?.closest("td")).not.toBe(row.querySelector('[aria-label="Edit / stage"]')?.closest("td"));
-      expect(summary.findAll("td")[7]!.find('[aria-label="Monitoring enabled for uplink"]').exists()).toBe(true);
+      expect(summary.findAll("td")[8]!.find('[aria-label="Monitoring enabled for uplink"]').exists()).toBe(true);
       expect(wrapper.findAll("tbody > tr")).toHaveLength(1);
       expect(wrapper.find('[aria-label="uplink live statistics"]').exists()).toBe(false);
       expect(wrapper.get('[aria-label="Live statistics for uplink"]').attributes("aria-expanded")).toBe("false");
-      expect(row.textContent).not.toContain(monitor().target);
+      expect(row.textContent).toContain(monitor().target);
       await wrapper.get('[aria-label="Live statistics for uplink"]').trigger("click");
       const detail = wrapper.get('[aria-label="uplink live statistics"]');
       expect(detail.text()).toContain(monitor().target);
@@ -740,14 +741,14 @@ describe("October 17 frontend workflows", () => {
     const wrapper = await render(component, path);
     await wrapper.findAll("button").find(button => button.text().startsWith("Add "))!.trigger("click");
     const choiceField = () => wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === key)!;
-    expect(choiceField().props("field").choices).toContainEqual({ title: "lab0 (WAN)", value: "lab0" });
+    expect(choiceField().props("field").choices).toContainEqual({ title: "LAB0 (WAN)", value: "lab0" });
     await choiceField().get("select").setValue("lab0");
     expect(choiceField().props("modelValue")).toBe("lab0");
 
     store.draft = cloneConfig(store.state.data!.desired);
     store.draft.interfaces[0]!.metadata = { display_name: "Office", description: "" };
     await flushPromises();
-    expect(choiceField().props("field").choices).toContainEqual({ title: "lab0 (Office)", value: "lab0" });
+    expect(choiceField().props("field").choices).toContainEqual({ title: "LAB0 (Office)", value: "lab0" });
     wrapper.unmount();
   });
   it("rejects unsupported DHCP monitor paths without changing DHCP configuration", async () => {
@@ -823,7 +824,7 @@ describe("October 17 frontend workflows", () => {
     store.state.data!.desired.routes = Array.from({ length: 21 }, () => ({ ...config().routes[0]! }));
     const wrapper = await render(RoutesView, "/routes");
     const filters = wrapper.getComponent(ResourceFilters);
-    const select = filters.findAll("select").find(select => select.text().includes("lab0 (WAN)"))!;
+    const select = filters.findAll("select").find(select => select.text().includes("LAB0 (WAN)"))!;
     expect(select.find('option[value="All"]').exists()).toBe(true);
     await select.setValue("lab0");
     expect(filters.props("modelValue").interface).toBe("lab0");
@@ -1351,11 +1352,11 @@ describe("October 17 frontend workflows", () => {
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([link, { ...link, name: "dummy0", kind: "dummy" }, { ...link, name: "lo", kind: "loopback", ownership: "loopback", role: "loopback", addressing_type: "static", addresses: ["127.0.0.1/8", "::1/128"] }]);
     const physical = await render(InterfaceInventory, "/interfaces");
     try {
-      expect(physical.findAll("tbody tr").map(row => cellValue(row.find("td")))).toEqual(["eth0"]);
+      expect(physical.findAll("tbody tr").map(row => cellValue(row.find("td")))).toEqual(["ETH0"]);
     } finally { physical.unmount(); }
     const loopbacks = await render(InterfaceInventory, "/loopbacks", { loopbacks: true });
     try {
-      expect(loopbacks.findAll("tbody tr").map(row => cellValue(row.find("td")))).toEqual(["dummy0", "lo"]);
+      expect(loopbacks.findAll("tbody tr").map(row => cellValue(row.find("td")))).toEqual(["DUMMY0", "LO"]);
       expect(loopbacks.findAll("th").map(header => header.text())).not.toContain("Reload DHCP");
       const loopback = loopbacks.findAll("tbody tr").find(row => row.text().includes("127.0.0.1/8"))!;
       expect(loopback.text()).toContain("Read-only"); expect(loopback.find("button").exists()).toBe(false);
@@ -1376,7 +1377,7 @@ describe("October 17 frontend workflows", () => {
     const wrapper = await render(InterfaceInventory, "/loopbacks", { loopbacks: true });
     try {
       const cells = wrapper.get("tbody tr").findAll("td").map(cellValue);
-      expect(cells).toEqual(["kernel0", "Loopback", up ? "Up" : "Down", "65536", addresses.join(", ") || "None", "Static", "Read-only"]);
+      expect(cells).toEqual(["KERNEL0", "Loopback", up ? "Up" : "Down", "65536", addresses.join(", ") || "None", "Static", "Read-only"]);
       expect(wrapper.find("tbody button, tbody select, tbody input").exists()).toBe(false);
       expect(store.draft).toBeNull();
       expect(submit).not.toHaveBeenCalled();
@@ -1404,7 +1405,7 @@ describe("October 17 frontend workflows", () => {
       expect(wrapper.get("tbody").text()).toContain("203.0.113.99/32");
       expect(wrapper.findAll("th").map(header => header.text())).toEqual(["Name", "Role", "Admin state", "MTU", "Active Addresses", "Mode", "Actions"]);
       expect(wrapper.text()).not.toMatch(/dummy/i);
-      const loopback = wrapper.findAll("tbody tr").find(row => cellValue(row.find("td")) === "lo")!;
+      const loopback = wrapper.findAll("tbody tr").find(row => cellValue(row.find("td")) === "LO")!;
       expect(loopback.find("button").exists()).toBe(false); expect(loopback.text()).toContain("Read-only");
       await wrapper.get('[aria-label="Edit / stage"]').trigger("click");
       const fields = wrapper.findAllComponents(FieldInput);
@@ -1433,7 +1434,7 @@ describe("October 17 frontend workflows", () => {
     vi.mocked(api.getDiscoveredInterfaces).mockResolvedValue([]);
     const wrapper = await render(LoopbacksView, "/loopbacks");
     try {
-      expect(wrapper.get("tbody").text()).toContain("lab0");
+      expect(wrapper.get("tbody").text()).toContain("LAB0");
       await wrapper.findAll("button").find(button => button.text() === "Add loopback")!.trigger("click");
       expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
       expect(wrapper.findAll('tbody tr[aria-label="Loopback editor"]')).toHaveLength(1);
@@ -1451,7 +1452,7 @@ describe("October 17 frontend workflows", () => {
       name.vm.$emit("update:modelValue", "dummy1");
       await flushPromises(); await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click");
       expect(store.draft?.interfaces[1]).toMatchObject({ name: "dummy1", kind: "dummy", role: "unassigned", mtu: 65535, up: false, addresses: [] });
-      expect(wrapper.get("tbody").text()).toContain("dummy1"); expect(submit).not.toHaveBeenCalled();
+      expect(wrapper.get("tbody").text()).toContain("DUMMY1"); expect(submit).not.toHaveBeenCalled();
     } finally { wrapper.unmount(); }
   });
   it("adopts an unmanaged dummy through Loopbacks without treating live addresses as configuration", async () => {
@@ -1775,8 +1776,8 @@ describe("October 17 frontend workflows", () => {
     ]);
     const wrapper = await render(InterfacesView, "/interfaces");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
-    expect(wrapper.find("tbody").text()).toContain("eth0");
-    for (const name of ["lab0", "vlan30", "wg0", "unmanaged20"]) expect(wrapper.find("tbody").text()).not.toContain(name);
+    expect(wrapper.find("tbody").text()).toContain("ETH0");
+    for (const name of ["LAB0", "VLAN30", "WG0", "UNMANAGED20"]) expect(wrapper.find("tbody").text()).not.toContain(name);
     expect(wrapper.findAll("button").some(button => button.text() === "Add interface")).toBe(false);
     expect(wrapper.find('button[aria-label="Edit / stage"]').exists()).toBe(true);
   });
@@ -1806,7 +1807,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.findAll("tbody td").map(cellValue)).toContain("30");
     expect(wrapper.find('a[href="/vlans/vlan30"]').exists()).toBe(false);
     const nameCell = wrapper.get("tbody tr td");
-    expect(cellValue(nameCell)).toBe(`vlan30${displayResourceValue(role, "role")}`);
+    expect(cellValue(nameCell)).toBe(`VLAN30${displayResourceValue(role, "role")}`);
     expect(nameCell.get(".vlan-role").text()).toBe(displayResourceValue(role, "role"));
     expect(nameCell.get(".vlan-role").classes()).toContain("text-caption");
     expect(nameCell.get(".vlan-role").classes()).toContain("text-medium-emphasis");
@@ -1869,8 +1870,8 @@ describe("October 17 frontend workflows", () => {
     await wrapper.findAll("button").find(button => button.text() === "Add VLAN")!.trigger("click");
     const parent = wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "parent")!;
     expect(parent.props("field").choices).toEqual([
-      { title: "eth0", value: "eth0" },
-      { title: "eth1", value: "eth1" },
+      { title: "ETH0", value: "eth0" },
+      { title: "ETH1", value: "eth1" },
     ]);
     expect(parent.findAll("option").map(option => option.attributes("value"))).toEqual(["", "eth0", "eth1"]);
     wrapper.unmount();
@@ -1938,7 +1939,7 @@ describe("October 17 frontend workflows", () => {
     store.state.data!.desired.routes.push({ enabled: true, destination: "10.30.0.0/24", interface: "vlan30", table: 10000, metric: 1 });
     store.state.data!.desired.dns = { vlan30: { servers: ["192.0.2.53"], domains: [] } };
     const wrapper = await render(VLANsView, "/vlans");
-    await wrapper.findAll("tbody tr").find(row => row.text().includes("vlan30"))!.get('button[aria-label="Delete"]').trigger("click");
+    await wrapper.findAll("tbody tr").find(row => row.text().includes("VLAN30"))!.get('button[aria-label="Delete"]').trigger("click");
     expect(wrapper.text()).toContain("Child VLAN vlan40");
     expect(wrapper.text()).toContain("Route 10.30.0.0/24");
     await wrapper.findAll("button").find(button => button.text() === "Stage deletion")!.trigger("click");
@@ -1972,7 +1973,7 @@ describe("October 17 frontend workflows", () => {
     store.state.data!.desired.interfaces.push({ name: "wg0", kind: "wireguard", role: "wan", mtu: 1420, up: true, addresses: ["10.0.0.1/24"], dhcp_relay: { enabled: false, servers: [] }, wireguard: { key_ref: "tunnel-key", listen_port: 51820, peers: [] } });
     const wrapper = await render(InterfaceDetailView, "/interfaces/wg0", { name: "wg0" });
     expect(wrapper.get('button[aria-label="Edit tunnel interface wg0"]').attributes("to")).toBe("/tunnels");
-    await wrapper.findAll("tbody tr").find(row => row.text().includes("wg0"))!.get('button[aria-label="Edit / stage"]').trigger("click");
+    await wrapper.findAll("tbody tr").find(row => row.text().includes("WG0"))!.get('button[aria-label="Edit / stage"]').trigger("click");
     const fields = wrapper.findAllComponents(FieldInput);
     expect(fields.some(field => field.props("field").key === "wireguard")).toBe(false);
     expect(fields.some(field => field.props("field").key === "dhcp_relay")).toBe(false);
@@ -2135,7 +2136,7 @@ describe("October 17 frontend workflows", () => {
     wrapper.findAllComponents({ name: "VTextField" }).find(item => item.attributes("label") === "Private Key")!.vm.$emit("update:modelValue", "tunnel-key");
     await flushPromises(); await wrapper.get("form").trigger("submit");
     expect(store.draft?.interfaces.find(link => link.name === "tun_wg0")).toMatchObject({ kind: "wireguard", role: "unassigned", mtu: 1420, up: true, wireguard: { key_ref: "tunnel-key", listen_port: 51820, peers: [] } });
-    expect(wrapper.text()).toContain("tun_wg0");
+    expect(wrapper.text()).toContain("TUN_WG0");
     wrapper.unmount();
   });
   it("toggles WireGuard peers on and off, hides stats for disabled peers and rejects enabling a duplicate allowed network", async () => {
@@ -2288,12 +2289,12 @@ describe("October 17 frontend workflows", () => {
     try {
       expect(wrapper.get("section").attributes("aria-label")).toBe("Firewall destined");
       const select = wrapper.get("select");
-      expect(select.findAll("option").map(option => option.text())).toEqual(["Select", "lab0 (LAN)", "missing0"]);
+      expect(select.findAll("option").map(option => option.text())).toEqual(["Select", "LAB0 (LAN)", "MISSING0"]);
       await select.setValue("missing0");
       store.draft = cloneConfig(store.state.data!.desired);
       store.draft.interfaces[0]!.metadata!.display_name = "Office";
       await flushPromises();
-      expect(select.findAll("option")[1]!.text()).toBe("lab0 (Office)");
+      expect(select.findAll("option")[1]!.text()).toBe("LAB0 (Office)");
       expect((select.element as HTMLSelectElement).value).toBe("missing0");
       expect(store.draft.firewall.input!.interfaces.map(ingress => ingress.interface)).toEqual(["lab0", "missing0"]);
     } finally { wrapper.unmount(); }
@@ -2407,8 +2408,10 @@ describe("October 17 frontend workflows", () => {
     const headers = wrapper.findAll("th").map(header => header.text());
     const active = headers.indexOf("IPv4");
     expect(headers).toEqual(["Name", "Role", "Admin state", "MTU", "Mode", "IPv4", "IPv6", "Actions"]);
-    const rows = wrapper.findAll("tbody tr"); expect(rows).toHaveLength(3);
-    expect(rows[0]!.text()).toContain("Office"); expect(rows[0]!.text()).toContain("lab0");
+    const displayedRows = wrapper.findAll("tbody tr"); expect(displayedRows).toHaveLength(3);
+    expect(displayedRows.map(row => cellValue(row.find("td")).split("Office")[0])).toEqual(["BR0", "LAB0", "SPARE0"]);
+    const rows = ["LAB0", "SPARE0", "BR0"].map(name => displayedRows.find(row => cellValue(row.find("td")).startsWith(name))!);
+    expect(rows[0]!.text()).toContain("Office"); expect(rows[0]!.text()).toContain("LAB0");
     expect(rows[0]!.findAll("td")[active]!.text()).toContain("192.0.2.99/24");
     expect(rows[0]!.findAll("td")[active]!.text()).not.toContain("2001:db8::99/64");
     expect(rows[0]!.findAll(".status-chip").map(chip => [chip.text(), chip.attributes("data-color")])).toEqual([
@@ -2804,8 +2807,8 @@ describe("October 17 frontend workflows", () => {
     const wrapper = await render(InterfacesView, "/interfaces");
     expect(wrapper.text()).toContain("LAN"); expect(wrapper.text()).toContain("WAN");
     expect(wrapper.findAllComponents(stubs.VSelect).some(item => item.props("label") === "Role")).toBe(false);
-    expect(wrapper.find("tbody").text()).toContain("edge0");
-    expect(wrapper.find("tbody").text()).toContain("lab0");
+    expect(wrapper.find("tbody").text()).toContain("EDGE0");
+    expect(wrapper.find("tbody").text()).toContain("LAB0");
     expect(wrapper.findAll("button").some(button => button.text() === "Add interface")).toBe(false);
   });
   it("keeps VLAN validation inline without requiring additional settings", async () => {

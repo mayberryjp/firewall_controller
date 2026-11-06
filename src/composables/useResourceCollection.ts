@@ -5,6 +5,7 @@ import { prefix, stableJson } from "@/services/configuration";
 import { resourceItems } from "@/services/resourceCollections";
 import type { Section } from "@/services/resourceForms";
 import type { DiscoveredInterface } from "@/types/domain";
+import { sortByInterface } from "@/services/interfaceNames";
 
 export interface ResourceRow { value: Record<string, unknown>; index: number; rowID: string; discovered?: DiscoveredInterface }
 export interface ResourceFilters {
@@ -22,7 +23,7 @@ export function useResourceCollection(section: Section, wireguard: boolean, name
   const store = useControllerStore();
   const filters = reactive<ResourceFilters>({ search: "", kind: "All", role: "All", admin: "All", interface: "All", family: "All", table: "", enabled: "All" });
   const selectedConfig = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
-  const rows = computed<ResourceRow[]>(() => selectedConfig.value ? resourceItems(selectedConfig.value, section).map((value, index) => ({
+  const sourceRows = computed<ResourceRow[]>(() => selectedConfig.value ? resourceItems(selectedConfig.value, section).map((value, index) => ({
     value: record(value), index,
     rowID: `${stableJson(value)}/${resourceItems(selectedConfig.value!, section).slice(0, index).filter(item => stableJson(item) === stableJson(value)).length}`,
   })).filter(({ value }) => {
@@ -40,5 +41,6 @@ export function useResourceCollection(section: Section, wireguard: boolean, name
     }
     return JSON.stringify(value).toLowerCase().includes(String(filters.search ?? "").toLowerCase());
   }) : []);
+  const rows = computed(() => section === "interfaces" ? sortByInterface(sourceRows.value, row => String(row.value.name)) : sourceRows.value);
   return { filters, selectedConfig, rows };
 }

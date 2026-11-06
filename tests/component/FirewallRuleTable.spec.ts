@@ -89,11 +89,11 @@ describe("Inline firewall rules", () => {
     await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
     const select = wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "out_interface")!.get("select");
     expect(select.findAll("option").map(option => [option.text(), option.attributes("value")]))
-      .toEqual([["Any", ""], ["lab0 (LAN)", "lab0"]]);
+      .toEqual([["Any", ""], ["LAB0 (LAN)", "lab0"]]);
     store.draft = cloneConfig(store.state.data!.desired);
     store.draft.interfaces[0]!.metadata!.display_name = "Office";
     await flushPromises();
-    expect(select.findAll("option")[1]!.text()).toBe("lab0 (Office)");
+    expect(select.findAll("option")[1]!.text()).toBe("LAB0 (Office)");
     await select.setValue("lab0");
     await wrapper.get("form").trigger("submit");
     expect(entries(scope).at(-1)).toEqual({ origin: "manual", import_source: null, out_interface: "lab0", action: "accept" });

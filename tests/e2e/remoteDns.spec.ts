@@ -28,7 +28,7 @@ for (const enabled of [true, false]) {
   });
 }
 
-test("Remote DNS is accessible under Services and stages resolver settings without backend writes", async ({ page }) => {
+test("Remote DNS is accessible under Settings and stages resolver settings without backend writes", async ({ page }) => {
   const initial = config();
   initial.interfaces.push({ ...initial.interfaces[0]!, name: "wan0", role: "wan", kind: "ethernet" });
   const backend = await mockBackend(page, { initialConfig: initial });
@@ -40,11 +40,15 @@ test("Remote DNS is accessible under Services and stages resolver settings witho
   const hamburger = page.getByRole("button", { name: "Open navigation menu", exact: true });
   if (await hamburger.isVisible()) await hamburger.click();
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Services", exact: true }).click();
-  const pages = page.getByRole("navigation", { name: "Services pages" });
+  await expect(page.getByRole("navigation", { name: "Services pages" }).getByRole("tab", { name: "Remote DNS", exact: true })).toHaveCount(0);
+  if (await hamburger.isVisible()) await hamburger.click();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Settings", exact: true }).click();
+  const pages = page.getByRole("navigation", { name: "Settings pages" });
   const expand = pages.getByRole("button", { name: /^Expand .* navigation$/ });
   if (await expand.isVisible()) await expand.click();
   await pages.getByRole("tab", { name: "Remote DNS", exact: true }).click();
-  await expect(page).toHaveURL(/\/services\/remote-dns$/);
+  await expect(page).toHaveURL(/\/settings\/remote-dns$/);
+  await expect(pages.getByRole("tab", { name: "Remote DNS", exact: true })).toHaveAttribute("aria-selected", "true");
   const view = page.getByRole("region", { name: "Remote DNS", exact: true });
   for (const server of ["1.1.1.1", "2606:4700:4700::1111"]) {
     await view.getByRole("button", { name: "Add DNS server", exact: true }).click();
@@ -61,4 +65,8 @@ test("Remote DNS is accessible under Services and stages resolver settings witho
   await expect(view.locator("tbody tr")).toHaveCount(1);
   expect(backend.writes).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.goto("/services/remote-dns");
+  await expect(page).toHaveURL(/\/settings\/remote-dns$/);
+  await expect(page.getByRole("navigation", { name: "Settings pages" }).getByRole("tab", { name: "Remote DNS", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(view).toBeVisible();
 });

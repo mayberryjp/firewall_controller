@@ -324,7 +324,13 @@ completed restart. Unknown outcomes and exhausted reconnect attempts remain expl
 Restart may reset caches/counters, reacquire DHCP leases or interrupt syslog delivery;
 desired configuration, revisions and persistent accounting databases are unchanged.
 
-Services > Remote DNS has **Domain**, **Test**, **RTT**, and **Result** columns on each server
+Interface lists and interface selectors are ordered alphabetically (case-insensitive)
+and show interface names in uppercase. This is presentation only: saved interface
+names, selector values, API requests, route/query values and exported configuration
+retain their original case. Ordered firewall/NAT rules and peer precedence are not
+reordered.
+
+Settings > Remote DNS has **Domain**, **Test**, **RTT**, and **Result** columns on each server
 row. Enter an ASCII domain and press Test (or Enter) to measure that server's DNS
 RTT, displayed as whole milliseconds with no decimals (rounded, not truncated).
 API timing values retain full precision. The request sends that server's IP, an
@@ -484,7 +490,7 @@ or appliance acceptance.
 | `/firewall/input` | Host-input policy and ordered managed-ingress rules, separate from forwarding |
 | `/services/netflow`, `/services/netflow/:name` | NetFlow/IPFIX: staged flow-export instances (**Add export**, inline Status enable/disable toggle) and independent runtime; instance names are plain text, with editing through the row action |
 | `/services/dhcp-relay` | Sole editor for per-interface relay enablement/upstream servers, with stored/observed configuration and runtime |
-| `/services/remote-dns` | Inline Add DNS server, edit and delete actions stage the server list to `dns[interface].servers` for every current LAN/WAN interface; existing per-interface servers are combined into one list. Preserves domains, DHCP settings and unassigned interfaces. Not a DNS server for LAN clients. Review through SAVE and Commit & push; future interfaces require staging again. |
+| `/settings/remote-dns` | Inline Add DNS server, edit and delete actions stage the server list to `dns[interface].servers` for every current LAN/WAN interface; existing per-interface servers are combined into one list. Preserves domains, DHCP settings and unassigned interfaces. Not a DNS server for LAN clients. Review through SAVE and Commit & push; future interfaces require staging again. The old `/services/remote-dns` URL redirects here. |
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
 | `/services/maintenance` | Explicit all-managed-services repair and a link to Config / Upgrade |
@@ -985,6 +991,10 @@ hosts/rules are skipped; conflicting ownership and unsupported entries are
 reported inline. IPv4 and optional IPv6 addresses are retained together; invalid
 or globally disabled IPv6 prevents importing that device rather than silently
 dropping its address.
+
+Both imports ignore inventory records whose `ip_address` is missing, null, empty
+or whitespace-only, without failing the remaining inventory or looking up connections
+for those records. Other incompatible response data still reports an import error.
 
 **Import rules** also fetches `/api/ignorelist/ip/<encoded-IP>` for each inventory
 host and imports missing hosts. Connection IDs (`ignorelist_id`) are optional;

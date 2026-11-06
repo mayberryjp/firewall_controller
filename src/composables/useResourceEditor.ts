@@ -8,6 +8,7 @@ import { preset, resourceFields, type Section } from "@/services/resourceForms";
 import { cloneConfig, numericAddress, prefix, stableJson, validateConfig } from "@/services/configuration";
 import { interfaceChoice, resourceItems, replaceResourceItems, routeGatewayMode } from "@/services/resourceCollections";
 import { supportsFirewallPorts, parseFirewallPorts } from "@/services/firewallProtocols";
+import { compareInterfaceNames, formatInterfaceName } from "@/services/interfaceNames";
 
 export function useResourceEditor(section: Section, wireguard = false, vlan = false, loopbacks = false) {
   const store = useControllerStore();
@@ -22,7 +23,8 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
   const interfaceOptions = computed(() => {
     const options = editingConfig.value?.interfaces.map(interfaceChoice) ?? [];
     const target = editingConfig.value?.blackhole?.name;
-    return section === "routes" && target ? [...options, { title: `${target} (blackhole)`, value: target }] : options;
+    return (section === "routes" && target ? [...options, { title: `${formatInterfaceName(target)} (blackhole)`, value: target }] : options)
+      .sort((left, right) => compareInterfaceNames(left.value, right.value));
   });
   const parentOptions = computed(() => editingConfig.value?.interfaces
     .filter(link => link.kind === "ethernet" && link.name !== form.value.name).map(interfaceChoice) ?? []);

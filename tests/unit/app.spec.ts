@@ -17,7 +17,18 @@ const PollingHost = defineComponent({ setup() { usePolling(); return () => null;
 describe("routed navigation sections", () => {
   it("places SANDO IMPORT and ADVANCED at the end of Settings", () => {
     const settings = navigationSections.find(section => section.name === "settings-section");
-    expect(settings?.pages.map(page => page.name)).toEqual(["settings-general", "settings-mqtt-streaming", "settings-dynamic-dns", "settings-sando", "settings-advanced"]);
+    expect(settings?.pages.map(page => page.name)).toEqual(["settings-general", "remote-dns", "settings-mqtt-streaming", "settings-dynamic-dns", "settings-sando", "settings-advanced"]);
+  });
+  it("places Remote DNS in Settings and redirects the old Services URL", async () => {
+    const settings = navigationSections.find(section => section.name === "settings-section")!;
+    expect(settings.pages.find(page => page.name === "remote-dns")).toMatchObject({ title: "Remote DNS", path: "/settings/remote-dns" });
+    expect(navigationSections.find(section => section.name === "services-section")?.pages.some(page => page.name === "remote-dns")).toBe(false);
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    await router.push("/services/remote-dns?source=bookmark#servers");
+    expect(router.currentRoute.value.fullPath).toBe("/settings/remote-dns?source=bookmark#servers");
+    expect(router.currentRoute.value.name).toBe("remote-dns");
+    expect(router.currentRoute.value.matched[0]?.name).toBe("settings-section");
+    expect(router.currentRoute.value.meta.authenticated).toBe(true);
   });
   it("opens INTERFACE RULES first from Firewall/NAT while preserving the existing firewall page", async () => {
     const section = navigationSections.find(section => section.name === "firewall-section")!;

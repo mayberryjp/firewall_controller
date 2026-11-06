@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import { isInitialLoad } from "@/services/datasets";
+import { formatInterfaceName } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const direction = ref<"received" | "advertised">("received"), neighbor = ref<string | null>(null);
@@ -84,7 +85,7 @@ const advertisedEmpty = computed(() => {
             {{ route.neighbor }}
           </td>
           <td data-label="Interface">
-            {{ route.interface }}
+            {{ formatInterfaceName(route.interface) }}
           </td>
           <td data-label="Next hop">
             {{ route.next_hop }}
@@ -108,7 +109,7 @@ const advertisedEmpty = computed(() => {
             v-for="(route, index) in received"
             :key="`${route.prefix}/${route.neighbor}/${index}`"
           >
-            <td>{{ route.prefix }}</td><td>{{ route.neighbor }}</td><td>{{ route.interface }}</td><td>{{ route.next_hop }}</td><td>{{ route.as_path.join(' ') || 'None' }}</td>
+            <td>{{ route.prefix }}</td><td>{{ route.neighbor }}</td><td>{{ formatInterfaceName(route.interface) }}</td><td>{{ route.next_hop }}</td><td>{{ route.as_path.join(' ') || 'None' }}</td>
             <td>
               <v-chip
                 size="small"

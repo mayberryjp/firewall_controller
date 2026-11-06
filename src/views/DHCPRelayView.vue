@@ -5,10 +5,11 @@ import { cloneConfig, validateConfig } from "@/services/configuration";
 import { dhcpRelaySchema } from "@/types/domain";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
+import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 
 const store = useControllerStore();
 const stored = computed(() => store.draft ?? store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
-const links = computed(() => (stored.value?.interfaces ?? []).filter(link => link.kind !== "wireguard").sort((a, b) => a.name.localeCompare(b.name)));
+const links = computed(() => sortByInterface((stored.value?.interfaces ?? []).filter(link => link.kind !== "wireguard"), link => link.name));
 const blocked = computed(() => Boolean(store.readOnlyReason) || !stored.value);
 const editing = ref<string | null>(null), servers = ref(""), error = ref("");
 const runtimeStatus = (name: string) => store.runtime.data?.dhcp_relay.find(item => item.interface === name);
@@ -91,7 +92,7 @@ function toggle(name: string, enabled: boolean): void {
         >
           <td>
             <div class="relay-interface">
-              <span class="relay-interface-name">{{ link.name }}</span>
+              <span class="relay-interface-name">{{ formatInterfaceName(link.name) }}</span>
               <span
                 class="relay-interface-role text-medium-emphasis"
                 :title="`Role: ${link.role === 'unassigned' ? 'Unassigned' : link.role.toUpperCase()}`"

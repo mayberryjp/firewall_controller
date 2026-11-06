@@ -6,6 +6,7 @@ import { cloneConfig, stableJson, validateConfig } from "@/services/configuratio
 import { uploadDynamicDnsSecret } from "@/services/netcontrol";
 import { useTimestamps } from "@/composables/useTimestamps";
 import type { DynamicDnsEntry } from "@/types/domain";
+import { formatInterfaceName, interfaceNameChoices } from "@/services/interfaceNames";
 const { formatTimestamp, timeZone } = useTimestamps();
 
 const store = useControllerStore();
@@ -172,7 +173,7 @@ function updated(name: string): string {
               @update:model-value="toggle(index, Boolean($event))"
             />
           </td>
-          <td>{{ entry.address_source === 'public_ip' ? 'Public IP' : 'Interface' }} · {{ entry.source_interface }}</td>
+          <td>{{ entry.address_source === 'public_ip' ? 'Public IP' : 'Interface' }} · {{ formatInterfaceName(entry.source_interface) }}</td>
           <td>
             <v-chip
               :color="stateColor(statuses.get(entry.name)?.state)"
@@ -235,7 +236,7 @@ function updated(name: string): string {
         <v-select
           v-model="form.source_interface"
           label="Interface"
-          :items="interfaces"
+          :items="interfaceNameChoices(interfaces)"
           :disabled="blocked"
           density="compact"
           hide-details="auto"

@@ -72,7 +72,7 @@ describe("interface capability diagnostics", () => {
     expect(wrapper.find('[aria-label="NIC Offloads"]').exists()).toBe(false);
     const rows = wrapper.findAll("tbody > tr");
     expect(rows).toHaveLength(2);
-    expect(rows[0]!.text()).toContain("eno1");
+    expect(rows[0]!.text()).toContain("ENO1");
     expect(rows[1]!.text()).toContain("lo");
     const chips = rows[0]!.findAll("[data-color]");
     expect(chips.map(chip => [chip.text(), chip.attributes("data-color")])).toEqual([
@@ -99,14 +99,14 @@ describe("interface capability diagnostics", () => {
     await wrapper.get("button").trigger("click");
     await wrapper.get("button").trigger("click");
     expect(api.refreshInterfaceCapabilities).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
-    expect(wrapper.text()).toContain("eno1");
+    expect(wrapper.text()).toContain("ENO1");
     const partial = interfaceCapabilitySnapshot();
     partial.inventory.status = "partial";
     partial.inventory.errors = ["Driver scan failed"];
     partial.inventory.interfaces = [partial.inventory.interfaces[1]!];
     partial.inventory.interfaces[0]!.errors = ["Queue scan denied"];
     pending.resolve(partial); await flushPromises();
-    expect(wrapper.text()).not.toContain("eno1");
+    expect(wrapper.text()).not.toContain("ENO1");
     expect(wrapper.text()).toContain("lo");
     expect(wrapper.text()).toContain("Partial snapshot");
     expect(wrapper.text()).not.toContain("Driver scan failed");
@@ -114,7 +114,7 @@ describe("interface capability diagnostics", () => {
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     await wrapper.get("button").trigger("click"); await flushPromises();
     expect(api.refreshInterfaceCapabilities).toHaveBeenCalledTimes(2);
-    expect(wrapper.text()).toContain("eno1");
+    expect(wrapper.text()).toContain("ENO1");
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     expect(JSON.stringify(store.draft)).toBe(original);
   });
@@ -126,7 +126,7 @@ describe("interface capability diagnostics", () => {
     await wrapper.get("button").trigger("click"); await flushPromises();
     expect(wrapper.get('[role="alert"]').text()).toContain(`HTTP ${status}`);
     expect(wrapper.text()).toContain("Stale: previous saved capabilities");
-    expect(wrapper.text()).toContain("eno1");
+    expect(wrapper.text()).toContain("ENO1");
     expect(api.refreshInterfaceCapabilities).toHaveBeenCalledTimes(1);
     expect(api.getInterfaceCapabilities).toHaveBeenCalledTimes(1);
     if (status === 403) {
@@ -164,7 +164,7 @@ describe("interface capability diagnostics", () => {
     store.sessionVersion++; await flushPromises();
     expect(signal.aborted).toBe(true);
     previous.resolve(interfaceCapabilitySnapshot()); await flushPromises();
-    expect(wrapper.text()).not.toContain("eno1");
+    expect(wrapper.text()).not.toContain("ENO1");
     expect(wrapper.text()).toContain("No saved capability snapshot");
     expect(api.refreshInterfaceCapabilities).toHaveBeenCalledTimes(2);
     expect(api.getInterfaceCapabilities).toHaveBeenCalledTimes(3);
@@ -189,9 +189,9 @@ describe("interface capability diagnostics", () => {
     const store = useControllerStore(), previous = deferred<InterfaceCapabilitySnapshot | null>();
     vi.mocked(api.getInterfaceCapabilities).mockResolvedValueOnce(interfaceCapabilitySnapshot()).mockReturnValueOnce(previous.promise).mockResolvedValue(null);
     const wrapper = render(); await flushPromises();
-    expect(wrapper.text()).toContain("eno1");
+    expect(wrapper.text()).toContain("ENO1");
     store.connected = false; await flushPromises();
-    expect(wrapper.text()).not.toContain("eno1");
+    expect(wrapper.text()).not.toContain("ENO1");
     expect(wrapper.text()).toContain("Connect a firewall");
     store.connected = true; await flushPromises();
     const signal = vi.mocked(api.getInterfaceCapabilities).mock.calls[1]![0]!;
