@@ -700,9 +700,11 @@ not summed into a claimed aggregate throughput.
 
 Administratively disabled interfaces and links successfully observed as down are
 hidden; unknown states and failed reads are not mistaken for down links. Recovered
-links reappear. A compact host-performance strip shows CPU busy time, memory usage,
-one-minute load and host-scoped aggregate uptime as a small row with a subtle theme-colored background beneath
-the appliance, rather than a header or floating card. CPU needs two comparable host-health
+links reappear. Three separate black OLED-style mini-screens with green dot-matrix
+characters show CPU busy time, memory usage and one-minute load side by side
+inside the right side of the appliance's front face. Host uptime
+remains in SYSTEM OVERVIEW, not on the appliance. Loading, stale-data and error feedback remains
+outside the illustration so it is not clipped. CPU needs two comparable host-health
 samples; initialization stays neutral and real read failures remain inline.
 The diagram stretches from below the app header to the bottom of the viewport,
 expanding its traffic connectors on taller screens instead of leaving unused space.

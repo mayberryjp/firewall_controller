@@ -105,9 +105,12 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
   let reads = 0, hostReads = 0, failed = false;
   await page.route("**/proxy/statistics/host", route => {
     const index = hostReads++;
-    return route.fulfill({ contentType: "application/json", body: JSON.stringify(
-      healthSnapshot(String(100 + index * 25), String(100 + index * 75), 100 + index * 3),
-    ) });
+    return route.fulfill({
+      status: failed ? 503 : 200, contentType: "application/json",
+      body: failed ? '{"error":"Host performance temporarily unavailable"}' : JSON.stringify(
+        healthSnapshot(String(100 + index * 25), String(100 + index * 75), 100 + index * 3),
+      ),
+    });
   });
   await page.route("**/proxy/statistics", route => {
     const sample = trafficFlowStatistics(reads * 3, BigInt(reads) * 3000000n);
@@ -151,9 +154,26 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
   await expect(map).toHaveCSS("background-color", surface);
   await expect(map).toHaveCSS("background-image", "none");
   const hostPanel = map.getByRole("region", { name: "Host performance", exact: true });
-  await expect(hostPanel).toHaveCSS("background-color", elevated);
-  await expect(hostPanel).toHaveCSS("box-shadow", "none");
+  await expect(hostPanel).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(hostPanel).toHaveCSS("border-top-width", "0px");
+  await expect(hostPanel.locator(".host-metrics > div")).toHaveCount(3);
+  await expect(hostPanel.locator("dt")).toHaveText(["CPU", "Memory", "Load (1 min)"]);
+  await expect(hostPanel).not.toContainText("Host uptime");
+  for (const screen of await hostPanel.locator(".host-metrics > div").all()) {
+    await expect(screen).toHaveCSS("background-color", "rgb(3, 8, 5)");
+    await expect(screen).toHaveCSS("border-top-color", "rgb(68, 75, 69)");
+    await expect(screen).toHaveCSS("background-image", "none");
+    await expect(screen.locator("dd")).toHaveCSS("color", "rgb(102, 255, 112)");
+    await expect(screen.locator("dd svg")).toHaveAttribute("aria-hidden", "true");
+    await expect(screen.locator("dd svg path")).toHaveAttribute("d", /M.*h\.8v\.8h-\.8z/);
+  }
+  const screenBounds = await Promise.all(
+    (await hostPanel.locator(".host-metrics > div").all()).map(screen => screen.boundingBox()),
+  );
+  for (let index = 1; index < screenBounds.length; index++) {
+    const previous = screenBounds[index - 1]!, current = screenBounds[index]!;
+    expect(current.x).toBeGreaterThan(previous.x + previous.width);
+  }
   await expect(map.locator(".appliance").getByRole("region", { name: "Host performance", exact: true })).toBeVisible();
   await expect(map.locator(".flow-heading")).toHaveCount(0);
   await expect(map.locator(".overview-widget")).toHaveCount(0);
@@ -192,10 +212,22 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
       }
     }
     await page.setViewportSize(originalViewport);
+    await expect.poll(() => map.locator(".flow-board").evaluate(element => {
+      const viewport = element.parentElement!;
+      return Math.abs(element.getBoundingClientRect().width - Math.max(504 * 1.4, viewport.clientWidth));
+    })).toBeLessThanOrEqual(1);
   }
   const readings = (await hostPanel.boundingBox())!;
-  const hardware = (await map.locator(".appliance svg").boundingBox())!;
-  expect(readings.y).toBeGreaterThanOrEqual(hardware.y + hardware.height);
+  const hardware = (await map.locator(".appliance > svg").boundingBox())!;
+  expect(readings.x).toBeGreaterThanOrEqual(hardware.x + hardware.width * .48);
+  expect(readings.x + readings.width).toBeLessThanOrEqual(hardware.x + hardware.width * .92);
+  expect(readings.y).toBeGreaterThanOrEqual(hardware.y + hardware.height * (77 / 210));
+  expect(readings.y + readings.height).toBeLessThanOrEqual(hardware.y + hardware.height * (151 / 210));
+  const caption = (await map.locator(".appliance-caption").boundingBox())!;
+  expect(readings.y + readings.height).toBeLessThan(caption.y);
+  for (const metric of await hostPanel.locator(".host-metrics > div").all()) {
+    expect(await metric.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
   const outboundLinks = (await map.locator(".flow-zone--lan .flow-links").boundingBox())!;
   expect(readings.y + readings.height).toBeLessThanOrEqual(outboundLinks.y);
   const wan = await map.getByRole("article", { name: "wan0 interface counters", exact: true }).boundingBox();
@@ -237,10 +269,25 @@ test("Traffic flow depicts live north/south appliance traffic with accessible re
   await page.emulateMedia({ reducedMotion: "no-preference" });
   failed = true;
   await expect(map).toContainText("Traffic counters temporarily unavailable", { timeout: 12000 });
+  const hostFeedback = map.locator(".host-feedback");
+  await expect(hostFeedback).toContainText("Host performance temporarily unavailable", { timeout: 12000 });
+  await expect(hostPanel.locator("dd").first()).toHaveText("Unavailable");
+  await expect(hostPanel).not.toContainText("Host performance temporarily unavailable");
+  const failedReadings = (await hostPanel.boundingBox())!;
+  const failedHardware = (await map.locator(".appliance > svg").boundingBox())!;
+  expect(failedReadings.y + failedReadings.height).toBeLessThanOrEqual(failedHardware.y + failedHardware.height * (151 / 210));
+  for (const metric of await hostPanel.locator(".host-metrics > div").all()) {
+    expect(await metric.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+  const feedbackBounds = (await hostFeedback.boundingBox())!;
+  const failedCaption = (await map.locator(".appliance-caption").boundingBox())!;
+  expect(feedbackBounds.y).toBeGreaterThanOrEqual(failedHardware.y + failedHardware.height);
+  expect(feedbackBounds.y + feedbackBounds.height).toBeLessThanOrEqual(failedCaption.y);
   await expect(map.locator(".flow-stream.is-moving")).toHaveCount(0);
   await expect(map.getByRole("article", { name: "wan0 interface counters", exact: true })).toContainText("8 Mb/s");
   failed = false;
   await expect(map.locator(".flow-stream.is-moving")).toHaveCount(8, { timeout: 15000 });
+  await expect(hostFeedback).not.toContainText("Host performance temporarily unavailable", { timeout: 12000 });
   await map.getByRole("link", { name: "View traffic history for wan0", exact: true }).click();
   await expect(page).toHaveURL(/\/diagnostics\/traffic\?interface=wan0$/);
   await expect(page.getByRole("region", { name: "Real Time Traffic", exact: true })).toBeVisible();

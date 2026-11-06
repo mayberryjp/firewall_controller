@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HostPerformanceStrip from "@/components/feature/HostPerformanceStrip.vue";
 import { useControllerStore } from "@/stores/controller";
-import { healthSnapshot, trafficStatistics } from "../fixtures";
+import { healthSnapshot } from "../fixtures";
 import type { HostHealth } from "@/services/hostHealth";
 
 const render = () => mount(HostPerformanceStrip, { global: { stubs: { VProgressLinear: true } } });
@@ -41,17 +41,18 @@ describe("compact host performance", () => {
       expect(value("CPU")).toBe("Unavailable");
     }
   });
-  it("uses only available host-scoped aggregate uptime and preserves memory precision in the tooltip", async () => {
-    const store = useControllerStore();
+  it("shows only CPU, memory and load and preserves memory precision in the tooltip", async () => {
     wrapper = render(); await publish();
-    store.statistics.data = trafficStatistics(); store.statistics.stale = false; store.statistics.lastSuccess = Date.now();
-    await flushPromises();
-    expect(value("Host uptime")).not.toBe("Unavailable");
+    expect(wrapper.findAll("dt").map(row => row.text())).toEqual(["CPU", "Memory", "Load (1 min)"]);
+    expect(wrapper.text()).not.toContain("Host uptime");
     expect(wrapper.findAll("dl > div")[1]!.attributes("title")).toBe("6 GB / 8 GB");
-    store.statistics.data = { ...trafficStatistics(), uptime: { ...trafficStatistics().uptime, scope: "simulator" } };
-    await flushPromises(); expect(value("Host uptime")).toBe("Unavailable");
-    store.statistics.data = { ...trafficStatistics(), sample: { ...trafficStatistics().sample, status: "simulated" } };
-    await flushPromises(); expect(value("Host uptime")).toBe("Unavailable");
+    for (const row of wrapper.findAll("dl > div")) {
+      expect(row.findAll("svg")).toHaveLength(2);
+      for (const display of row.findAll("svg")) {
+        expect(display.attributes("aria-hidden")).toBe("true");
+        expect(display.get("path").attributes("d")).toMatch(/M.*h\.8v\.8h-\.8z/);
+      }
+    }
   });
   it("surfaces stale failures, retains memory evidence and requires a fresh CPU baseline on recovery", async () => {
     const store = useControllerStore();

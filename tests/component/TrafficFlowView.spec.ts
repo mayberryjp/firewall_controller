@@ -107,6 +107,8 @@ describe("Traffic flow appliance view", () => {
     expect(wrapper.get(".appliance svg").text()).not.toContain("FIREWALL");
     expect(wrapper.get(".appliance svg").text()).toContain("KNOW YOUR NETWORK");
     expect(wrapper.get(".appliance svg").text()).not.toContain("TRAFFIC GATEWAY");
+    expect(wrapper.get(".appliance").findComponent({ name: "HostPerformanceStrip" }).exists()).toBe(true);
+    expect(wrapper.find(".appliance svg [aria-label='Host performance']").exists()).toBe(false);
     expect(wrapper.find('.appliance svg rect[width="22"][height="25"]').exists()).toBe(false);
     expect(wrapper.find('.appliance svg path[d="M 4 5 h 14 v 11 h -4 v 4 h -6 v -4 h -4 Z"]').exists()).toBe(false);
     expect(wrapper.find('path[d="M 121 51 l 13 -7 l 13 7 v 12 l -13 7 l -13 -7 Z"]').exists()).toBe(false);
@@ -115,7 +117,8 @@ describe("Traffic flow appliance view", () => {
   });
   it("never animates a first sample, simulated data or measured zero", async () => {
     wrapper = render(); await publish();
-    expect(wrapper.text()).toContain("two comparable traffic samples");
+    expect(wrapper.text()).not.toContain("two comparable traffic samples");
+    expect(wrapper.find(".flow-notice").exists()).toBe(false);
     expect(wrapper.findAll(".flow-stream")).toHaveLength(0);
     await publish(3);
     expect(wrapper.text()).toContain("0 b/s");
@@ -137,7 +140,10 @@ describe("Traffic flow appliance view", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Loading your traffic map");
     if (outcome === "success") {
-      await publish(); expect(wrapper.text()).toContain("two comparable traffic samples");
+      await publish();
+      expect(wrapper.text()).not.toContain("Loading your traffic map");
+      expect(wrapper.text()).not.toContain("two comparable traffic samples");
+      expect(wrapper.find(".flow-notice").exists()).toBe(false);
     } else {
       store.statistics.error = "HTTP 403: state.read required"; store.statistics.loading = false;
       await flushPromises();

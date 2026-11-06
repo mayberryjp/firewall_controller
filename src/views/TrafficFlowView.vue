@@ -35,7 +35,6 @@ const hostname = computed(() => [config.value?.system?.hostname, config.value?.s
 const live = computed(() => store.connected && !hidden.value && !paused.value && !store.statistics.stale &&
   !store.statistics.error && !store.statistics.delayed && !store.state.stale &&
   !store.state.error && !store.state.delayed && Boolean(frame.value));
-const hasRates = computed(() => ports.value.some(port => port.rates.rx_bytes !== null || port.rates.tx_bytes !== null));
 const hasTraffic = computed(() => live.value && ports.value.some(port => port.canFlow &&
   ((port.rates.rx_bytes ?? 0) > 0 || (port.rates.tx_bytes ?? 0) > 0)));
 const notice = computed(() => {
@@ -47,7 +46,6 @@ const notice = computed(() => {
     ? "No active WAN or LAN interfaces." : "Assign WAN or LAN roles to interfaces to build your traffic map.";
   if (data?.sample.status === "simulated") return "Simulated counters: live traffic flow is unavailable.";
   if (!data || !usableTrafficSample(data)) return "Live interface counters are unavailable.";
-  if (!hasRates.value && !store.statistics.stale) return "Waiting for two comparable traffic samples...";
   return "";
 });
 const lanes = (role: FlowRole) => [
@@ -440,6 +438,7 @@ onUnmounted(() => {
                 fill="var(--text-muted)"
               />
             </svg>
+            <HostPerformanceStrip />
             <div class="appliance-caption">
               <p class="appliance-name">
                 {{ hostname }}
@@ -453,7 +452,6 @@ onUnmounted(() => {
                 @click="paused = !paused"
               />
             </div>
-            <HostPerformanceStrip />
           </div>
         </template>
       </div>
@@ -510,9 +508,17 @@ onUnmounted(() => {
 .flow-stream.is-moving { animation: stream-south linear infinite; }
 .flow-stream--north.is-moving { animation-direction: reverse; }
 @keyframes stream-south { from { stroke-dashoffset: 64; } to { stroke-dashoffset: 0; } }
-.appliance { position: relative; z-index: 1; flex-shrink: 0; margin: -20px auto 0; text-align: center; }
+.appliance { position: relative; z-index: 1; flex-shrink: 0; margin: -20px auto 0; text-align: center; container-type: inline-size; }
 .appliance svg { display: block; position: relative; width: 100%; overflow: visible; }
+.appliance :deep(.host-performance) { position: absolute; top: -19.375cqw; right: 8.5%; width: 43%; margin: 0; padding: 0; background: transparent; }
+.appliance :deep(.host-metrics) { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .9375cqw; }
+.appliance :deep(.host-metrics > div) { display: flex; flex-direction: column; justify-content: center; gap: .9375cqw; min-height: 8.75cqw; padding: .9375cqw .625cqw; border: .3125cqw solid #444b45; border-radius: .625cqw; background: #030805; box-shadow: inset 0 .3125cqw .625cqw #000, 0 .15625cqw 0 #ffffff26; }
+.appliance :deep(.host-metrics dt) { color: #48c951; font-size: 1.5625cqw; line-height: 1; }
+.appliance :deep(.host-metrics dd) { color: #66ff70; font-size: 2.8125cqw; line-height: 1; }
+.appliance :deep(.host-metrics svg) { filter: drop-shadow(0 0 .15625cqw #4dff6266); }
+.appliance :deep(.host-feedback) { text-align: left; }
 .appliance-caption { position: relative; display: flex; align-items: center; justify-content: center; gap: 4px; width: fit-content; max-width: 90%; margin: -22px auto 0; padding: 0 6px; border-radius: 6px; background: var(--bg-secondary); }
+.appliance :deep(.host-performance-display:has(.host-feedback > *)) + .appliance-caption { margin-top: 4px; }
 .appliance-name { min-width: 0; color: var(--text-secondary); font-size: 11px; font-weight: 500; letter-spacing: .5px; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .traffic-flow { padding: 10px 4px; border-radius: 16px; }
