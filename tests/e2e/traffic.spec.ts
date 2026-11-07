@@ -78,6 +78,10 @@ test("Diagnostics renders combined traffic per interface and drills into one liv
   await page.screenshot({ path: testInfo.outputPath("real-time-traffic.png"), fullPage: true, animations: "disabled" });
   if (isMobile) await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Services", exact: true }).click();
+  await expect(page).toHaveURL(/\/services\/netflow$/);
+  await expect(page.getByRole("region", { name: "NetFlow/IPFIX", exact: true })).toBeVisible();
+  await expect(bytes).toHaveCount(0);
+  await expect(packets).toHaveCount(0);
   const stoppedReads = reads;
   await page.waitForTimeout(6500);
   expect(reads).toBe(stoppedReads);

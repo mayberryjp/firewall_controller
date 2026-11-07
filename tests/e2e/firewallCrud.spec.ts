@@ -120,8 +120,11 @@ for (const scope of ["host", "interface", "input"] as const) {
       await expect(target).toHaveClass(/rule-drop-target/);
       await page.mouse.up();
     }
-    await expect(target.locator(".rule-value").nth(scope === "host" ? 2 : 1)).toHaveText("198.51.100.0/24");
-    await expect(target.locator(".rule-value").nth(scope === "host" ? 4 : 3)).toHaveText("443");
+    await expect(target.locator("td").filter({ has: page.getByText("Destination", { exact: true }) }).locator(".rule-value"))
+      .toHaveText("198.51.100.0/24");
+    const portsLabel = scope === "host" ? "Port" : scope === "input" ? "Destination ports" : "Ports";
+    await expect(target.locator("td").filter({ has: page.getByText(portsLabel, { exact: true }) }).locator(".rule-value"))
+      .toHaveText("443");
     if (scope === "host") await expect(table.locator("tr.host-rule").last()).toHaveClass(/host-rule--default/);
     await page.getByRole("button", { name: "Delete rule 1", exact: true }).click();
     await expect(table.locator("tr.host-rule")).toHaveCount(originalRows);
