@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { counterConfigurationMatches, dhcpRelayCounterSummaries, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime } from "@/services/firewallTelemetry";
+import { counterConfigurationMatches, dhcpRelayCounterSummaries, dhcpRelaySystemRules, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime } from "@/services/firewallTelemetry";
 import { cloneConfig } from "@/services/configuration";
 import { hostPolicyConfig, state, transaction } from "../fixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
@@ -48,13 +48,38 @@ describe("firewall telemetry contracts", () => {
 });
 
 describe("system firewall rules", () => {
+  it("preserves all relay matches, selects the backend relay address and scopes display to the configured interface", () => {
+    const config = hostPolicyConfig(), link = config.interfaces[0]!;
+    link.dhcp_relay = { enabled: true, servers: ["198.51.100.40", "198.51.100.41"] };
+    link.addresses = ["2001:db8::10/64", "192.0.2.20/24", "192.0.2.10/24"];
+    const sample = firewallCounters(config);
+    expect(dhcpRelaySystemRules(config, sample, "lab0")).toEqual([
+      {
+        order: "Before rules", name: "DHCP clients", label: "DHCP relay clients", ingress: "LAB0",
+        source: "Any IPv4", destination: "192.0.2.10/32, 255.255.255.255/32", protocol: "UDP",
+        sourcePorts: "68", ports: "67", egress: "Any", action: "accept", match: "",
+        counterPath: "generated/input/dhcp_relay/lab0/clients",
+      },
+      {
+        order: "Before rules", name: "DHCP servers", label: "DHCP relay servers", ingress: "Any",
+        source: "198.51.100.40/32, 198.51.100.41/32", destination: "192.0.2.10/32", protocol: "UDP",
+        sourcePorts: "67", ports: "67", egress: "Any", action: "accept", match: "",
+        counterPath: "generated/input/dhcp_relay/lab0/servers",
+      },
+    ]);
+    expect(dhcpRelaySystemRules(config, sample, "wan0")).toEqual([]);
+    expect(dhcpRelaySystemRules(config, null, "lab0")).toEqual([]);
+    expect(dhcpRelaySystemRules(config, firewallCounters(), "lab0")).toEqual([]);
+    link.dhcp_relay.enabled = false;
+    expect(dhcpRelaySystemRules(config, sample, "lab0")).toEqual([]);
+  });
   it("shows actual input matches and verdicts in evaluation order with exact counter paths", () => {
     const config = hostPolicyConfig();
     config.firewall.allow_all_icmp = true;
     config.firewall.input = { policy: "drop", interfaces: [] };
     expect(firewallSystemRules(config, "input")).toEqual([
       { order: "Before rules", name: "ICMP", label: "IPv4 ICMP exception", ingress: "Any", destination: "Any IPv4", protocol: "ICMP", ports: "Any", egress: "Any", action: "accept", match: "", counterPath: "/firewall/allow_all_icmp" },
-      { order: "Before rules", name: "Loopback", label: "Loopback bypass", ingress: "Any", destination: "Any", protocol: "Any", ports: "Any", egress: "Any", action: "accept", match: "Ingress: lo", counterPath: "generated/input/loopback" },
+      { order: "Before rules", name: "Loopback", label: "Loopback bypass", ingress: "LO", destination: "Any", protocol: "Any", ports: "Any", egress: "Any", action: "accept", match: "Ingress: lo", counterPath: "generated/input/loopback" },
       { order: "Before rules", name: "Est./related", label: "Established/related bypass", ingress: "Any", destination: "Any", protocol: "Any", ports: "Any", egress: "Any", action: "accept", match: "Connection state: established, related", counterPath: "generated/input/established_related" },
       { order: "Default", name: "Default", label: "Input default", ingress: "Any", destination: "Any", protocol: "Any", ports: "Any", egress: "Any", action: "drop", match: "", counterPath: "/firewall/input/policy" },
     ]);

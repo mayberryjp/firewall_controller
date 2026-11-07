@@ -12,29 +12,42 @@ async function connect(page: Page) {
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
 }
 
-test("DHCP relay counters are read-only system rows linked to alphabetically ordered interfaces", async ({ page }) => {
+test("DHCP relay rules show full matches only on their configured interfaces", async ({ page }) => {
   const settings = hostPolicyConfig();
   const link = settings.interfaces[0]!;
   link.dhcp_relay = { enabled: true, servers: ["198.51.100.40"] };
   settings.interfaces.unshift({ ...link, name: "vlan30", addresses: ["192.0.30.1/24"] });
+  settings.interfaces.push({ ...link, name: "wan0", dhcp_relay: { enabled: false, servers: [] } });
   settings.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ action: "drop" }] }] };
   const backend = await mockBackend(page, { initialConfig: settings });
   await page.route("**/statistics/firewall", route => route.fulfill({ json: firewallCounters(settings) }));
   await connect(page);
   await page.goto("/firewall/input");
   const table = page.getByRole("table", { name: "Input rules", exact: true });
-  const rows = table.locator(".rule-section--system .counter-summary");
-  await expect(rows).toHaveCount(4);
-  await expect(rows.locator("a")).toHaveText(["LAB0", "LAB0", "VLAN30", "VLAN30"]);
-  await expect(rows.first().locator("a")).toHaveAttribute("href", "/interfaces/lab0");
-  await expect(rows.locator(".rule-origin")).toHaveText(["System", "System", "System", "System"]);
+  const rows = table.locator('.rule-section--system .system-rule[title^="DHCP relay"]');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first().locator(".rule-value")).toHaveText([
+    "DHCP clients", "LAB0", "Any IPv4", "192.0.2.10/32, 255.255.255.255/32", "UDP", "68", "67", "accept",
+  ]);
+  await expect(rows.nth(1).locator(".rule-value")).toHaveText([
+    "DHCP servers", "Any", "198.51.100.40/32", "192.0.2.10/32", "UDP", "67", "67", "accept",
+  ]);
+  await expect(table.locator(".counter-summary")).toHaveCount(0);
+  await expect(rows.locator(".rule-origin")).toHaveText(["System", "System"]);
   await expect(rows.first().locator(".counter-value")).toHaveText(["9007199254740993", "18446744073709551616"]);
   await expect(rows.nth(1).locator(".counter-value").first()).toHaveText("0");
   await expect(rows.locator("button, input, select, [data-rule-index]")).toHaveCount(0);
   await expect(table.locator(".rule-section--user .host-rule")).toHaveAttribute("data-action", "drop");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await rows.nth(2).locator("a").click();
-  await expect(page).toHaveURL(/\/interfaces\/vlan30$/);
+  await page.getByRole("combobox", { name: "Interface", exact: true }).press("ArrowDown");
+  await page.getByRole("option", { name: /^VLAN30/ }).click();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toContainText("192.0.30.1/32");
+  await expect(rows.nth(1)).toContainText("192.0.30.1/32");
+  await expect(rows.first()).not.toContainText("192.0.2.10/32");
+  await page.getByRole("combobox", { name: "Interface", exact: true }).press("ArrowDown");
+  await page.getByRole("option", { name: /^WAN0/ }).click();
+  await expect(rows).toHaveCount(0);
   expect(backend.writes).toEqual([]);
 });
 

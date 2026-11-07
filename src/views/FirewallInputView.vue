@@ -79,7 +79,7 @@ function stage(): void {
       class="d-flex flex-wrap align-center ga-3 mb-4"
     >
       <v-select
-        v-if="input"
+        v-if="interfaceOptions.length"
         v-model="selectedInterface"
         label="Interface"
         :items="interfaceOptions"
@@ -99,7 +99,7 @@ function stage(): void {
         {{ input ? "Edit input policy" : "Add input policy" }}
       </v-btn>
     </div>
-    <template v-if="input && !dialog">
+    <template v-if="!dialog">
       <FirewallRuleTable
         v-if="selectedInterface"
         :key="selectedInterface"
@@ -108,13 +108,13 @@ function stage(): void {
       />
     </template>
     <p
-      v-else-if="selected && !input && !dialog"
+      v-if="selected && !input && !dialog"
       class="text-medium-emphasis"
     >
       No host input filter configured.
     </p>
     <FirewallCounterOverview
-      v-if="!dialog && (!input || !selectedInterface)"
+      v-if="!dialog && !selectedInterface"
       chain="input"
     />
     <v-card

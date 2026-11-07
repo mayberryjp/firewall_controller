@@ -174,16 +174,21 @@ describe("firewall rule totals", () => {
     settings.firewall.input = { policy: "drop", interfaces: [{ interface: "lab0", rules: [{ action: "drop" }] }] };
     return settings;
   }
-  it("shows DHCP counters in the existing system section before user drops, with linked interfaces and no editor", async () => {
+  it("shows full DHCP rules in the system section before user drops with exact counters and no editor", async () => {
     const store = useControllerStore(), settings = relaySettings();
     store.state.data!.desired = settings;
     vi.mocked(getFirewallCounters).mockResolvedValue(firewallCounters(settings));
     wrapper = mount(FirewallRuleTable, { props: { scope: "input", owner: "lab0" }, global: { stubs } });
     await flushPromises();
-    const rows = wrapper.findAll(".rule-section--system .counter-summary");
+    const rows = wrapper.findAll('.rule-section--system .system-rule[title^="DHCP relay"]');
     expect(rows).toHaveLength(2);
-    expect(rows.map(row => row.get("a").text())).toEqual(["LAB0", "LAB0"]);
-    expect(rows[0]!.get("a").attributes("href")).toBe("/interfaces/lab0");
+    expect(rows[0]!.findAll(".rule-value").map(cell => cell.text())).toEqual([
+      "DHCP clients", "LAB0", "Any IPv4", "192.0.2.10/32, 255.255.255.255/32", "UDP", "68", "67", "accept",
+    ]);
+    expect(rows[1]!.findAll(".rule-value").map(cell => cell.text())).toEqual([
+      "DHCP servers", "Any", "198.51.100.40/32", "192.0.2.10/32", "UDP", "67", "67", "accept",
+    ]);
+    expect(wrapper.find(".counter-summary").exists()).toBe(false);
     expect(rows[0]!.findAll(".counter-value").map(value => value.text())).toEqual(["9007199254740993", "18446744073709551616"]);
     expect(rows[1]!.findAll(".counter-value")[0]!.text()).toBe("0");
     for (const row of rows) {
@@ -200,6 +205,23 @@ describe("firewall rule totals", () => {
     await wrapper.get("form").trigger("submit"); await flushPromises();
     expect(store.draft!.firewall).toEqual(manual);
   });
+  it("only shows relay rules under their configured interface when switching interfaces", async () => {
+    const store = useControllerStore(), settings = relaySettings();
+    settings.interfaces.push({ ...settings.interfaces[0]!, name: "vlan30", addresses: ["192.0.30.1/24"] });
+    settings.interfaces.push({ ...settings.interfaces[0]!, name: "wan0", dhcp_relay: { enabled: false, servers: [] } });
+    store.state.data!.desired = settings;
+    vi.mocked(getFirewallCounters).mockResolvedValue(firewallCounters(settings));
+    wrapper = mount(FirewallRuleTable, { props: { scope: "input", owner: "wan0" }, global: { stubs } });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("DHCP");
+    await wrapper.setProps({ owner: "vlan30" });
+    const rows = wrapper.findAll('.system-rule[title^="DHCP relay"]');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.text()).toContain("VLAN30");
+    expect(rows[0]!.text()).toContain("192.0.30.1/32");
+    expect(rows[1]!.text()).toContain("192.0.30.1/32");
+    expect(rows.every(row => !row.text().includes("192.0.2.10/32"))).toBe(true);
+  });
   it("shows generated DHCP counters without requiring an input policy or inventing them on older backends", async () => {
     const store = useControllerStore(), settings = relaySettings();
     delete settings.firewall.input;
@@ -207,14 +229,15 @@ describe("firewall rule totals", () => {
     store.state.data!.desired = settings;
     vi.mocked(getFirewallCounters).mockResolvedValue(firewallCounters(settings));
     wrapper = mount(FirewallInputView, { global: { stubs } }); await flushPromises();
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(2);
     expect(wrapper.text()).toContain("No host input filter configured.");
-    expect(wrapper.findAll("a").map(link => link.text())).toEqual(["LAB0", "LAB0"]);
+    expect(wrapper.find(".counter-summary").exists()).toBe(false);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')[0]!.text()).toContain("192.0.2.10/32");
     const older = firewallCounters(settings);
     older.rules = older.rules.filter(row => !row.id.includes("/dhcp_relay/"));
     vi.mocked(getFirewallCounters).mockResolvedValue(older);
     document.dispatchEvent(new Event("visibilitychange")); await flushPromises();
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(0);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(0);
     expect(store.draft).toBeNull();
   });
   it.each(["success", "failure"] as const)("keeps initial counter loading neutral until %s", async outcome => {
@@ -225,11 +248,11 @@ describe("firewall rule totals", () => {
     wrapper = mount(FirewallRuleTable, { props: { scope: "input", owner: "lab0" }, global: { stubs } });
     expect(wrapper.text()).toContain("Loading firewall counters");
     expect(wrapper.text()).not.toContain("unavailable");
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(0);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(0);
     if (outcome === "success") resolve(firewallCounters(settings));
     else reject(new ApiFailure("Counter read failed", 503));
     await flushPromises();
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(outcome === "success" ? 2 : 0);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(outcome === "success" ? 2 : 0);
     if (outcome === "failure") expect(wrapper.text()).toContain("Counter read failed");
   });
   it("invalidates relay draft counters and refreshes after apply and rollback without caching ruleset identities", async () => {
@@ -238,11 +261,11 @@ describe("firewall rule totals", () => {
     vi.mocked(getFirewallCounters).mockResolvedValue(firewallCounters(settings));
     wrapper = mount(FirewallRuleTable, { props: { scope: "input", owner: "lab0" }, global: { stubs } });
     await flushPromises();
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(2);
     store.draft = cloneConfig(settings);
     store.draft.interfaces[0]!.dhcp_relay.servers = ["198.51.100.41"];
     await flushPromises();
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(0);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(0);
     expect(wrapper.findAll(".counter-value").every(value => value.text() === "—")).toBe(true);
     const pending = transaction();
     pending.candidate = cloneConfig(store.draft);
@@ -253,13 +276,13 @@ describe("firewall rule totals", () => {
     await flushPromises();
     expect(getFirewallCounters).toHaveBeenCalledTimes(2);
     expect(wrapper.text()).toContain("Sampled (UTC)");
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(2);
     const rolledBack = firewallCounters(settings);
     rolledBack.ruleset_id = "d".repeat(64);
     vi.mocked(getFirewallCounters).mockResolvedValue(rolledBack);
     store.state.data = { ...store.state.data!, active_transaction: undefined };
     await flushPromises();
-    expect(wrapper.findAll(".counter-summary")).toHaveLength(2);
+    expect(wrapper.findAll('.system-rule[title^="DHCP relay"]')).toHaveLength(2);
     expect(getFirewallCounters).toHaveBeenCalledTimes(3);
     expect(store.state.data!.desired.firewall).toEqual(settings.firewall);
   });
@@ -304,7 +327,7 @@ describe("firewall rule totals", () => {
       expect(row.find("td > div.text-caption").exists()).toBe(false);
     }
     expect(rows[0]!.findAll(".rule-value:not(.rule-value--ingress)").map(value => value.text()).slice(0, 4))
-      .toEqual(["ICMP", "Any IPv4", "ICMP", "Any"]);
+      .toEqual(scope === "input" ? ["ICMP", "Any", "Any IPv4", "ICMP"] : ["ICMP", "Any IPv4", "ICMP", "Any"]);
     expect(policy.get(".rule-section--system").findAll(".host-rule")).toHaveLength(0);
     expect(policy.get(".rule-section--user").findAll(".system-rule")).toHaveLength(0);
     expect(policy.get(".rule-section--defaults").findAll("tr").at(-1)!.classes()).toContain("system-rule--default");
@@ -452,8 +475,8 @@ describe("firewall rule totals", () => {
   it("shows generated ICMP input counters without pretending that an input filter was configured", async () => {
     wrapper = mount(FirewallInputView, { global: { stubs } }); await flushPromises();
     expect(wrapper.text()).toContain("No host input filter configured.");
-    expect(wrapper.text()).toContain("IPv4 ICMP exception");
-    expect(wrapper.text()).toContain("Generated input default");
+    expect(wrapper.get('.system-rule[title="IPv4 ICMP exception"]').text()).toContain("ICMP");
+    expect(wrapper.get('.system-rule[title="Generated input default"]').text()).toContain("accept");
     expect(wrapper.findAll(".counter-value").some(value => value.text() === "0")).toBe(true);
     expect(wrapper.find(".host-rule").exists()).toBe(false);
   });

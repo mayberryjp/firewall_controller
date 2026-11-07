@@ -9,8 +9,7 @@ import type { Config } from "@/types/domain";
 import type { Field } from "@/types/forms";
 import { useFirewallCounters } from "@/composables/useFirewallCounters";
 import FirewallCounterCells from "@/components/feature/FirewallCounterCells.vue";
-import FirewallCounterRows from "@/components/feature/FirewallCounterRows.vue";
-import { firewallSystemRules, type FirewallSystemRule } from "@/services/firewallTelemetry";
+import { dhcpRelaySystemRules, firewallSystemRules, type FirewallSystemRule } from "@/services/firewallTelemetry";
 import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
 import { manualRuleOwnership } from "@/services/ruleOwnership";
 import { firewallProtocolSchema, firewallProtocolChoices, supportsFirewallPorts, parseFirewallPorts, firewallProtocolNotice, formatFirewallProtocol } from "@/services/firewallProtocols";
@@ -53,9 +52,12 @@ const { dropTarget, pointerStart, pointerMove, drop, cancel: cancelDrag } = useR
 });
 const columns = computed<Array<{ key: keyof FirewallSystemRule; title: string }>>(() => [
   { key: "order", title: "Order" },
-  ...(props.scope === "host" ? [{ key: "ingress" as const, title: "Ingress" }] : []),
+  ...(props.scope === "host" || props.scope === "input" ? [{ key: "ingress" as const, title: "Ingress" }] : []),
+  ...(props.scope === "input" ? [{ key: "source" as const, title: "Source" }] : []),
   { key: "destination", title: "Destination" },
-  { key: "protocol", title: "Protocol" }, { key: "ports", title: props.scope === "host" ? "Port" : "Ports" },
+  { key: "protocol", title: "Protocol" },
+  ...(props.scope === "input" ? [{ key: "sourcePorts" as const, title: "Source ports" }] : []),
+  { key: "ports", title: props.scope === "host" ? "Port" : props.scope === "input" ? "Destination ports" : "Ports" },
   ...(props.scope === "input" ? [] : [{ key: "egress" as const, title: "Egress" }]),
   { key: "action", title: "Action" },
 ]);
@@ -85,6 +87,9 @@ const displayed = computed(() => [
 const tableLabel = computed(() => props.scope === "host" ? "Host rules" : props.scope === "input" ? "Input rules" : "Interface rules");
 const sections = computed(() => {
   const systemRules = firewallSystemRules(selected.value, props.scope === "input" ? "input" : "forward");
+  if (props.scope === "input") systemRules.push(...dhcpRelaySystemRules(
+    selected.value, counters.available.value ? counters.data.value : null, props.owner,
+  ));
   const system: TableEntry[] = systemRules.map((rule, index) => ({ rule, index, system: true }));
   const configured: TableEntry[] = displayed.value.map((rule, index) => ({ rule, index, system: false }));
   const overrides: TableEntry[] = props.scope === "host"
@@ -100,8 +105,7 @@ const sections = computed(() => {
       ...configured.filter(item => item.rule.order === "Default"),
       ...system.filter(item => item.rule.order === "Default"),
     ] },
-  ].filter(section => section.rows.length || section.key === "user" ||
-    (section.key === "system" && props.scope === "input" && counters.relaySummaries.value.length));
+  ].filter(section => section.rows.length || section.key === "user");
 });
 function display(rule: Rule, order: string, path: string, ingress = "Any"): FirewallSystemRule {
   return {
@@ -210,6 +214,7 @@ function move(from: number, to: number): void {
 <template>
   <div>
     <v-btn
+      v-if="scope !== 'input' || selected?.firewall.input"
       class="mb-3"
       prepend-icon="mdi-plus"
       :disabled="blocked || editing !== null"
@@ -287,7 +292,7 @@ function move(from: number, to: number): void {
               <span
                 class="rule-value"
                 :aria-label="system && column.key === 'order' ? [rule.label, rule.match].filter(Boolean).join('; ') : undefined"
-                :class="{ 'rule-value--any': rule[column.key] === 'Any', 'rule-value--order': column.key === 'order', 'rule-value--ingress': column.key === 'ingress' }"
+                :class="{ 'rule-value--any': (rule[column.key] ?? 'Any') === 'Any', 'rule-value--order': column.key === 'order', 'rule-value--ingress': column.key === 'ingress' }"
               >
                 <v-chip
                   v-if="column.key === 'action'"
@@ -305,11 +310,11 @@ function move(from: number, to: number): void {
                   class="rule-chip"
                 >{{ rule.protocol }}</v-chip>
                 <v-chip
-                  v-else-if="column.key === 'ports' && rule.ports !== 'Any'"
+                  v-else-if="(column.key === 'ports' || column.key === 'sourcePorts') && rule[column.key] && rule[column.key] !== 'Any'"
                   variant="tonal"
                   size="small"
                   class="rule-chip"
-                >{{ rule.ports }}</v-chip>
+                >{{ rule[column.key] }}</v-chip>
                 <v-chip
                   v-else-if="(column.key === 'egress' || column.key === 'ingress') && rule[column.key] !== 'Any'"
                   color="primary"
@@ -318,7 +323,7 @@ function move(from: number, to: number): void {
                   size="small"
                   class="rule-chip"
                 >{{ rule[column.key] }}</v-chip>
-                <span v-else>{{ system && column.key === 'order' ? scope === 'host' && rule.order === 'Default' ? 'Global' : rule.name : rule[column.key] }}</span>
+                <span v-else>{{ system && column.key === 'order' ? scope === 'host' && rule.order === 'Default' ? 'Global' : rule.name : rule[column.key] ?? 'Any' }}</span>
               </span>
             </td>
             <td class="rule-actions">
@@ -406,12 +411,6 @@ function move(from: number, to: number): void {
             </td>
           </tr>
         </template>
-        <FirewallCounterRows
-          v-if="section.key === 'system' && scope === 'input'"
-          :rows="counters.relaySummaries.value"
-          :columns="columns.length + 4"
-          origin-column
-        />
         <tr v-if="section.key === 'user' && !section.rows.length && editing === null">
           <td :colspan="columns.length + 4">
             {{ scope === 'host' ? 'No explicit rules for this host.' : 'No explicit ingress rules for this interface.' }}

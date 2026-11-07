@@ -1669,7 +1669,12 @@ fields are rejected as incompatible rather than silently stripped.
   No manual DHCP input rule or `firewall.write` permission is required solely
   for relay enablement. Disabling relay withdraws its generated exceptions, not
   existing manual rules or established flows. Generated client/server counters
-  appear as read-only System rows linked to the managed interface; relay edits
+  appear as full read-only System rules only under their configured relay
+  interface, with source/destination IPv4 matches, ingress, UDP source/destination
+  ports, accept verdicts and exact logical counters. Server replies explicitly
+  show Any ingress: their server and relay-address matches are not ingress-bound.
+  Client destination and server source lists retain the complete matches without
+  repeating the backend's aggregated counters. Relay edits
   invalidate measurements until they match the applied configuration again.
   Deploy the supporting backend before relying on these permits. Routes, server
   scopes, return paths and external firewall permissions remain operator-owned;

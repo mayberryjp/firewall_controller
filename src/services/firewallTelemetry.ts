@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { dateVersionSchema } from "@/services/versions";
-import { stableJson } from "@/services/configuration";
+import { selectedRelayPrefix, stableJson } from "@/services/configuration";
 import type { Config, StateView } from "@/types/domain";
 import { ruleOwnershipShape, validateRuleOwnership, withoutRuleOwnership, type RuleOwnership } from "@/services/ruleOwnership";
-import { compareInterfaceNames, sortByInterface } from "@/services/interfaceNames";
+import { compareInterfaceNames, formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 
 const integer = z.number().int().safe().nonnegative();
 const decimal = z.string().regex(/^(0|[1-9]\d*)$/);
@@ -130,6 +130,25 @@ export const firewallCounterSummaries = {
 export interface FirewallSystemRule {
   order: string; name: string; label: string; ingress: string; destination: string; protocol: string;
   ports: string; egress: string; action: string; match: string; counterPath: string;
+  source?: string; sourcePorts?: string;
+}
+
+export function dhcpRelaySystemRules(config: Config | undefined, sample: FirewallCounters | null, owner: string): FirewallSystemRule[] {
+  const link = config?.interfaces.find(link => link.name === owner && link.dhcp_relay.enabled);
+  if (!link) return [];
+  const address = selectedRelayPrefix(link)?.split("/")[0];
+  if (!address) return [];
+  return dhcpRelayCounterSummaries(sample).filter(row => row.interfaceName === owner).map(row => {
+    const clients = row.id.endsWith("/clients");
+    return {
+      order: "Before rules", name: clients ? "DHCP clients" : "DHCP servers", label: row.label,
+      ingress: clients ? formatInterfaceName(owner) : "Any",
+      source: clients ? "Any IPv4" : link.dhcp_relay.servers.map(server => `${server}/32`).join(", "),
+      destination: clients ? `${address}/32, 255.255.255.255/32` : `${address}/32`,
+      protocol: "UDP", sourcePorts: clients ? "68" : "67", ports: "67", egress: "Any",
+      action: "accept", match: "", counterPath: row.id.slice("input:".length),
+    };
+  });
 }
 
 export function firewallSystemRules(config: Config | undefined, chain: "forward" | "input"): FirewallSystemRule[] {
@@ -148,7 +167,7 @@ export function firewallSystemRules(config: Config | undefined, chain: "forward"
       order: item.kind === "default" || item.kind === "generated-default" ? "Default" : "Before rules",
       name: names[item.kind],
       label: item.label,
-      ingress: "Any",
+      ingress: item.kind === "loopback" ? formatInterfaceName("lo") : "Any",
       destination: item.kind === "icmp" ? "Any IPv4" : "Any",
       protocol: item.kind === "icmp" ? "ICMP" : "Any",
       ports: "Any", egress: "Any",
