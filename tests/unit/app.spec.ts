@@ -86,8 +86,11 @@ describe("routed navigation sections", () => {
   });
   it("includes Download config in Diagnostics", () => {
     const diagnostics = navigationSections.find(section => section.name === "diagnostics-section");
-    expect(diagnostics?.pages.map(page => page.name)).toEqual(["system-overview", "real-time-traffic", "firewall-drops", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "interface-capabilities", "rps-configuration", "nic-offloads", "path-tests", "api-explorer", "download-config"]);
+    expect(diagnostics?.pages.map(page => page.name)).toEqual(["system-overview", "real-time-traffic", "firewall-drops", "possible-missing-rules", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "interface-capabilities", "rps-configuration", "nic-offloads", "path-tests", "api-explorer", "download-config"]);
     expect(diagnostics?.pages.find(page => page.name === "system-overview")).toMatchObject({ title: "SYSTEM OVERVIEW", path: "/diagnostics/system-overview" });
+    expect(diagnostics?.pages.find(page => page.name === "possible-missing-rules")).toMatchObject({ title: "POSSIBLE MISSING RULES", path: "/diagnostics/possible-missing-rules" });
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    expect(router.resolve("/diagnostics/possible-missing-rules").name).toBe("possible-missing-rules");
     expect(diagnostics?.pages.find(page => page.name === "download-config")).toMatchObject({ title: "Download config", path: "/diagnostics/download-config" });
   });
   it("opens BGP routes under Routing and redirects the old Diagnostics URL", async () => {
