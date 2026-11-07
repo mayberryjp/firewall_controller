@@ -11,6 +11,12 @@ export function supportsFirewallPorts(protocol: unknown): boolean {
 export function formatFirewallProtocol(protocol: string | undefined): string {
   return protocol === "icmpv6" ? "ICMPv6" : protocol?.toUpperCase() || "Any";
 }
+export function formatIpProtocol(value: number): string {
+  return ({ 1: "ICMP", 6: "TCP", 17: "UDP", 58: "ICMPv6" } as Record<number, string>)[value] ?? `IP ${value}`;
+}
+export function ipProtocolColor(value: number): string {
+  return ({ 1: "warning", 6: "info", 17: "primary", 58: "warning" } as Record<number, string>)[value] ?? "grey";
+}
 export function firewallProtocolFamily(protocol: unknown, ipv6Enabled: boolean): "ipv4" | "ipv6" | undefined {
   const value = firewallProtocolSchema.parse(protocol === undefined ? "" : protocol);
   if (value === "icmpv6" && !ipv6Enabled) throw new Error("ICMPv6 requires global IPv6 to be enabled.");

@@ -55,6 +55,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "SYSTEM OVERVIEW", name: "system-overview", path: "/diagnostics/system-overview", icon: "mdi-view-dashboard-outline" },
     { title: "REAL TIME TRAFFIC", name: "real-time-traffic", path: "/diagnostics/traffic", icon: "mdi-chart-line" },
     { title: "FIREWALL DROPS", name: "firewall-drops", path: "/diagnostics/firewall-drops", icon: "mdi-shield-alert-outline" },
+    { title: "POSSIBLE MISSING RULES", name: "possible-missing-rules", path: "/diagnostics/possible-missing-rules", icon: "mdi-shield-search" },
     { title: "Process health", name: "process-health", path: "/diagnostics/process-health", icon: "mdi-heart-pulse" },
     { title: "Interface drops", name: "interface-drops", path: "/diagnostics/interface-drops", icon: "mdi-lan-check" },
     { title: "QDISCS", name: "qdiscs", path: "/diagnostics/qdiscs", icon: "mdi-format-list-numbered" },

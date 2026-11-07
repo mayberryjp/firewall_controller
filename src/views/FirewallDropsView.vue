@@ -2,8 +2,9 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ZodError } from "zod";
 import { useControllerStore } from "@/stores/controller";
-import { ApiFailure } from "@/services/api";
 import { getFirewallDenyLog } from "@/services/netcontrol";
+import { firewallDenyReadError } from "@/services/possibleMissingRules";
+import { formatIpProtocol, ipProtocolColor } from "@/services/firewallProtocols";
 import { firewallDenyQuerySchema, type FirewallDenyPage, type FirewallDenyQuery } from "@/services/firewallTelemetry";
 import { useTimestamps } from "@/composables/useTimestamps";
 const { formatTimestamp, parseTimestamp, timeZone } = useTimestamps();
@@ -45,14 +46,7 @@ async function read(nextQuery: FirewallDenyQuery, older = false): Promise<void> 
     query.value = nextQuery; error.value = "";
   } catch (failure) {
     if (version !== generation || disposed) return;
-    const detail = failure instanceof Error ? failure.message : "Unable to load firewall drops.";
-    error.value = failure instanceof ApiFailure && failure.status === 403
-      ? `Firewall drop history requires firewall.logs.read permission. ${detail}`
-      : failure instanceof ApiFailure && [404, 405].includes(failure.status ?? 0)
-        ? `This backend does not support firewall drop history. ${detail}`
-        : failure instanceof ApiFailure && failure.status === 503
-          ? `Firewall drop history is unavailable; this can include simulator or native capture/storage limitations. ${detail}`
-          : detail;
+    error.value = firewallDenyReadError(failure);
   } finally { if (version === generation) loading.value = false; }
 }
 function applyFilters(): void {
@@ -68,12 +62,6 @@ function applyFilters(): void {
     filterError.value = failure instanceof ZodError ? failure.issues.map(issue => issue.message).join("; ")
       : failure instanceof Error ? failure.message : "Invalid drop-history filters.";
   }
-}
-function protocol(value: number): string {
-  return ({ 1: "ICMP", 6: "TCP", 17: "UDP", 58: "ICMPv6" } as Record<number, string>)[value] ?? `IP ${value}`;
-}
-function protocolColor(value: number): string {
-  return ({ 1: "warning", 6: "info", 17: "primary", 58: "warning" } as Record<number, string>)[value] ?? "grey";
 }
 function reset(): void {
   generation++; controller?.abort(); loading.value = false;
@@ -301,9 +289,9 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
                 <v-chip
                   size="small"
                   variant="tonal"
-                  :color="protocolColor(row.protocol)"
+                  :color="ipProtocolColor(row.protocol)"
                 >
-                  {{ protocol(row.protocol) }}
+                  {{ formatIpProtocol(row.protocol) }}
                 </v-chip>
               </td>
               <td data-label="Ingress">

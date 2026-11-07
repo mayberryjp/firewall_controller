@@ -50,6 +50,7 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "diagnostics-section": [
     { path: "/diagnostics/firewall-drops", name: "firewall-drops", component: () => import("@/views/FirewallDropsView.vue") },
+    { path: "/diagnostics/possible-missing-rules", name: "possible-missing-rules", component: () => import("@/views/PossibleMissingRulesView.vue") },
     { path: "/diagnostics/traffic", name: "real-time-traffic", component: () => import("@/views/RealTimeTrafficView.vue") },
     { path: "/diagnostics/system-overview", name: "system-overview", component: () => import("@/views/HomeView.vue") },
     { path: "/diagnostics/traffic-flow", name: "traffic-flow", redirect: { name: "home" } },

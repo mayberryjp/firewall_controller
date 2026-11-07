@@ -307,6 +307,18 @@ History is bounded (up to 4096 retained records), not a retention-time guarantee
 empty history does not prove that no drops occurred. Mocked UI checks do not
 validate actual kernel collection.
 
+Diagnostics > **POSSIBLE MISSING RULES**, immediately after **FIREWALL DROPS**,
+summarizes all pages of retained drops over the last hour, 4 hours, 8 hours, day or week.
+Each read uses a fixed last-week time boundary (168 hours); Refresh updates that boundary.
+Rows group by source IP, destination IP, destination port and IP protocol, ignoring
+ephemeral source ports. They show captured packet counts, summed IP packet lengths
+in bytes, and all observed ingress/egress interfaces, chains and drop reasons with
+colored chips. Last seen is the latest matching drop timestamp, displayed in the
+saved system timezone with seconds precision. A week of retention is not guaranteed.
+Rows are ordered by packet count. These are review candidates, not automatic
+allow-rule recommendations or complete traffic accounting. Capture loss and
+retention gaps remain visible; a failed paginated read does not publish partial totals.
+
 ### Process Restart, DNS Testing And Link Diagnostics
 
 Diagnostics > Process health provides an icon-only restart control on each process
@@ -1136,7 +1148,10 @@ The adapted host-list styling and bundled SVG artwork are from Sando revision
 are added to the firewall rule navigation.
 Destination-host references display host names;
 ingress-interface overrides are shown before source-host rules in the same table,
-in configuration order and labeled by ingress interface. They remain independently
+only for interfaces whose configured IPv4 or IPv6 subnets contain an address of
+the selected host, in configuration order and labeled by ingress interface.
+For example, a host at `10.2.10.2` shows overrides for `vlan10` when that interface
+has `10.2.10.1/24`, not overrides for unrelated interfaces. They remain independently
 editable on INTERFACE RULES, the first Firewall/NAT page. Its interface dropdown selects configured ingress policies and
 the table shows their ordered rules; empty policies show an explicit empty state.
 Firewall destined uses the same interface selector and compact rule table, with

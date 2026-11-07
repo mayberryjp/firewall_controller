@@ -362,10 +362,10 @@ describe("firewall rule totals", () => {
     await flushPromises();
     const table = wrapper.get("table"), overrides = table.get(".rule-section--interfaces");
     const entries = overrides.findAll(".interface-rule");
-    expect(entries.map(row => row.get(".rule-value--ingress").text())).toEqual(["WAN0", "LAB0"]);
-    expect(entries[1]!.attributes("data-action")).toBe(action);
-    expect(entries[1]!.get(".rule-origin").text()).toBe("Import: other_provider");
-    expect(entries[1]!.findAll(".counter-value")[0]!.text()).toBe("42");
+    expect(entries.map(row => row.get(".rule-value--ingress").text())).toEqual(["LAB0"]);
+    expect(entries[0]!.attributes("data-action")).toBe(action);
+    expect(entries[0]!.get(".rule-origin").text()).toBe("Import: other_provider");
+    expect(entries[0]!.findAll(".counter-value")[0]!.text()).toBe("42");
     expect(overrides.get("th").attributes("title")).toContain("First matching");
     expect(overrides.get("th").attributes("title")).toContain("catch-all");
     expect(overrides.findAll("button, [data-rule-index]")).toHaveLength(0);
@@ -375,12 +375,69 @@ describe("firewall rule totals", () => {
     expect(table.get(".rule-section--user").text()).not.toContain("63001");
     expect(store.draft).toBeNull();
     await wrapper.get('[aria-label="Edit rule 1"]').trigger("click");
-    expect(wrapper.findAll(".interface-rule")).toHaveLength(2);
+    expect(wrapper.findAll(".interface-rule")).toHaveLength(1);
     expect(wrapper.findAll(".rule-editor")).toHaveLength(1);
     await wrapper.get("form").trigger("submit");
     expect(store.draft?.firewall.policies?.interfaces).toEqual(settings.firewall.policies!.interfaces);
     expect(store.draft?.firewall.policies?.hosts.find(host => host.id === "server")?.rules)
       .toEqual(settings.firewall.policies!.hosts.find(host => host.id === "server")!.rules);
+  });
+  it.each([
+    { address: "10.2.10.2", networks: ["10.2.10.1/24"] },
+    { address: "2001:db8:10::2", networks: ["10.2.10.1/24", "2001:db8:10::1/64"] },
+  ])("shows only subnet-matching overrides for $address", async ({ address, networks }) => {
+    const store = useControllerStore(), settings = hostPolicyConfig();
+    settings.firewall.policies!.hosts.find(host => host.id === "desk")!.addresses = [address];
+    settings.interfaces.push(
+      { ...settings.interfaces[0]!, name: "vlan10", addresses: networks },
+      { ...settings.interfaces[0]!, name: "vlan20", addresses: ["10.2.20.1/24", "2001:db8:20::1/64"] },
+      { ...settings.interfaces[0]!, name: "empty0", addresses: [] },
+    );
+    settings.firewall.policies!.interfaces = [
+      { interface: "vlan20", rules: [{ action: "drop" }] },
+      { interface: "vlan10", rules: [{ action: "accept" }, { protocol: "udp", action: "drop" }] },
+      { interface: "empty0", rules: [{ action: "drop" }] },
+      { interface: "missing0", rules: [{ action: "drop" }] },
+    ];
+    store.state.data = { ...state(), desired: settings };
+    wrapper = mount(FirewallRuleTable, { props: { scope: "host", owner: "desk" }, global: { stubs } });
+    await flushPromises();
+    const entries = wrapper.findAll(".interface-rule");
+    expect(entries.map(row => row.get(".rule-value--ingress").text())).toEqual(["VLAN10", "VLAN10"]);
+    expect(entries.map(row => row.get(".rule-value--order").text())).toEqual(["1", "2"]);
+    expect(entries.map(row => row.attributes("data-action"))).toEqual(["accept", "drop"]);
+    expect(store.draft).toBeNull();
+    await wrapper.setProps({ scope: "interface", owner: "vlan20" });
+    expect(wrapper.findAll(".host-rule")).toHaveLength(1);
+    expect(wrapper.get(".host-rule").attributes("data-action")).toBe("drop");
+  });
+  it("updates matching overrides for host selection, pending configurations and drafts without staging display changes", async () => {
+    const store = useControllerStore(), settings = hostPolicyConfig();
+    settings.interfaces.push({ ...settings.interfaces[0]!, name: "server0", addresses: ["198.51.100.1/24"] });
+    settings.firewall.policies!.interfaces.push({ interface: "server0", rules: [{ action: "accept" }] });
+    store.state.data = { ...state(), desired: settings };
+    wrapper = mount(FirewallRuleTable, { props: { scope: "host", owner: "desk" }, global: { stubs } });
+    await flushPromises();
+    const ingress = () => wrapper.findAll(".interface-rule").map(row => row.get(".rule-value--ingress").text());
+    expect(ingress()).toEqual(["LAB0"]);
+    await wrapper.setProps({ owner: "server" });
+    expect(ingress()).toEqual(["SERVER0"]);
+    const pending = transaction();
+    pending.candidate = cloneConfig(settings);
+    pending.candidate.firewall.policies!.hosts.find(host => host.id === "server")!.addresses = ["192.0.2.25", "198.51.100.25"];
+    store.state.data = { ...store.state.data!, active_transaction: pending };
+    await flushPromises();
+    expect(ingress()).toEqual(["LAB0", "SERVER0"]);
+    expect(store.draft).toBeNull();
+    store.draft = cloneConfig(pending.candidate);
+    store.draft.interfaces.find(link => link.name === "server0")!.addresses = ["203.0.113.1/24"];
+    await flushPromises();
+    expect(ingress()).toEqual(["LAB0"]);
+    store.draft.firewall.policies!.hosts.find(host => host.id === "server")!.addresses = ["10.2.10.2"];
+    await flushPromises();
+    expect(ingress()).toEqual([]);
+    expect(wrapper.find(".rule-section--interfaces").exists()).toBe(false);
+    expect(wrapper.find(".host-rule--default").exists()).toBe(true);
   });
   it("keeps actual system rules visible with unknown totals when counters fail or firewall edits are unapplied", async () => {
     mountRules("input", "unused0"); await flushPromises();

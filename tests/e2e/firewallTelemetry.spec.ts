@@ -12,6 +12,59 @@ async function connect(page: Page) {
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
 }
 
+test("possible missing rules summarizes all drop pages across time periods and fits compact screens", async ({ page }) => {
+  const backend = await mockBackend(page);
+  const until = Date.parse("2026-11-08T12:34:56.789Z");
+  const queries: URLSearchParams[] = [];
+  await page.route("**/firewall/deny-log*", route => {
+    const params = new URL(route.request().url()).searchParams; queries.push(params);
+    const result = firewallDenyPage();
+    const older = params.has("before_id");
+    result.records = [0, 2, 6, 12, 48, 169].slice(older ? 2 : 0, older ? 6 : 2).map((hours, index) => ({
+      ...result.records[0]!, id: String(10 - index - (older ? 2 : 0)),
+      timestamp_ms: until - hours * 3600000, source_port: 50000 + index,
+      destination_port: 443, ingress: "lab0",
+    }));
+    result.next_before_id = older ? null : "9";
+    return route.fulfill({ json: result });
+  });
+  await connect(page);
+  await page.clock.setFixedTime(until);
+  await page.goto("/diagnostics/possible-missing-rules");
+  const view = page.getByRole("region", { name: "Possible missing rules", exact: true });
+  const navigation = page.getByRole("navigation", { name: "Diagnostics pages", exact: true });
+  await expect(page.locator(".section-layout")).not.toHaveClass(/section-layout--collapsed/);
+  await expect(navigation.getByRole("button", { name: "Expand Diagnostics navigation", exact: true })).toHaveCount(0);
+  await expect(navigation.getByRole("tab", { name: "POSSIBLE MISSING RULES", exact: true })).toHaveAttribute("aria-selected", "true");
+  const tabs = await navigation.getByRole("tab").allTextContents();
+  expect(tabs[tabs.findIndex(title => title.includes("FIREWALL DROPS")) + 1]).toContain("POSSIBLE MISSING RULES");
+  const table = view.locator(".missing-rules-table");
+  await expect(table.locator(".missing-rule-row")).toHaveCount(1);
+  await expect(table.locator('[data-label="Packets"]')).toHaveText("1");
+  await expect(table.locator('[data-label="Bytes"]')).toHaveText("60");
+  await expect(table.locator('[data-label="Ingress"]')).toHaveText("LAB0");
+  await expect(table.locator('[data-label="Egress"]')).toHaveText("WAN0");
+  await expect(table.locator('[data-label="Protocol"] .v-chip')).toHaveClass(/text-info/);
+  await expect(table.locator('[data-label="Destination port"] .v-chip')).toHaveClass(/text-primary/);
+  await expect(table.locator('[data-label="Ingress"] .v-chip')).toHaveClass(/text-primary/);
+  await expect(table.locator('[data-label="Chain"] .v-chip')).toHaveClass(/text-secondary/);
+  await expect(table.locator('[data-label="Reason"] .v-chip')).toHaveClass(/text-error/);
+  await expect(table.locator('[data-label="Last seen (UTC)"] time')).toHaveText("2026-11-08 12:34:56");
+  await expect(table.locator("time")).toHaveAttribute("datetime", "2026-11-08T12:34:56.789Z");
+  await expect(view).toContainText("Period (UTC): 2026-11-08 11:34:56 to 2026-11-08 12:34:56.");
+  for (const [period, count] of [["Last 4 hours", "2"], ["Last 8 hours", "3"], ["Last day", "4"], ["Last week", "5"]]) {
+    await view.getByRole("combobox", { name: "Time period", exact: true }).press("ArrowDown");
+    await page.getByRole("option", { name: period, exact: true }).click();
+    await expect(table.locator('[data-label="Packets"]')).toHaveText(count!);
+    await expect(table.locator('[data-label="Bytes"]')).toHaveText(String(Number(count) * 60));
+  }
+  expect(queries).toHaveLength(2);
+  expect(queries[1]!.get("before_id")).toBe("9");
+  expect(queries.every(params => params.get("since_ms") === String(until - 7 * 86400000) && params.get("until_ms") === String(until))).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(backend.writes).toEqual([]);
+});
+
 test("DHCP relay rules show full matches only on their configured interfaces", async ({ page }) => {
   const settings = hostPolicyConfig();
   const link = settings.interfaces[0]!;

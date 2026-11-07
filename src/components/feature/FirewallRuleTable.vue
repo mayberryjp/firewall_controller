@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
+import ipaddr from "ipaddr.js";
 import FieldInput from "@/components/base/FieldInput.vue";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import { interfaceChoices } from "@/services/resourceCollections";
@@ -34,6 +35,15 @@ const group = computed(() => props.scope === "host"
     ? selected.value?.firewall.policies?.interfaces.find(ingress => ingress.interface === props.owner)
     : selected.value?.firewall.input?.interfaces.find(ingress => ingress.interface === props.owner));
 const rules = computed(() => group.value?.rules ?? []);
+const hostInterfaces = computed(() => {
+  const host = group.value;
+  if (props.scope !== "host" || !host || !("addresses" in host)) return new Set<string>();
+  const addresses = host.addresses.map(address => ipaddr.parse(address));
+  return new Set((selected.value?.interfaces ?? []).filter(link => link.addresses.some(value => {
+    const network = ipaddr.parseCIDR(value);
+    return addresses.some(address => address.kind() === network[0].kind() && address.match(network));
+  })).map(link => link.name));
+});
 const defaultAction = computed(() => {
   const value = group.value;
   return value && "policy" in value ? value.policy : undefined;
@@ -93,10 +103,10 @@ const sections = computed(() => {
   const system: TableEntry[] = systemRules.map((rule, index) => ({ rule, index, system: true }));
   const configured: TableEntry[] = displayed.value.map((rule, index) => ({ rule, index, system: false }));
   const overrides: TableEntry[] = props.scope === "host"
-    ? (selected.value?.firewall.policies?.interfaces ?? []).flatMap((group, groupIndex) => group.rules.map((rule, index) => ({
+    ? (selected.value?.firewall.policies?.interfaces ?? []).flatMap((group, groupIndex) => hostInterfaces.value.has(group.interface) ? group.rules.map((rule, index) => ({
       rule: display(rule, String(index + 1), `/firewall/policies/interfaces/${groupIndex}/rules/${index}`, group.interface),
       index, system: false, override: rule,
-    }))) : [];
+    })) : []) : [];
   return [
     { key: "system", label: "System Rules", title: "IPv4 ICMP, when enabled, then established/related connections. Existing connections may survive a new block until connection state expires or is explicitly deleted.", rows: system.filter(item => item.rule.order !== "Default") },
     { key: "interfaces", label: "Interface Overrides", title: "First matching verdict wins on the matching ingress interface. An interface allow overrides a host deny; an interface deny overrides a host allow. A catch-all prevents host rules from being reached on that interface.", rows: overrides },
