@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { configSchema, destinationRewriteSchema, type Config } from "@/types/domain";
 import { cloneConfig, differences, importConfig, normalize, validateConfig } from "@/services/configuration";
 import { firewallProtocolSchema, parseFirewallPorts, formatFirewallProtocol } from "@/services/firewallProtocols";
+import { utf8Size } from "@/services/json";
 import { config } from "../fixtures";
 
 type Scope = "host" | "interface" | "input" | "legacy";
@@ -75,25 +76,76 @@ describe("firewall protocol limits", () => {
     after.firewall.rules.reverse();
     expect(differences(before, after).length).toBeGreaterThan(0);
   });
-  it("accepts exactly 4096 expanded legacy entries and rejects 4097", () => {
+  it("accepts exactly 20480 expanded legacy entries and rejects 20481", () => {
     const candidate = configured("legacy", "tcp");
-    candidate.firewall.rules = Array.from({ length: 128 }, () => ({
+    candidate.firewall.rules = Array.from({ length: 640 }, () => ({
       protocol: "tcp", action: "accept", destination_ports: Array.from({ length: 32 }, (_, index) => index + 1),
     }));
     expect(validateConfig(candidate)).toEqual([]);
     candidate.firewall.rules.push({ action: "drop" });
-    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.rules", message: "Legacy rules expand beyond 4096 entries" }));
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.rules", message: "Legacy rules expand beyond 20480 entries" }));
   });
   it("counts only protocol-compatible dual-stack address pairs", () => {
     const candidate = configured("host", "icmp");
-    candidate.firewall.policies!.hosts = Array.from({ length: 16 }, (_, index) => ({
+    candidate.firewall.policies!.hosts = Array.from({ length: 80 }, (_, index) => ({
       id: `h${index}`, name: `Host ${index}`, policy: "drop",
       addresses: [`192.0.2.${index + 1}`, `198.51.100.${index + 1}`, `2001:db8::${index + 1}`, `2001:db8:1::${index + 1}`],
       rules: Array.from({ length: 32 }, () => ({ destination_host: "h0", protocol: "icmp", action: "drop" })),
     }));
     expect(validateConfig(candidate)).toEqual([]);
     for (const host of candidate.firewall.policies!.hosts) for (const rule of host.rules) delete rule.protocol;
-    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.policies", message: "Host policies expand beyond 4096 entries" }));
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.policies", message: "Host policies expand beyond 20480 entries" }));
+  });
+  it.each(["host", "interface", "input"] as const)("accepts 320 %s rules and rejects 321", scope => {
+    const candidate = configured(scope, "tcp"), entries = rules(candidate, scope);
+    entries.splice(0, entries.length, ...Array.from({ length: 320 }, () => ({ action: "accept" as const })));
+    expect(validateConfig(candidate)).toEqual([]);
+    entries.push({ action: "accept" });
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({
+      message: scope === "input" ? "At most 320 ordered rules per interface" : "At most 320 ordered rules per host/interface",
+    }));
+  });
+  it.each(["host", "interface"] as const)("accepts exactly 20480 expanded %s entries and rejects 20481", scope => {
+    const candidate = configured(scope, "tcp");
+    const entries = () => Array.from({ length: 320 }, () => ({
+      protocol: "tcp" as const, action: "accept" as const, destination_ports: Array.from({ length: 32 }, (_, index) => index + 1),
+    }));
+    candidate.interfaces.push({ ...candidate.interfaces[0]!, name: "lan1", addresses: [] });
+    candidate.firewall.policies = {
+      hosts: scope === "host" ? ["192.0.2.20", "192.0.2.21"].map((address, index) => ({
+        id: `h${index}`, name: `Host ${index}`, addresses: [address], policy: "drop", rules: entries(),
+      })) : [],
+      interfaces: scope === "interface" ? ["lab0", "lan1"].map(name => ({ interface: name, rules: entries() })) : [],
+    };
+    const first = scope === "host" ? candidate.firewall.policies.hosts[0]!.rules[0]!
+      : candidate.firewall.policies.interfaces[0]!.rules[0]!;
+    first.destination_ports!.splice(0, scope === "host" ? 3 : 1);
+    expect(validateConfig(candidate)).toEqual([]);
+    first.destination_ports!.push(1);
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({
+      path: "firewall.policies", message: "Host policies expand beyond 20480 entries",
+    }));
+  });
+  it.each(["host", "interface", "input"] as const)("accepts exactly 327680 UTF-8 metadata bytes for %s and rejects one byte more", scope => {
+    const candidate = configured(scope, "tcp"), entries = rules(candidate, scope);
+    entries.splice(0, entries.length, ...Array.from({ length: 320 }, () => ({
+      action: "accept" as const, metadata: { display_name: "", description: "\u00e9" },
+    })));
+    const serialized = () => {
+      const firewall = normalize(candidate).firewall;
+      return JSON.stringify(scope === "input" ? { hosts: [], interfaces: firewall.input!.interfaces } : firewall.policies);
+    };
+    const remaining = 327680 - utf8Size(serialized());
+    entries.forEach((entry, index) => {
+      entry.metadata!.description += "x".repeat(Math.floor(remaining / entries.length) + (index < remaining % entries.length ? 1 : 0));
+    });
+    expect(utf8Size(serialized())).toBe(327680);
+    expect(validateConfig(candidate)).toEqual([]);
+    entries[0]!.metadata!.description += "x";
+    expect(utf8Size(serialized())).toBe(327681);
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({
+      message: scope === "input" ? "Input policy metadata exceeds 327680 bytes" : "Host policy metadata exceeds 327680 bytes",
+    }));
   });
   it.each([null, "443-445", "1.5", "0", "65536", "443,443", Array.from({ length: 33 }, (_, index) => index + 1)])("rejects invalid port lists %j", value => {
     expect(() => parseFirewallPorts(value)).toThrow();

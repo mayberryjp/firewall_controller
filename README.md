@@ -1168,7 +1168,12 @@ protocol family; dual-stack hosts expand only compatible pairs.
 Destination ports are TCP/UDP-only: at most 32 unique individual ports in
 1..65535, without ranges. Switching to Any/ICMP/ICMPv6 clears and disables the
 port control. Legacy rules preserve the same protocol/port fields and order,
-with a maximum of 4096 port-expanded entries. Editors show inline guidance that
+with a maximum of 20,480 port-expanded entries. Host/interface and input policies
+allow up to 320 ordered rules per host/interface, 20,480 expanded entries and
+320 KiB (327,680 UTF-8 bytes) of normalized serialized policy metadata per policy
+section. Host/address/interface counts and the 32-port limit are unchanged.
+The backend must support these raised limits too; frontend validation does not
+override backend enforcement. Editors show inline guidance that
 the global IPv4 ICMP exception precedes ICMP drops and that blocking ICMPv6 can
 break neighbor discovery and IPv6 error reporting. NAT remains TCP/UDP-only.
 

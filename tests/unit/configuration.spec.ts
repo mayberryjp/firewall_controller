@@ -325,7 +325,7 @@ describe("inclusive validation limits and dependencies", () => {
     for (const suffix of ["destination", "destination_ports", "protocol", "destination_ports.0", "destination_ports.2"]) {
       expect(issues.some(issue => issue.path === `firewall.input.interfaces.0.rules.0.${suffix}`)).toBe(true);
     }
-    candidate.firewall.input.interfaces[0]!.rules = Array.from({ length: 65 }, () => ({ action: "accept" as const }));
+    candidate.firewall.input.interfaces[0]!.rules = Array.from({ length: 321 }, () => ({ action: "accept" as const }));
     expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.input.interfaces.0.rules" }));
   });
   it("allows IPv4 DHCP NAT egress without inventing a static WAN address", () => {
@@ -339,9 +339,9 @@ describe("inclusive validation limits and dependencies", () => {
     const candidate = config();
     candidate.interfaces.push({ ...candidate.interfaces[0]!, name: "lan1", addresses: [] });
     candidate.firewall.input = { policy: "drop", interfaces: ["lab0", "lan1"].map(name => ({
-      interface: name, rules: Array.from({ length: 64 }, () => ({ protocol: "tcp" as const, destination_ports: Array.from({ length: 32 }, (_, index) => index + 1), action: "accept" as const })),
+      interface: name, rules: Array.from({ length: 320 }, () => ({ protocol: "tcp" as const, destination_ports: Array.from({ length: 32 }, (_, index) => index + 1), action: "accept" as const })),
     })) };
-    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.input", message: "Input policies expand beyond 4096 entries" }));
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ path: "firewall.input", message: "Input policies expand beyond 20480 entries" }));
     candidate.firewall.input.interfaces[0]!.rules[0]!.destination_ports!.pop();
     expect(validateConfig(candidate)).toEqual([]);
   });

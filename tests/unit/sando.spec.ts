@@ -319,21 +319,21 @@ describe("host policy validation", () => {
   });
   it("enforces exact host, rule, port and metadata limits", () => {
     const value = candidate(), host = value.firewall.policies!.hosts[0]!;
-    host.rules = Array.from({ length: 64 }, () => ({ protocol: "tcp", destination_ports: Array.from({ length: 32 }, (_, i) => i + 1), action: "accept" }));
-    // Two source addresses x 64 rules x 32 ports + two defaults + stateful return.
-    expect(validateConfig(value)).toContainEqual(expect.objectContaining({ message: "Host policies expand beyond 4096 entries" }));
-    host.rules = Array.from({ length: 65 }, () => ({ action: "accept" }));
-    expect(validateConfig(value).some(issue => issue.message === "At most 64 ordered rules per host/interface")).toBe(true);
+    host.rules = Array.from({ length: 320 }, () => ({ protocol: "tcp", destination_ports: Array.from({ length: 32 }, (_, i) => i + 1), action: "accept" }));
+    // Two source addresses x 320 rules x 32 ports + two defaults + stateful return.
+    expect(validateConfig(value)).toContainEqual(expect.objectContaining({ message: "Host policies expand beyond 20480 entries" }));
+    host.rules = Array.from({ length: 321 }, () => ({ action: "accept" }));
+    expect(validateConfig(value).some(issue => issue.message === "At most 320 ordered rules per host/interface")).toBe(true);
     host.rules = [{ protocol: "tcp", destination_ports: Array.from({ length: 33 }, (_, i) => i + 1), action: "accept" }];
     expect(validateConfig(value).some(issue => issue.message.includes("at most 32 unique"))).toBe(true);
     host.rules = [];
     value.firewall.policies!.hosts = Array.from({ length: 129 }, (_, index) => ({
       id: `host_${index}`, name: `Host ${index}`, addresses: [`10.0.0.${index + 1}`], policy: "drop", rules: [],
-      metadata: { display_name: "", description: "x".repeat(1000) },
+      metadata: { display_name: "", description: "\u00e9".repeat(1500) },
     }));
     const errors = validateConfig(value);
     expect(errors.some(issue => issue.message === "At most 128 hosts")).toBe(true);
-    expect(errors.some(issue => issue.message === "Host policy metadata exceeds 65536 bytes")).toBe(true);
+    expect(errors.some(issue => issue.message === "Host policy metadata exceeds 327680 bytes")).toBe(true);
   });
   it("accepts the documented host, name, address, ingress, rule and port boundaries", () => {
     const value = emptyConfig();
@@ -346,7 +346,7 @@ describe("host policy validation", () => {
       interfaces: Array.from({ length: 32 }, (_, index) => ({ interface: `lan${index}`, rules: [] })),
     };
     const hosts = value.firewall.policies.hosts;
-    hosts[1]!.rules = Array.from({ length: 64 }, () => ({
+    hosts[1]!.rules = Array.from({ length: 320 }, () => ({
       protocol: "tcp", destination: "198.51.100.40/32", destination_ports: Array.from({ length: 32 }, (_, i) => i + 1), action: "accept",
     }));
     const parents = Array.from({ length: 32 }, (_, index) => ({ name: `lan${index}`, kind: "ethernet", available: true }));

@@ -702,7 +702,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       throw new Error("Source and destination must match the selected protocol's address family");
     }
   }));
-  if (legacyExpanded > 4096) issue("firewall.rules", "Legacy rules expand beyond 4096 entries", "/firewall");
+  if (legacyExpanded > 20480) issue("firewall.rules", "Legacy rules expand beyond 20480 entries", "/firewall");
   config.firewall.nat.masquerade.forEach((rule, index) => check(`firewall.nat.masquerade.${index}`, "/nat", () => {
     if (rule.source && prefix(rule.source, true).family !== rule.family) throw new Error("Source must match selected family");
     const link = interfaces.get(rule.out_interface);
@@ -743,7 +743,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         issue(`${path}.interface`, "Select a unique managed ingress interface", page);
       }
       seen.add(ingress.interface);
-      if (ingress.rules.length > 64) issue(`${path}.rules`, "At most 64 ordered rules per interface", page);
+      if (ingress.rules.length > 320) issue(`${path}.rules`, "At most 320 ordered rules per interface", page);
       ingress.rules.forEach((rule, ruleIndex) => {
         const rulePath = `${path}.rules.${ruleIndex}`, ports = rule.destination_ports ?? [];
         expanded += Math.max(1, ports.length);
@@ -758,9 +758,9 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         ports.forEach((port, portIndex) => bound(port, 1, 65535, `${rulePath}.destination_ports.${portIndex}`, page));
       });
     });
-    if (expanded > 4096) issue("firewall.input", "Input policies expand beyond 4096 entries", page);
-    if (utf8Size(JSON.stringify({ hosts: [], interfaces: normalize(config).firewall.input!.interfaces })) > 65536) {
-      issue("firewall.input", "Input policy metadata exceeds 65536 bytes", page);
+    if (expanded > 20480) issue("firewall.input", "Input policies expand beyond 20480 entries", page);
+    if (utf8Size(JSON.stringify({ hosts: [], interfaces: normalize(config).firewall.input!.interfaces })) > 327680) {
+      issue("firewall.input", "Input policy metadata exceeds 327680 bytes", page);
     }
   }
   if (config.vnstat.collector !== null && config.vnstat.collector !== undefined) {
@@ -824,7 +824,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       expanded += host.addresses.length;
     });
     const validateRules = (rules: NonNullable<Config["firewall"]["policies"]>["hosts"][number]["rules"], path: string, sources: string[]) => {
-      if (rules.length > 64) issue(path, "At most 64 ordered rules per host/interface", page);
+      if (rules.length > 320) issue(path, "At most 320 ordered rules per host/interface", page);
       rules.forEach((rule, index) => check(`${path}.${index}`, page, () => {
         const protocolFamily = firewallProtocolFamily(rule.protocol, config.ipv6_enabled === true);
         if (rule.destination && rule.destination_host) throw new Error("Choose a destination host or network, not both");
@@ -860,8 +860,8 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       ingressNames.add(ingress.interface);
       validateRules(ingress.rules, `${path}.rules`, [""]);
     });
-    if (expanded > 4096) issue("firewall.policies", "Host policies expand beyond 4096 entries", page);
-    if (utf8Size(JSON.stringify(normalize(config).firewall.policies)) > 65536) issue("firewall.policies", "Host policy metadata exceeds 65536 bytes", page);
+    if (expanded > 20480) issue("firewall.policies", "Host policies expand beyond 20480 entries", page);
+    if (utf8Size(JSON.stringify(normalize(config).firewall.policies)) > 327680) issue("firewall.policies", "Host policy metadata exceeds 327680 bytes", page);
   }
   return issues;
 }
