@@ -291,6 +291,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
               v-for="column in columns"
               :key="column.key"
               scope="col"
+              :class="{ 'drop-bytes-heading': column.key === 'packet_length' }"
               :aria-sort="sortColumn === column.key ? (sortDescending ? 'descending' : 'ascending') : 'none'"
             >
               <button
@@ -461,11 +462,12 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
 .drop-table :deep(td) { vertical-align: middle; font-size: 13px; }
 .drop-row:hover { background: var(--bg-hover); }
 .drop-time { white-space: nowrap; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.drop-endpoint { min-width: 120px; max-width: 280px; }
+.drop-endpoint { width: 30%; min-width: 120px; }
 .drop-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.drop-endpoint-value { display: flex; align-items: center; gap: 8px; min-width: 0; width: 264px; max-width: 100%; }
+.drop-endpoint-value { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; }
 .drop-endpoint-value .mono { flex: 1 1 0; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .drop-endpoint-value > :not(.mono) { flex-shrink: 0; }
+.drop-table :deep(.drop-bytes-heading), .drop-number { width: 1%; }
 .drop-number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .drop-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
 @media (max-width: 600px) {
@@ -480,7 +482,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
   .drop-table :deep(.v-table__wrapper > table > tbody > tr > td) { min-width: 0; max-width: none; height: auto; padding: 0; border: 0; overflow-wrap: anywhere; }
   .drop-table :deep(td[data-label])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--text-muted); }
   .drop-time, .drop-endpoint { grid-column: 1 / -1; }
-  .drop-endpoint-value { width: 100%; }
+  .drop-endpoint, .drop-number { width: auto; }
   .drop-number { text-align: left; }
   .drop-table :deep(td[colspan]) { grid-column: 1 / -1; }
 }

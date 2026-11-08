@@ -445,6 +445,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
               v-for="column in columns"
               :key="column.key"
               scope="col"
+              :class="{ 'connection-compact-column': column.key === 'protocol' || column.key.startsWith('sent_') || column.key.startsWith('received_') }"
               :aria-sort="sortColumn === column.key ? (sortDescending ? 'descending' : 'ascending') : 'none'"
               :title="column.key.startsWith('sent_') ? 'Source to destination' : column.key.startsWith('received_') ? 'Destination to source' : undefined"
             >
@@ -645,9 +646,10 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
 .connection-sort:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
 .connections-table :deep(td) { vertical-align: middle; }
 .connection-row:hover { background: var(--bg-hover); }
-.connection-protocol-cell { min-width: 88px; }
+.connections-table :deep(.connection-compact-column), .connection-protocol-cell, .connection-number { width: 1%; }
+.connection-protocol-cell { white-space: nowrap; }
 .connection-family { display: block; color: var(--text-muted); font-size: 11px; line-height: 16px; padding-left: 8px; }
-.endpoint { min-width: 120px; max-width: 280px; }
+.endpoint { width: 30%; min-width: 120px; }
 .endpoint-value { display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%; max-width: 100%; contain: inline-size; }
 .endpoint-value .mono { flex: 1 1 0; font-size: 13px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .endpoint-value > :not(.mono) { flex-shrink: 0; }
@@ -667,6 +669,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
   .connections-table :deep(thead) { display: block; overflow-x: auto; }
   .connections-table :deep(thead tr) { display: flex; }
   .connections-table :deep(th) { flex-shrink: 0; }
+  .connections-table :deep(.connection-compact-column) { width: auto; }
   .connection-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 12px; padding: 8px; position: relative; border-bottom: 1px solid var(--border); }
   .connections-table :deep(.v-table__wrapper > table > tbody > .connection-row > td) { height: auto; min-width: 0; max-width: none; padding: 0; border: 0; }
   .connection-protocol-cell { grid-column: 1; grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
@@ -675,6 +678,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
   .state-chips { flex-wrap: wrap; justify-content: end; }
   .connection-row > .endpoint { grid-column: 1 / -1; display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: start; gap: 8px; }
   .connection-row > .connection-number { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; }
+  .connection-row > .endpoint, .connection-row > .connection-number, .connection-row > .connection-protocol-cell { width: auto; }
   .connection-timeout { grid-column: 1 / -1; text-align: right; }
   .endpoint::before, .connection-number::before, .connection-timeout::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; }
   .connection-timeout::before { margin-right: 8px; }

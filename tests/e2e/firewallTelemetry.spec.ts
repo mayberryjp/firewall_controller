@@ -350,6 +350,43 @@ test("DHCP relay rules show full matches only on their configured interfaces", a
   expect(backend.writes).toEqual([]);
 });
 
+test("drop history gives endpoint labels the available desktop space", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium", "Desktop table layout");
+  await page.setViewportSize({ width: 1830, height: 900 });
+  const config = hostPolicyConfig();
+  config.firewall.policies!.hosts[0]!.metadata = { display_name: "Modan-registry container", description: "" };
+  config.firewall.policies!.hosts[1]!.metadata = { display_name: "Mirena container", description: "" };
+  await mockBackend(page, { initialConfig: config });
+  const drops = firewallDenyPage();
+  drops.records[0]!.source_port = 65535;
+  drops.records[0]!.destination_port = 65535;
+  await page.route("**/firewall/deny-log*", route => route.fulfill({ json: drops }));
+  await connect(page); await page.goto("/diagnostics/firewall-drops");
+  const row = page.locator(".drop-row").first();
+  await expect(row).toBeVisible();
+  await expect(row.locator(".drop-endpoint .mono")).toHaveCount(2);
+  const measurements = await row.locator(".drop-endpoint").evaluateAll(cells => cells.map(cell => {
+    const text = cell.querySelector<HTMLElement>(".mono")!;
+    const port = cell.querySelector<HTMLElement>(".v-chip")!;
+    const cellBounds = cell.getBoundingClientRect(), portBounds = port.getBoundingClientRect();
+    return {
+      textWidth: text.clientWidth,
+      truncated: text.scrollWidth > text.clientWidth,
+      portWidth: portBounds.width,
+      portContained: portBounds.right <= cellBounds.right,
+    };
+  }));
+  for (const measurement of measurements) {
+    expect(measurement.textWidth).toBeGreaterThan(300);
+    expect(measurement.truncated).toBe(false);
+    expect(measurement.portWidth).toBeLessThan(60);
+    expect(measurement.portContained).toBe(true);
+  }
+  const bytesWidth = await row.locator('[data-label="Bytes"]').evaluate(cell => cell.getBoundingClientRect().width);
+  expect(bytesWidth).toBeLessThan(85);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("drop history supports UTC filters, exact cursors and compact screens without details or writes", async ({ page }, testInfo) => {
   const backend = await mockBackend(page);
   const queries: URLSearchParams[] = [];
