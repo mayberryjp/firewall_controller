@@ -3,12 +3,13 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
 import { isInitialLoad } from "@/services/datasets";
-import { conntrackControls, conntrackLabel, conntrackUnit, conntrackValueError, conntrackSafetyNotice, type KernelTunable } from "@/services/conntrack";
+import { conntrackControls, conntrackLabel, conntrackUnit, conntrackValueError, type KernelTunable } from "@/services/conntrack";
 
 const store = useControllerStore();
 const selected = computed(() => store.draft ?? store.state.data?.active_transaction?.candidate ?? store.state.data?.desired);
 const controls = computed(() => conntrackControls(store.supportedKernelCatalog));
 const values = ref<Record<string, string>>({}), initial = ref(""), snapshot = ref("");
+const initialValues = ref<Record<string, string>>({});
 const error = ref(""), notice = ref("");
 const dirty = computed(() => stableJson(values.value) !== initial.value);
 const changed = computed(() => stableJson(selected.value?.kernel) !== snapshot.value);
@@ -25,18 +26,29 @@ const blockedReason = computed(() => {
 });
 const disabled = computed(() => loading.value || Boolean(readError.value || blockedReason.value) ||
   !store.connected || !selected.value || !store.kernelTunables.data || store.incompatible || store.draftStale || changed.value);
-const scopes = [
-  { key: "host", title: "Host-global capacity", help: "Affects the entire host, including other namespaces. Requires kernel.host.write and exclusive backend host-tunables ownership." },
-  { key: "namespace", title: "Network namespace timeouts", help: "Affects only the daemon's network namespace. Requires kernel.namespace.write." },
-] as const;
+const scopes = ["host", "namespace"] as const;
 const key = (entry: KernelTunable) => `${entry.scope}/${entry.name}`;
+function systemValue(entry: KernelTunable): string | undefined {
+  const current = store.kernelTunables.data;
+  return current?.observed[entry.scope][entry.name] ?? current?.effective[entry.scope][entry.name];
+}
+function currentValueLabel(entry: KernelTunable): string {
+  const current = systemValue(entry);
+  if (current !== undefined) return `Current system: ${current} ${conntrackUnit(entry.name)}`;
+  const configured = store.kernelTunables.data?.configured[entry.scope][entry.name];
+  return configured !== undefined ? `Applied configuration: ${configured} ${conntrackUnit(entry.name)}` : "Current system value unavailable.";
+}
 function reset(): void {
-  values.value = Object.fromEntries(controls.value.map(entry => [key(entry), selected.value?.kernel?.[entry.scope][entry.name] ?? ""]));
+  values.value = Object.fromEntries(controls.value.map(entry => [key(entry),
+    selected.value?.kernel?.[entry.scope][entry.name] ?? systemValue(entry) ??
+    store.kernelTunables.data?.configured[entry.scope][entry.name] ?? "",
+  ]));
+  initialValues.value = { ...values.value };
   initial.value = stableJson(values.value); snapshot.value = stableJson(selected.value?.kernel);
   error.value = ""; notice.value = ""; store.editorDirty = false;
 }
 watch(dirty, value => { store.editorDirty = value; }, { flush: "sync" });
-watch([controls, () => stableJson(selected.value?.kernel)], () => { if (!dirty.value) reset(); }, { immediate: true, flush: "sync" });
+watch([controls, () => stableJson(selected.value?.kernel), () => store.kernelTunables.data], () => { if (!dirty.value) reset(); }, { immediate: true, flush: "sync" });
 watch(() => [store.connected, store.sessionVersion], () => {
   reset();
   if (store.connected) void read();
@@ -48,7 +60,8 @@ async function read(): Promise<void> {
 }
 function fieldError(entry: KernelTunable): string {
   const value = values.value[key(entry)];
-  return value === "" ? "" : conntrackValueError(value, entry);
+  if (value === initialValues.value[key(entry)]) return "";
+  return value === "" ? "Enter a value. Conntrack settings remain managed by the firewall." : conntrackValueError(value, entry);
 }
 function stage(): void {
   error.value = ""; notice.value = "";
@@ -58,13 +71,11 @@ function stage(): void {
     candidate.kernel ??= { host: {}, namespace: {} };
     for (const entry of controls.value) {
       const value = values.value[key(entry)];
-      if (value === "") delete candidate.kernel[entry.scope][entry.name];
-      else {
-        const message = fieldError(entry);
-        if (message) throw new Error(`${conntrackLabel(entry.name)}: ${message}`);
-        if (typeof value !== "string") throw new Error("A string value is required.");
-        candidate.kernel[entry.scope][entry.name] = value;
-      }
+      if (value === initialValues.value[key(entry)]) continue;
+      const message = fieldError(entry);
+      if (message) throw new Error(`${conntrackLabel(entry.name)}: ${message}`);
+      if (typeof value !== "string") throw new Error("A string value is required.");
+      candidate.kernel[entry.scope][entry.name] = value;
     }
     const issues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.baseline ?? store.state.data?.desired, store.supportedKernelCatalog)
       .filter(issue => issue.path.startsWith("kernel"));
@@ -76,6 +87,9 @@ function stage(): void {
 
 <template>
   <section aria-label="Conntrack tuning">
+    <h1 class="text-h6 mb-4">
+      Conntrack tuning
+    </h1>
     <p
       v-if="loading"
       role="status"
@@ -106,100 +120,57 @@ function stage(): void {
     >
       Kernel settings changed while editing. Copy your edits, then reset and merge into the latest configuration.
     </v-alert>
-    <v-alert
-      v-if="controls.length && !loading"
-      type="warning"
-      variant="tonal"
-      class="mb-4"
-    >
-      {{ conntrackSafetyNotice }}
-    </v-alert>
     <form @submit.prevent="stage">
-      <div class="settings-head">
-        Setting
-      </div>
-      <v-divider />
-      <section
+      <template
         v-for="scope in scopes"
-        :key="scope.key"
-        class="conntrack-group mb-5"
+        :key="scope"
       >
-        <template v-if="controls.some(entry => entry.scope === scope.key)">
-          <h2 class="text-subtitle-1">
-            {{ scope.title }}
-          </h2>
-          <p class="setting-desc mb-3">
-            {{ scope.help }}
-          </p>
-          <template
-            v-for="entry in controls.filter(entry => entry.scope === scope.key)"
-            :key="key(entry)"
+        <template
+          v-for="entry in controls.filter(entry => entry.scope === scope)"
+          :key="key(entry)"
+        >
+          <div
+            class="setting-row"
+            :data-tunable="entry.name"
           >
-            <div
-              class="setting-row"
-              :data-tunable="entry.name"
+            <label
+              :for="`conntrack-${key(entry)}`"
+              class="setting-name"
             >
-              <label
-                :for="`conntrack-${key(entry)}`"
-                class="setting-name"
+              {{ conntrackLabel(entry.name) }} ({{ conntrackUnit(entry.name) }})
+            </label>
+            <div class="setting-control">
+              <v-text-field
+                :id="`conntrack-${key(entry)}`"
+                v-model="values[key(entry)]"
+                :aria-label="`${conntrackLabel(entry.name)} (${conntrackUnit(entry.name)})`"
+                :aria-describedby="`conntrack-${key(entry)}-description`"
+                inputmode="numeric"
+                placeholder="Enter a value"
+                density="compact"
+                :disabled="disabled"
+                :error-messages="fieldError(entry)"
+                :hide-details="!fieldError(entry)"
+                class="setting-field"
+                @update:model-value="notice = ''; error = ''"
+              />
+              <p
+                :id="`conntrack-${key(entry)}-description`"
+                class="setting-desc"
               >
-                {{ conntrackLabel(entry.name) }} ({{ conntrackUnit(entry.name) }})
-              </label>
-              <div class="setting-control">
-                <v-text-field
-                  :id="`conntrack-${key(entry)}`"
-                  v-model="values[key(entry)]"
-                  :aria-label="`${conntrackLabel(entry.name)} (${conntrackUnit(entry.name)})`"
-                  :aria-describedby="`conntrack-${key(entry)}-description`"
-                  inputmode="numeric"
-                  placeholder="Unmanaged"
-                  density="compact"
-                  :disabled="disabled"
-                  :error-messages="fieldError(entry)"
-                  :hide-details="!fieldError(entry)"
-                  class="setting-field"
-                  @update:model-value="notice = ''; error = ''"
-                />
-                <p
-                  :id="`conntrack-${key(entry)}-description`"
-                  class="setting-desc"
-                >
-                  {{ entry.min }}..{{ entry.max }} {{ conntrackUnit(entry.name) }}. {{ entry.description }}
-                </p>
-                <dl
-                  v-if="store.kernelTunables.data"
-                  class="conntrack-values setting-desc"
-                >
-                  <div>
-                    <dt>Applied configured</dt>
-                    <dd>{{ store.kernelTunables.data.configured[entry.scope][entry.name] ?? "Not managed" }}</dd>
-                  </div>
-                  <div>
-                    <dt>Effective</dt>
-                    <dd>{{ store.kernelTunables.data.effective[entry.scope][entry.name] ?? "Unavailable" }}</dd>
-                  </div>
-                  <div>
-                    <dt>Observed</dt>
-                    <dd>{{ store.kernelTunables.data.observed[entry.scope][entry.name] ?? "Unavailable" }}</dd>
-                  </div>
-                  <div>
-                    <dt>Captured original</dt>
-                    <dd>{{ store.kernelTunables.data.captured_original[entry.scope][entry.name] ?? "Not captured" }}</dd>
-                  </div>
-                </dl>
-              </div>
+                {{ entry.min }}..{{ entry.max }} {{ conntrackUnit(entry.name) }}. {{ entry.description }}
+              </p>
+              <p
+                v-if="!loading && !readError"
+                class="setting-desc conntrack-current"
+              >
+                {{ currentValueLabel(entry) }}
+              </p>
             </div>
-            <v-divider />
-          </template>
+          </div>
+          <v-divider />
         </template>
-      </section>
-      <p
-        v-if="controls.length"
-        class="text-caption text-medium-emphasis mb-4"
-      >
-        Simulator runtime values are synthetic, not appliance measurements.
-        Missing values are not zero defaults. No hash-bucket resizing, TCP validation relaxation or connection flushing is performed.
-      </p>
+      </template>
       <v-alert
         v-if="error"
         type="error"
@@ -223,6 +194,7 @@ function stage(): void {
           Reset edits
         </v-btn>
         <v-btn
+          v-if="readError || blockedReason"
           :disabled="!store.connected || store.kernelCatalog.loading || store.kernelTunables.loading"
           @click="read"
         >
@@ -242,18 +214,14 @@ function stage(): void {
 </template>
 
 <style scoped>
-.settings-head { padding: 0 4px 12px; font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.02em; color: var(--text-muted); }
 .setting-row { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; align-items: start; padding: 18px 4px; }
 .setting-name { padding-top: 6px; font-weight: 700; color: var(--text-primary); }
 .setting-control { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
 .setting-field { width: 100%; max-width: 360px; }
 .setting-desc { margin: 0; max-width: 760px; font-size: 0.8125rem; line-height: 1.45; color: var(--text-muted); }
-.conntrack-values { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; width: 100%; }
-.conntrack-values dt { color: var(--text-secondary); }
-.conntrack-values dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.conntrack-current { font-variant-numeric: tabular-nums; }
 @media (max-width: 700px) {
   .setting-row { grid-template-columns: 1fr; gap: 10px; padding: 16px 4px; }
   .setting-name { padding-top: 0; }
-  .conntrack-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>

@@ -204,6 +204,10 @@ export function differences(before: Config, after: Config): Difference[] {
     area: "firewall-icmp", identity: "Allow all IPv4 ICMP", kind: "modified",
     before: old.firewall.allow_all_icmp, after: next.firewall.allow_all_icmp,
   });
+  if (old.firewall.drop_logging_enabled !== next.firewall.drop_logging_enabled) result.push({
+    area: "firewall-logging", identity: "Log firewall drops", kind: "modified",
+    before: old.firewall.drop_logging_enabled, after: next.firewall.drop_logging_enabled,
+  });
   if (stableJson(old.firewall.policies) !== stableJson(next.firewall.policies)) result.push({
     area: "firewall-policies", identity: "host / ingress policies", kind: "modified",
     before: old.firewall.policies, after: next.firewall.policies,
@@ -261,6 +265,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
   else if (change.area === "ipv6") doc.ipv6_enabled = change.after === true;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
+  else if (change.area === "firewall-logging") doc.firewall.drop_logging_enabled = change.after === true;
   else if (change.area === "firewall-policies") doc.firewall.policies = change.after as Config["firewall"]["policies"];
   else if (change.area === "firewall-input") doc.firewall.input = change.after as Config["firewall"]["input"];
   else return unchanged;
@@ -898,7 +903,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     ipv6: "kernel.namespace.write",
     interfaces: "interfaces.write", routes: "routes.write",
     dhcp_clients: "interfaces.write", dns: "interfaces.write",
-    firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
+    firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write", "firewall-logging": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write", mdns: "mdns.write",
     mqtt: "mqtt.write", discord: "discord.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write", udp_broadcast_relay: "udp_broadcast_relay.write", sando: "sando.write",

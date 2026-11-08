@@ -101,7 +101,9 @@ export async function readMissingRuleHistory(until: number, signal: AbortSignal)
     }
     records.push(...page.records);
     if (page.cursor_expired) warnings.add("Retention gap: older records expired during this read. Totals are incomplete.");
-    if (page.capture.status !== "capturing" || page.capture.error) {
+    if (page.capture.status === "disabled" && !page.capture.error) {
+      warnings.add("Drop logging is disabled. Existing history is retained; new drops are not recorded. Discord alerts depend on drop logging.");
+    } else if (page.capture.status !== "capturing" || page.capture.error) {
       warnings.add(`Capture: ${page.capture.status}. ${page.capture.error ?? ""} Retained history is shown; capture is not healthy.`);
     }
     if ([page.capture.discarded_records, page.capture.malformed_records, page.capture.overflow_events, page.capture.sequence_gaps].some(value => value !== "0")) {

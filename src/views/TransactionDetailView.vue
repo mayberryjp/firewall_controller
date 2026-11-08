@@ -77,7 +77,7 @@ onUnmounted(() => { disposed = true; generation++; });
             </dd>
           </template>
           <template v-if="current.actor">
-            <dt>Actor</dt><dd>{{ current.actor }}</dd>
+            <dt>Actor</dt><dd>{{ current.actor === "system-conntrack-ownership" ? "Firewall startup (automatic conntrack settings)" : current.actor }}</dd>
           </template>
           <template v-if="current.submitted_at">
             <dt>Submitted ({{ timeZone }})</dt><dd>{{ formatTimestamp(current.submitted_at) }}</dd>

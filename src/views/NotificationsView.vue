@@ -7,13 +7,33 @@ import { discordConfigSchema, discordDefaults, discordWebhookSchema, type Discor
 import { isInitialLoad } from "@/services/datasets";
 
 const store = useControllerStore();
+const notificationCategories = [
+  { key: "notify_broadcast", label: "Broadcast drop notifications", description: "Include newly seen IPv4 broadcast drops." },
+  { key: "notify_tcp_closures", label: "TCP FIN/RST/empty ACK notifications", description: "Include newly seen TCP FIN, RST and ACK-only drops with known zero payload." },
+] as const;
 const selected = computed(() => store.draft ?? store.state.data?.desired);
 const form = ref(discordDefaults()), webhook = ref("");
 const initial = ref(""), error = ref(""), notice = ref(""), saving = ref(false);
-const currentSettings = computed(() => stableJson(selected.value?.discord ?? discordDefaults()));
+const currentSettings = computed(() => stableJson(discordConfigSchema.parse(selected.value?.discord ?? discordDefaults())));
 const dirty = computed(() => stableJson(form.value) !== initial.value || Boolean(webhook.value));
 const changed = computed(() => currentSettings.value !== initial.value);
 const status = ref<DiscordStatus | null>(null), statusLoading = ref(false), statusError = ref(""), statusStale = ref(true);
+const deliveryStates: Record<DiscordStatus["state"], { label: string; color: string } | null> = {
+  starting: { label: "Starting", color: "info" },
+  disabled: null,
+  simulated: { label: "Simulation only", color: "info" },
+  unavailable: { label: "Unavailable", color: "warning" },
+  paused: { label: "Paused", color: "warning" },
+  ready: { label: "Active", color: "success" },
+  error: { label: "Delivery error", color: "error" },
+  stopped: { label: "Stopped", color: "secondary" },
+};
+const deliveryStatus = computed(() => {
+  if (!status.value) return null;
+  if (statusStale.value) return { label: "Stale", color: "warning" };
+  if (status.value.state === "ready" && !status.value.enabled) return null;
+  return deliveryStates[status.value.state];
+});
 const loading = computed(() => (!status.value && !statusError.value) || isInitialLoad(store.state));
 const readError = computed(() => statusError.value || store.state.error);
 const blockedReason = computed(() => {
@@ -115,7 +135,7 @@ async function stage(): Promise<void> {
 <template>
   <section aria-label="Notification settings">
     <h1 class="text-h6 mb-4">
-      Notifications
+      Firewall drop notifications
     </h1>
     <p
       v-if="loading"
@@ -166,13 +186,13 @@ async function stage(): Promise<void> {
           for="notifications-discord-enabled"
           class="setting-name"
         >
-          Enable Discord notifications
+          Enable firewall drop notifications
         </label>
         <div class="setting-control">
           <v-switch
             id="notifications-discord-enabled"
             v-model="form.enabled"
-            aria-label="Enable Discord notifications"
+            aria-label="Enable firewall drop notifications"
             aria-describedby="notifications-discord-description"
             :disabled="blocked"
             density="compact"
@@ -184,7 +204,7 @@ async function stage(): Promise<void> {
             id="notifications-discord-description"
             class="setting-desc"
           >
-            Enabling sends newly seen source IP, destination IP, destination port and protocol tuples to Discord.
+            Send Discord alerts for newly seen firewall drops, identified by source IP, destination IP, destination port and protocol.
           </p>
         </div>
       </div>
@@ -214,20 +234,77 @@ async function stage(): Promise<void> {
         </div>
       </div>
       <v-divider />
+      <template
+        v-for="category in notificationCategories"
+        :key="category.key"
+      >
+        <div class="setting-row">
+          <label
+            :for="`notifications-${category.key}`"
+            class="setting-name"
+          >
+            {{ category.label }}
+          </label>
+          <div class="setting-control">
+            <v-switch
+              :id="`notifications-${category.key}`"
+              v-model="form[category.key]"
+              :aria-label="category.label"
+              :aria-describedby="`notifications-${category.key}-description`"
+              :disabled="blocked"
+              density="compact"
+              hide-details
+              color="primary"
+              @update:model-value="notice = ''; error = ''"
+            />
+            <p
+              :id="`notifications-${category.key}-description`"
+              class="setting-desc"
+            >
+              {{ category.description }} Requires firewall drop logging and notifications to be enabled.
+              Overlapping broadcast and TCP categories require both switches. Enabling later does not
+              send alerts for previously seen drops.
+            </p>
+          </div>
+        </div>
+        <v-divider />
+      </template>
       <div
         v-if="status"
         class="setting-row"
       >
         <div class="setting-name">
-          Committed delivery
+          Notification status
         </div>
         <div class="setting-control">
-          <p class="mb-0">
-            {{ statusStale ? "Stale" : `${status.enabled ? "Enabled" : "Disabled"} - ${status.state}` }}
-          </p>
-          <p class="setting-desc">
-            Delivered entries: {{ status.delivered }}; failed: {{ status.failed }} (this session).
-          </p>
+          <v-chip
+            v-if="deliveryStatus"
+            :color="deliveryStatus.color"
+            variant="tonal"
+            size="small"
+          >
+            {{ deliveryStatus.label }}
+          </v-chip>
+          <div
+            role="group"
+            aria-label="Delivery statistics"
+            class="d-flex flex-wrap ga-2"
+          >
+            <v-chip
+              color="success"
+              variant="tonal"
+              size="small"
+            >
+              Delivered: {{ status.delivered }}
+            </v-chip>
+            <v-chip
+              color="error"
+              variant="tonal"
+              size="small"
+            >
+              Failed: {{ status.failed }}
+            </v-chip>
+          </div>
           <p
             v-if="status.error"
             role="alert"
@@ -265,7 +342,7 @@ async function stage(): Promise<void> {
 .setting-row { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; align-items: start; padding: 18px 4px; }
 .setting-name { padding-top: 6px; font-weight: 700; color: var(--text-primary); }
 .setting-control { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
-.setting-field { width: 100%; max-width: 360px; }
+.setting-field { width: 100%; }
 .setting-desc { margin: 0; max-width: 760px; font-size: 0.8125rem; line-height: 1.45; color: var(--text-muted); }
 @media (max-width: 700px) {
   .setting-row { grid-template-columns: 1fr; gap: 10px; padding: 16px 4px; }

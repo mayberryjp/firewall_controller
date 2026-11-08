@@ -6,10 +6,29 @@ import { config } from "../fixtures";
 import { discordStatus, webhookReference, webhookUrl } from "../discordFixtures";
 
 describe("Discord notification contracts", () => {
+  it.each([false, true])("preserves independent category flags with broadcast=%s through configuration, diffs and complete candidates", broadcast => {
+    const before = config(), after = config();
+    before.discord = { ...discordDefaults(), enabled: true, webhook_ref: webhookReference };
+    after.discord = { ...before.discord, notify_broadcast: broadcast, notify_tcp_closures: true };
+    expect(configSchema.parse(after).discord).toEqual(after.discord);
+    expect(cloneConfig(after).discord).toEqual(after.discord);
+    const diff = differences(before, after);
+    expect(diff).toHaveLength(1);
+    expect(requiredPermissions(diff)).toEqual(["transactions.write", "discord.write"]);
+    expect(differenceContext(before, after, diff[0]!).after.discord).toEqual(after.discord);
+    expect(discordConfigSchema.parse({ enabled: true, webhook_ref: webhookReference })).toEqual(before.discord);
+  });
+  it.each(["notify_broadcast", "notify_tcp_closures"] as const)("requires strict booleans for %s in settings and status", key => {
+    for (const value of [null, 0, "false"]) {
+      expect(discordConfigSchema.safeParse({ [key]: value }).success).toBe(false);
+      expect(discordStatusSchema.safeParse({ ...discordStatus(), [key]: value }).success).toBe(false);
+    }
+    expect(discordStatusSchema.parse({ ...discordStatus(), [key]: true })[key]).toBe(true);
+  });
   it("defaults to disabled and keeps only a device-local reference in configuration", () => {
     expect(discordConfigSchema.parse({})).toEqual(discordDefaults());
     const candidate = config();
-    candidate.discord = { enabled: true, webhook_ref: webhookReference };
+    candidate.discord = { ...discordDefaults(), enabled: true, webhook_ref: webhookReference };
     expect(configSchema.parse(candidate).discord).toEqual(candidate.discord);
     expect(JSON.stringify(cloneConfig(candidate))).not.toContain("discord.com");
     expect(validateConfig(candidate)).toEqual([]);
@@ -42,7 +61,7 @@ describe("Discord notification contracts", () => {
   });
   it("tracks enable/disable/reference changes and their permission and diff context", () => {
     const before = config(), after = cloneConfig(before);
-    after.discord = { enabled: true, webhook_ref: webhookReference };
+    after.discord = { ...discordDefaults(), enabled: true, webhook_ref: webhookReference };
     const diff = differences(before, after);
     expect(diff).toHaveLength(1);
     expect(diff[0]?.area).toBe("discord");

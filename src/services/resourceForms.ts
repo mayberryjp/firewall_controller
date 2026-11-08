@@ -2,7 +2,7 @@ import type { Choice, Field } from "@/types/forms";
 import { timeoutNames } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
 import { manualRuleOwnership } from "@/services/ruleOwnership";
-import { firewallProtocolChoices } from "@/services/firewallProtocols";
+import { firewallProtocolChoices, firewallCreationProtocolChoices } from "@/services/firewallProtocols";
 import { compareInterfaceNames, formatInterfaceName } from "@/services/interfaceNames";
 
 export type Section = "interfaces" | "routes" | "firewall" | "nat" | "softflowd" | "gateway_monitors";
@@ -101,7 +101,7 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
     ];
     case "firewall": return [
       text("source", "Source network (blank = Any)"), text("destination", "Destination network (blank = Any)"),
-      select("protocol", "Protocol", firewallProtocolChoices), text("destination_ports", "Destination ports (comma separated)"),
+      select("protocol", "Protocol", creating ? firewallCreationProtocolChoices : firewallProtocolChoices), text("destination_ports", "Destination ports (comma separated)"),
       select("action", "Action", ["accept", "drop"]),
     ];
     case "nat": return [

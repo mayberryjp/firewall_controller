@@ -261,6 +261,28 @@ require separate real-appliance acceptance; mocked UI tests do not prove forward
 
 ### Firewall Drop History And Rule Counters
 
+Firewall drops, Connections (including deletion review), and Possible missing rules
+show known endpoints as **HOSTNAME (IP address)**, using saved firewall host display
+names or host names (including Sando imports), and the appliance hostname for its
+own interface addresses. Unknown hosts remain IP-only. Labels do not change API
+filters, numeric-address sorting, connection identities, or drop aggregation.
+Firewall drops has sortable column headers, including horizontally scrollable
+headers on mobile. Click a header to sort loaded records ascending, then descending;
+sorting is retained across refreshes, filter changes and loading older records.
+The initial display and history cursors retain the backend's newest-first record
+ID order; sorting never changes API pagination or stored records.
+
+Both Firewall drops and Possible missing rules have **Hide broadcast drops** and
+**Hide TCP FIN/RST drops** switches, initially on each time the page loads. They filter loaded backend tags
+locally, without new requests, configuration writes, discarding history or resetting
+pagination. Broadcast is based on observed `ipv4_broadcast` tags, not address guesses;
+the TCP switch hides `tcp_finish`/`tcp_reset`, not ACK-only or connection-attempt drops.
+Firewall drops places the switches after its search and time-filter controls;
+Possible missing rules places them alongside its Time period selector,
+wrapping on compact screens.
+Possible missing rules filters packets before grouping and recalculates visible totals.
+Load older remains available on fully hidden drop pages using the original backend cursor.
+
 Diagnostics > **FIREWALL DROPS** (`/diagnostics/firewall-drops`) reads
 `GET /api/v1/firewall/deny-log` with the independent `firewall.logs.read`
 permission. It supports address, numeric IP protocol, chain and inclusive system-timezone
@@ -299,7 +321,8 @@ ruleset is replaced, including apply, rollback, repair and daemon restart.
 Visible rule pages use single-flight five-second polling with bounded failure
 backoff and abort on hide/unmount; samples are not persisted.
 
-Deploy a backend supporting the October 29 deny-log/counter handoffs. Native
+Deploy a backend supporting the November 8 deny-log metadata/logging handoffs and
+the October 29 counter handoff. Native
 collection requires `nf_tables`, `nfnetlink_log` and `nft_log`, NFLOG group 100,
 and the backend's network-namespace permissions. Counter expressions are provided
 by `nf_tables`; no separate `nft_counter` module is required. Reads do not start capture.
@@ -321,17 +344,37 @@ Sorting covers all grouped rows in the selected period, preserves exact counts,
 and remains selected across period changes and refreshes. These are review candidates, not automatic
 allow-rule recommendations or complete traffic accounting. Capture loss and
 retention gaps remain visible; a failed paginated read does not publish partial totals.
+Generic explanatory and period captions are omitted; actual capture, retention and
+read problems remain explicit.
+
+The final General Settings row, **Log firewall drops**, stages
+`firewall.drop_logging_enabled` through the normal SAVE review/confirmation flow
+with `transactions.write` and `firewall.write`. It defaults on. Turning it off
+stops new history capture and Discord alerts, not firewall protection or rule
+counters; retained history remains readable with capture status `disabled`.
+Missed traffic is not backfilled, and already in-flight Discord deliveries may finish.
 
 ### Notifications
 
-Settings > **Notifications** provides Discord first-seen drop alerts in the
+Settings > **Notifications** opens **Firewall drop notifications**, providing Discord first-seen firewall-drop alerts in the
 General Settings row layout. Save privately uploads a new/replacement webhook,
-clears the raw password-style input, and stages only its device-local reference.
+clears the full-width password-style webhook input, and stages only its device-local reference.
 Review the complete candidate in SAVE and explicitly confirm it; only committed
 settings send. Configuration, revisions and exports never contain the URL.
 `discord.write` is required for upload and configuration changes, alongside
 `transactions.write` for apply/confirm/rollback. A successful supported status
 read is required before editing; failures and stale data remain explicit.
+
+The webhook URL sits directly below the global notification toggle, before the
+broadcast and TCP switches.
+
+**Broadcast drop notifications** and **TCP FIN/RST/empty ACK notifications** use
+the same switch rows and stage `notify_broadcast`/`notify_tcp_closures`, independently
+defaulting off. The TCP category includes ACK-only packets only when payload length
+is known to be zero. Drops matching both categories require both switches.
+Category suppression is neither delivered nor failed; enabling later does not
+backfill suppressed tuples. The global notification switch and drop logging must
+also be enabled for new alerts.
 
 The permanent tuple is source IP, destination IP, destination port and numeric
 protocol (null port differs from zero). Source ports and other context do not
@@ -340,6 +383,9 @@ disabled, and restarting does not reset deduplication. Delivery is best-effort;
 failed/interrupted tuples are not replayed automatically, and accepted Discord
 messages cannot be rolled back. Enabling approves metadata sharing with Discord.
 Delivery status and exact daemon-session entry counters are read-only.
+The **Notification status** row uses a labeled status chip when active or needing
+attention, plus green **Delivered** and red **Failed** count chips. Disabled
+notifications show only the counts, without a disabled chip or session caption.
 The simulator never sends. Backend deployment and authorized native testing are
 separate; protect/back up private webhook and first-seen index storage.
 
@@ -355,14 +401,25 @@ the six TCP and two UDP timeouts affect the daemon's network namespace
 Other host/namespace sysctls remain protected against edits.
 
 The page uses General Settings' divided label/control rows, compact fields,
-responsive layout and right-aligned **Save** action. Save only stages changes.
-It distinguishes applied configured, effective, observed and captured
-original values from the editable draft. Missing values are not zero defaults;
-simulator values are synthetic. Blank fields remove ownership: applying removal
-restores the backend's captured original, never an assumed default. Stage changes
+responsive layout and right-aligned **Save** action. Controls appear directly,
+without introductory prose, a Setting header or capacity/timeout section headings.
+Save only stages changes.
+Fields start from the saved draft/configuration, otherwise the current observed
+system value, effective value, or applied configuration (in that order). Each row
+shows just the current system value, or explicitly labels an applied-configuration
+fallback when no runtime value is available. Only edited fields are staged;
+displaying a system value does not write configuration. Missing values remain
+explicitly unavailable, not guessed defaults: the backend does not report kernel
+defaults, and captured originals are not factory defaults. Simulator values are
+synthetic. Native host startup, install and upgrades manage all nine supported
+conntrack settings, preserving saved values and capturing only missing live values.
+Blanking a populated field is an inline validation error, not an unmanaged opt-out.
+Automatic captures appear as **Automatic conntrack settings** transactions from
+`system-conntrack-ownership`, without a confirmation deadline. Simulator/lab
+namespaces do not perform automatic captures. Stage changes
 and review the full candidate in **SAVE**, with `transactions.write` and the
 changed scopes' `kernel.host.write`/`kernel.namespace.write` permissions.
-Host-global tuning also requires the backend's exclusive ownership/opt-in.
+Host-global tuning remains subject to the backend's ownership safeguards.
 
 Higher limits can increase memory use; lower limits can reject new connections.
 Short timeouts can expire idle flows or leave late teardown packets untracked.
@@ -1229,8 +1286,11 @@ a known host's default. Existing connections may survive new blocks until
 connection state expires or is explicitly deleted.
 
 Host, interface, Firewall destined and legacy forwarding filters support **Any**,
-**TCP**, **UDP**, **ICMP** and **ICMPv6**. Any covers every IP protocol. ICMP
-matches all IPv4 types/codes; ICMPv6 matches all IPv6 types/codes and requires
+**TCP**, **UDP**, **ICMP** and **ICMPv6**. Any covers every IP protocol.
+When adding a rule, **TCP & UDP** stages two consecutive, separately editable
+rules (TCP first, then UDP) with the same settings and destination ports.
+Both rules are validated together and use the existing SAVE/apply review flow.
+ICMP matches all IPv4 types/codes; ICMPv6 matches all IPv6 types/codes and requires
 global IPv6 enabled. Explicit networks and host address pairs must match the
 protocol family; dual-stack hosts expand only compatible pairs.
 Destination ports are TCP/UDP-only: at most 32 unique individual ports in

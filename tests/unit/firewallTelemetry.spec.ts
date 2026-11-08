@@ -1,10 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { counterConfigurationMatches, dhcpRelayCounterSummaries, dhcpRelaySystemRules, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime } from "@/services/firewallTelemetry";
+import { counterConfigurationMatches, dhcpRelayCounterSummaries, dhcpRelaySystemRules, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime, sortFirewallDrops, visibleFirewallDrops } from "@/services/firewallTelemetry";
 import { cloneConfig } from "@/services/configuration";
 import { hostPolicyConfig, state, transaction } from "../fixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
 
 describe("firewall telemetry contracts", () => {
+  it("preserves nullable TCP metadata, real zeros and disabled capture while rejecting unsupported tag queries", () => {
+    const page = firewallDenyPage();
+    page.capture.status = "disabled";
+    page.records[0]!.tcp_flags = 0; page.records[0]!.tcp_payload_length = 0;
+    expect(firewallDenyPageSchema.parse(page)).toEqual(page);
+    expect(firewallDenyQuerySchema.safeParse({ tag: "tcp_finish" }).success).toBe(false);
+    expect(firewallDenyQuerySchema.safeParse({ exclude_tags: "ipv4_broadcast" }).success).toBe(false);
+    expect(firewallDenyPageSchema.safeParse({ ...page, records: [{ ...page.records[0]!, tcp_flags: 256 }] }).success).toBe(false);
+    expect(firewallDenyPageSchema.safeParse({ ...page, records: [{ ...page.records[0]!, tags: ["guessed_broadcast"] }] }).success).toBe(false);
+    expect(firewallDenyPageSchema.safeParse({ ...page, records: [{ ...page.records[0]!, tags: undefined }] }).success).toBe(false);
+  });
+  it("filters only observed broadcast and FIN/RST tags without hiding ACK-only traffic or mutating raw history", () => {
+    const base = firewallDenyPage().records[0]!;
+    const tags = [
+      ["ipv4_broadcast"], ["tcp_finish"], ["tcp_reset"], ["tcp_ack_only"],
+      ["tcp_connection_attempt"], ["tcp_finish", "ipv4_broadcast"], [],
+    ] satisfies typeof base.tags[];
+    const rows = tags.map((tags, index) => ({ ...base, id: String(7 - index), tags }));
+    const before = JSON.stringify(rows);
+    expect(visibleFirewallDrops(rows, false, false)).toEqual(rows);
+    expect(visibleFirewallDrops(rows, true, false).map(row => row.id)).toEqual(["6", "5", "4", "3", "1"]);
+    expect(visibleFirewallDrops(rows, false, true).map(row => row.id)).toEqual(["7", "4", "3", "1"]);
+    expect(visibleFirewallDrops(rows, true, true).map(row => row.id)).toEqual(["4", "3", "1"]);
+    expect(JSON.stringify(rows)).toBe(before);
+  });
   it("preserves exact uint128 counters, real zeros and uint64 cursors", () => {
     const sample = firewallCounters();
     sample.rules[0]!.bytes = "340282366920938463463374607431768211455";
@@ -44,6 +69,55 @@ describe("firewall telemetry contracts", () => {
     for (const text of ["2026-02-30 12:00:00", "2026-10-30T12:34:56Z", "1969-12-31 23:59:59", "2026-10-30 24:00:00"]) {
       expect(() => parseDenyTime(text)).toThrow();
     }
+  });
+});
+
+describe("firewall drop sorting", () => {
+  const base = firewallDenyPage().records[0]!;
+  it.each(["timestamp_ms", "packet_length"] as const)("sorts %s numerically in both directions without changing the records", column => {
+    const rows = [1000, 9, 40].map((value, index) => ({ ...base, id: String(3 - index), [column]: value }));
+    const before = JSON.stringify(rows);
+    expect(sortFirewallDrops(rows, column, false).map(row => row[column])).toEqual([9, 40, 1000]);
+    expect(sortFirewallDrops(rows, column, true).map(row => row[column])).toEqual([1000, 40, 9]);
+    expect(JSON.stringify(rows)).toBe(before);
+  });
+  it.each(["source", "destination"] as const)("sorts %s IPs numerically with port tie-breakers, real zeros and null ports last", column => {
+    const port = column === "source" ? "source_port" : "destination_port";
+    const rows = [
+      { ...base, id: "5", [column]: "192.0.2.10", [port]: 443 },
+      { ...base, id: "4", [column]: "192.0.2.2", [port]: null },
+      { ...base, id: "3", [column]: "192.0.2.2", [port]: 80 },
+      { ...base, id: "2", [column]: "192.0.2.2", [port]: 0 },
+      { ...base, id: "1", [column]: "192.0.2.2", [port]: 443 },
+    ];
+    expect(sortFirewallDrops(rows, column, false).map(row => row.id)).toEqual(["2", "3", "1", "4", "5"]);
+    expect(sortFirewallDrops(rows, column, true).map(row => row.id)).toEqual(["5", "1", "3", "2", "4"]);
+  });
+  it.each(["ingress", "egress"] as const)("sorts %s interface names naturally with nulls last in either direction", column => {
+    const rows = [null, "vlan10", "vlan2"].map((value, index) => ({ ...base, id: String(3 - index), [column]: value }));
+    expect(sortFirewallDrops(rows, column, false).map(row => row[column])).toEqual(["vlan2", "vlan10", null]);
+    expect(sortFirewallDrops(rows, column, true).map(row => row[column])).toEqual(["vlan10", "vlan2", null]);
+  });
+  it("sorts protocol labels and reasons with chain tie-breakers", () => {
+    const rows = [17, 6, 255, 1].map((protocol, index) => ({ ...base, id: String(4 - index), protocol }));
+    expect(sortFirewallDrops(rows, "protocol", false).map(row => row.protocol)).toEqual([1, 255, 6, 17]);
+    expect(sortFirewallDrops(rows, "protocol", true).map(row => row.protocol)).toEqual([17, 6, 255, 1]);
+    const reasons = [
+      { ...base, id: "3", reason: "rule" as const, chain: "forward" as const },
+      { ...base, id: "2", reason: "policy" as const, chain: "input" as const },
+      { ...base, id: "1", reason: "policy" as const, chain: "forward" as const },
+    ];
+    expect(sortFirewallDrops(reasons, "reason", false).map(row => row.id)).toEqual(["1", "2", "3"]);
+    expect(sortFirewallDrops(reasons, "reason", true).map(row => row.id)).toEqual(["3", "2", "1"]);
+  });
+  it("keeps equal-key records in original exact-ID order and sorts fractional-second timestamps at full precision", () => {
+    const rows = [
+      { ...base, id: "18446744073709551614", timestamp_ms: base.timestamp_ms + 1 },
+      { ...base, id: "18446744073709551613", timestamp_ms: base.timestamp_ms },
+    ];
+    expect(sortFirewallDrops(rows, "packet_length", true).map(row => row.id)).toEqual(rows.map(row => row.id));
+    expect(sortFirewallDrops(rows, "timestamp_ms", false).map(row => row.id)).toEqual([...rows].reverse().map(row => row.id));
+    expect(sortFirewallDrops([], "timestamp_ms", false)).toEqual([]);
   });
 });
 

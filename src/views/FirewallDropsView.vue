@@ -5,16 +5,35 @@ import { useControllerStore } from "@/stores/controller";
 import { getFirewallDenyLog } from "@/services/netcontrol";
 import { firewallDenyReadError } from "@/services/possibleMissingRules";
 import { formatIpProtocol, ipProtocolColor } from "@/services/firewallProtocols";
-import { firewallDenyQuerySchema, type FirewallDenyPage, type FirewallDenyQuery } from "@/services/firewallTelemetry";
+import { firewallDenyQuerySchema, sortFirewallDrops, visibleFirewallDrops, type FirewallDenyPage, type FirewallDenyQuery, type FirewallDropSortColumn } from "@/services/firewallTelemetry";
 import { useTimestamps } from "@/composables/useTimestamps";
+import { useHostnames } from "@/composables/useHostnames";
+import FirewallDropVisibility from "@/components/feature/FirewallDropVisibility.vue";
 const { formatTimestamp, parseTimestamp, timeZone } = useTimestamps();
+const { formatHostAddress } = useHostnames();
 
 const store = useControllerStore();
 const data = ref<FirewallDenyPage | null>(null), loading = ref(false), error = ref(""), filterError = ref("");
 const showFilters = ref(false);
+const hideBroadcast = ref(true), hideTcp = ref(true);
 const filters = reactive({ address: "", protocol: "", chain: "", since: "", until: "" });
 const query = ref<FirewallDenyQuery>({ limit: 100 });
 const chains = [{ title: "All chains", value: "" }, { title: "Input", value: "input" }, { title: "Forward", value: "forward" }];
+const columns = computed<Array<{ key: FirewallDropSortColumn; label: string }>>(() => [
+  { key: "timestamp_ms", label: `Time (${timeZone.value})` },
+  { key: "source", label: "Source / port" }, { key: "destination", label: "Destination / port" },
+  { key: "protocol", label: "Protocol" }, { key: "ingress", label: "Ingress" },
+  { key: "egress", label: "Egress" }, { key: "packet_length", label: "Bytes" }, { key: "reason", label: "Reason" },
+]);
+const sortColumn = ref<FirewallDropSortColumn | null>(null), sortDescending = ref(false);
+const visibleRows = computed(() => visibleFirewallDrops(data.value?.records ?? [], hideBroadcast.value, hideTcp.value));
+const sortedRows = computed(() => sortColumn.value
+  ? sortFirewallDrops(visibleRows.value, sortColumn.value, sortDescending.value)
+  : visibleRows.value);
+function sort(column: FirewallDropSortColumn): void {
+  sortDescending.value = sortColumn.value === column ? !sortDescending.value : false;
+  sortColumn.value = column;
+}
 const losses = computed(() => {
   const capture = data.value?.capture;
   if (!capture) return [];
@@ -119,25 +138,31 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
           hide-details
           class="drop-chain-filter"
         />
-        <v-btn
-          type="submit"
-          icon="mdi-magnify"
-          variant="tonal"
-          size="small"
-          aria-label="Apply filters"
-          title="Apply filters"
-          :disabled="loading"
-        />
-        <v-btn
-          icon="mdi-filter-variant"
-          variant="text"
-          size="small"
-          aria-label="More filters"
-          title="More filters"
-          :aria-expanded="showFilters"
-          :color="showFilters ? 'primary' : undefined"
-          @click="showFilters = !showFilters"
-        />
+        <div class="drop-visibility-controls">
+          <v-btn
+            type="submit"
+            icon="mdi-magnify"
+            variant="tonal"
+            size="small"
+            aria-label="Apply filters"
+            title="Apply filters"
+            :disabled="loading"
+          />
+          <v-btn
+            icon="mdi-filter-variant"
+            variant="text"
+            size="small"
+            aria-label="More filters"
+            title="More filters"
+            :aria-expanded="showFilters"
+            :color="showFilters ? 'primary' : undefined"
+            @click="showFilters = !showFilters"
+          />
+          <FirewallDropVisibility
+            v-model:hide-broadcast="hideBroadcast"
+            v-model:hide-tcp="hideTcp"
+          />
+        </div>
         <v-btn
           class="drop-refresh"
           icon="mdi-refresh"
@@ -198,7 +223,16 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
         Retention gap: older records have expired. This is not the complete history.
       </v-alert>
       <v-alert
-        v-if="data.capture.status !== 'capturing' || data.capture.error"
+        v-if="data.capture.status === 'disabled' && !data.capture.error"
+        type="info"
+        variant="tonal"
+        class="mb-4"
+      >
+        Drop logging is disabled. Existing history is retained; new drops are not recorded.
+        Discord alerts depend on drop logging.
+      </v-alert>
+      <v-alert
+        v-else-if="data.capture.status !== 'capturing' || data.capture.error"
         type="warning"
         variant="tonal"
         class="mb-4"
@@ -216,10 +250,6 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
         {{ losses.map(item => `${item.label}: ${item.value}`).join('; ') }}.
         These indicators overlap and are not an exact lost-packet total.
       </v-alert>
-      <p class="text-caption text-medium-emphasis mb-3">
-        Retained input/forward drops only. Capture can be incomplete; empty history does not prove there were no drops.
-        Bytes are IP packet lengths, not flow totals.
-      </p>
       <v-table
         class="drop-table app-table"
         density="compact"
@@ -227,13 +257,31 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
       >
         <thead>
           <tr>
-            <th>Time ({{ timeZone }})</th><th>Source / port</th><th>Destination / port</th><th>Protocol</th>
-            <th>Ingress</th><th>Egress</th><th>Bytes</th><th>Reason</th>
+            <th
+              v-for="column in columns"
+              :key="column.key"
+              scope="col"
+              :aria-sort="sortColumn === column.key ? (sortDescending ? 'descending' : 'ascending') : 'none'"
+            >
+              <button
+                type="button"
+                class="drop-sort"
+                :title="`Sort by ${column.label.toLowerCase()} ${sortColumn === column.key && !sortDescending ? 'descending' : 'ascending'}`"
+                @click="sort(column.key)"
+              >
+                {{ column.label }}
+                <v-icon
+                  :icon="sortColumn === column.key ? (sortDescending ? 'mdi-arrow-down' : 'mdi-arrow-up') : 'mdi-unfold-more-horizontal'"
+                  size="14"
+                  aria-hidden="true"
+                />
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody>
           <template
-            v-for="row in data.records"
+            v-for="row in sortedRows"
             :key="row.id"
           >
             <tr class="drop-row">
@@ -248,7 +296,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
                 data-label="Source / port"
               >
                 <div class="drop-endpoint-value">
-                  <span class="mono">{{ row.source }}</span>
+                  <span class="mono">{{ formatHostAddress(row.source) }}</span>
                   <v-chip
                     v-if="row.source_port !== null"
                     size="x-small"
@@ -269,7 +317,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
                 data-label="Destination / port"
               >
                 <div class="drop-endpoint-value">
-                  <span class="mono">{{ row.destination }}</span>
+                  <span class="mono">{{ formatHostAddress(row.destination) }}</span>
                   <v-chip
                     v-if="row.destination_port !== null"
                     size="x-small"
@@ -326,15 +374,15 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
               </td>
             </tr>
           </template>
-          <tr v-if="!data.records.length">
+          <tr v-if="!sortedRows.length">
             <td colspan="8">
-              No retained drops match these filters.
+              {{ data.records.length ? "No loaded drops are visible with these hide filters." : "No retained drops match these filters." }}
             </td>
           </tr>
         </tbody>
       </v-table>
       <div class="drop-footer">
-        <span class="text-caption text-medium-emphasis">{{ data.records.length }} shown</span>
+        <span class="text-caption text-medium-emphasis">{{ sortedRows.length }} of {{ data.records.length }} loaded drops shown</span>
         <v-btn
           v-if="data.next_before_id"
           variant="text"
@@ -356,12 +404,16 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
 .drop-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .drop-search { flex: 1 1 220px; max-width: 360px; min-width: 0; }
 .drop-protocol-filter { flex: 0 1 180px; min-width: 150px; }
+.drop-visibility-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .drop-chain-filter { flex: 0 1 150px; min-width: 130px; }
 .drop-refresh { margin-left: auto; }
 .drop-advanced { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; max-width: 600px; }
 .drop-table { background: #090c10; border: 1px solid var(--border); border-radius: 6px; }
 .drop-table :deep(.v-table__wrapper > table > thead > tr > th), .drop-table :deep(.v-table__wrapper > table > tbody > tr > td) { padding: 6px 8px; }
 .drop-table :deep(th) { white-space: nowrap; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.drop-sort { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; color: inherit; font: inherit; cursor: pointer; }
+.drop-sort:hover, .drop-table :deep(th[aria-sort="ascending"]), .drop-table :deep(th[aria-sort="descending"]) { color: var(--text-primary); }
+.drop-sort:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
 .drop-table :deep(td) { vertical-align: middle; font-size: 13px; }
 .drop-row:hover { background: var(--bg-hover); }
 .drop-time { white-space: nowrap; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
@@ -372,9 +424,12 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
 .drop-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
 @media (max-width: 600px) {
   .drop-search { flex-basis: 100%; max-width: none; }
+  .drop-visibility-controls { flex-wrap: wrap; }
   .drop-advanced { grid-template-columns: minmax(0, 1fr); }
   .drop-table :deep(table), .drop-table :deep(tbody) { display: block; width: 100%; }
-  .drop-table :deep(thead) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .drop-table :deep(thead) { display: block; overflow-x: auto; }
+  .drop-table :deep(thead tr) { display: flex; }
+  .drop-table :deep(th) { flex-shrink: 0; }
   .drop-table :deep(tbody > tr) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 12px 8px; border-bottom: 1px solid var(--border); }
   .drop-table :deep(.v-table__wrapper > table > tbody > tr > td) { min-width: 0; max-width: none; height: auto; padding: 0; border: 0; overflow-wrap: anywhere; }
   .drop-table :deep(td[data-label])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--text-muted); }

@@ -24,6 +24,27 @@ beforeEach(() => { setActivePinia(createPinia()); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe("human-facing timestamp displays", () => {
+  it.each(["applying_local", "committed"])("labels automatic conntrack ownership %s without a countdown or confirmation actions", async status => {
+    const store = useControllerStore();
+    const record = { ...transaction(status), actor: "system-conntrack-ownership", confirmation_deadline: null };
+    vi.spyOn(store, "refreshTransactions").mockResolvedValue();
+    store.transactions.data = { [record.id]: record };
+    const list = mount(TransactionsView, { global });
+    try {
+      expect(list.get("tbody").text()).toContain("Automatic conntrack settings");
+      expect(list.get("tbody").text()).not.toContain("system-conntrack-ownership");
+      expect(list.get("tbody tr").findAll("td").at(-1)!.text()).toBe("—");
+    } finally { list.unmount(); }
+    vi.spyOn(store, "readTransaction").mockResolvedValue(record);
+    const detail = mount(TransactionDetailView, { props: { id: record.id }, global: { stubs: { ...global.stubs, ConfigDiff: true } } });
+    try {
+      await flushPromises();
+      expect(detail.text()).toContain("Firewall startup (automatic conntrack settings)");
+      expect(detail.findComponent(TransactionActions).exists()).toBe(false);
+      expect(detail.text()).not.toContain("Confirm changes");
+      expect(detail.text()).not.toContain("remaining");
+    } finally { detail.unmount(); }
+  });
   it("stops an existing countdown when the transaction becomes console-only", async () => {
     vi.useFakeTimers();
     useControllerStore();

@@ -54,6 +54,7 @@ export function firewallDenyPage(): FirewallDenyPage {
       source_port: 0, destination_port: null, ingress_index: 3, egress_index: null,
       ingress: null, egress: "wan0", packet_length: 60, chain: "forward", reason: "rule",
       compiled_rule_index: 0, ruleset_id: "c".repeat(64),
+      tcp_flags: null, tcp_payload_length: null, tags: [],
     }],
     next_before_id: "18446744073709551614", oldest_id: "18446744073709551610", newest_id: "18446744073709551614",
     cursor_expired: false,

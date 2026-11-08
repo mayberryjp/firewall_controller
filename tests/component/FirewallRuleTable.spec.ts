@@ -63,7 +63,7 @@ describe("Inline firewall rules", () => {
     await change("protocol", "tcp"); await change("ports", "443, 8443");
     await change("protocol", protocol); await change("action", "drop");
     const fields = wrapper.findAllComponents(FieldInput);
-    expect(fields.find(field => field.props("field").key === "protocol")!.props("field").choices!.map(choice => choice.title)).toEqual(["Any", "TCP", "UDP", "ICMP", "ICMPv6"]);
+    expect(fields.find(field => field.props("field").key === "protocol")!.props("field").choices!.map(choice => choice.title)).toEqual(["Any", "TCP", "UDP", "TCP & UDP", "ICMP", "ICMPv6"]);
     expect(fields.find(field => field.props("field").key === "ports")!.props("field").disabled).toBe(true);
     expect(fields.find(field => field.props("field").key === "ports")!.props("modelValue")).toBe("");
     expect(wrapper.get(".rule-editor").text()).toContain(protocol === "icmp" ? "global IPv4 ICMP exception" : "neighbor discovery");
@@ -71,6 +71,71 @@ describe("Inline firewall rules", () => {
     expect(entries(scope).at(-1)).toEqual({ origin: "manual", import_source: null, protocol, action: "drop" });
     expect(wrapper.find(".rule-editor").exists()).toBe(false);
     expect(wrapper.findAll(".host-rule").at(scope === "host" ? -2 : -1)!.text()).toContain(protocol === "icmp" ? "ICMP" : "ICMPv6");
+  });
+  it.each(["host", "interface", "input"] as const)("adds a TCP/UDP pair atomically to %s without applying and edits each rule separately", async scope => {
+    const store = useControllerStore(), before = cloneConfig(store.state.data!.desired);
+    render(scope);
+    await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
+    await change("protocol", "tcp"); await change("ports", "443, 8443");
+    await wrapper.get('select[id="rule.protocol"]').setValue("tcp_udp");
+    expect(wrapper.get('input[id="rule.ports"]').attributes("disabled")).toBeUndefined();
+    await change("destination", "198.51.100.0/24");
+    if (scope !== "input") await change("out_interface", "lab0");
+    await change("action", "drop");
+    store.draft = cloneConfig(before);
+    store.draft.firewall.allow_all_icmp = false;
+    const stage = vi.spyOn(store, "stage");
+    await wrapper.get("form").trigger("submit");
+    expect(stage).toHaveBeenCalledOnce();
+    const pair = entries(scope).slice(-2);
+    expect(pair).toEqual(["tcp", "udp"].map(protocol => ({
+      origin: "manual", import_source: null, protocol, destination_ports: [443, 8443],
+      destination: "198.51.100.0/24", action: "drop", ...(scope === "input" ? {} : { out_interface: "lab0" }),
+    })));
+    expect(store.state.data!.desired).toEqual(before);
+    expect(store.draft!.firewall.allow_all_icmp).toBe(false);
+    expect(store.editorDirty).toBe(false);
+    const count = entries(scope).length;
+    await click(`Edit rule ${count - 1}`);
+    expect(wrapper.get('select[id="rule.protocol"]').findAll("option").map(option => option.text())).not.toContain("TCP & UDP");
+    await change("ports", "80");
+    await wrapper.get("form").trigger("submit");
+    expect(entries(scope)).toHaveLength(count);
+    expect(entries(scope).at(-2)).toMatchObject({ protocol: "tcp", destination_ports: [80] });
+    expect(entries(scope).at(-1)).toEqual(pair[1]);
+  });
+  it.each(["host", "interface", "input"] as const)("adds a portless TCP/UDP pair to %s", async scope => {
+    render(scope);
+    await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
+    await change("protocol", "tcp_udp");
+    await wrapper.get("form").trigger("submit");
+    expect(entries(scope).slice(-2)).toEqual(["tcp", "udp"].map(protocol => ({
+      origin: "manual", import_source: null, protocol, action: "accept",
+    })));
+  });
+  it.each(["host", "interface", "input"] as const)("rejects a TCP/UDP pair exceeding the %s rule limit without staging either half", async scope => {
+    const store = useControllerStore(), desired = store.state.data!.desired.firewall;
+    const rules = scope === "host" ? desired.policies!.hosts[0]!.rules : scope === "interface" ? desired.policies!.interfaces[0]!.rules : desired.input!.interfaces[0]!.rules;
+    rules.splice(0, rules.length, ...Array.from({ length: 319 }, () => ({ action: "accept" as const })));
+    render(scope);
+    await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
+    await change("protocol", "tcp_udp");
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.get('[role="alert"]').text()).toContain("At most 320");
+    expect(store.draft).toBeNull();
+    expect(rules).toHaveLength(319);
+    expect(store.editorDirty).toBe(true);
+  });
+  it("rejects invalid paired ports and can cancel the pair without staging", async () => {
+    render("input");
+    await wrapper.findAll("button").find(button => button.text() === "Add rule")!.trigger("click");
+    await change("protocol", "tcp_udp"); await change("ports", "443,443");
+    await wrapper.get("form").trigger("submit");
+    expect(wrapper.get('[role="alert"]').text()).toContain("unique destination ports");
+    expect(useControllerStore().draft).toBeNull();
+    await wrapper.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+    expect(useControllerStore().editorDirty).toBe(false);
+    expect(useControllerStore().draft).toBeNull();
   });
   it.each(["host", "interface", "input"] as const)("displays and preserves imported ownership when editing %s rules", async scope => {
     const store = useControllerStore(), firewall = store.state.data!.desired.firewall;

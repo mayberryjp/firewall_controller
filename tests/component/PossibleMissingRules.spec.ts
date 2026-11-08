@@ -13,6 +13,10 @@ import type { FirewallDenyPage } from "@/services/firewallTelemetry";
 
 vi.mock("@/services/netcontrol", () => ({ getFirewallDenyLog: vi.fn() }));
 const stubs = {
+  VSwitch: {
+    props: ["modelValue", "ariaLabel"], emits: ["update:modelValue"],
+    template: '<input type="checkbox" :aria-label="ariaLabel" :checked="modelValue" @change="$emit(\'update:modelValue\', $event.target.checked)" />',
+  },
   VTable: { template: "<table><slot /></table>" },
   VBtn: { props: ["disabled"], template: '<button :disabled="disabled"><slot /></button>' },
   VIcon: true,
@@ -41,6 +45,63 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; useControllerStore().$dispose(); vi.restoreAllMocks(); });
 
 describe("possible missing rules page", () => {
+  it("filters tagged packets before aggregation, restores totals and keeps period changes and toggles entirely local", async () => {
+    const result = page(), base = result.records[0]!;
+    const tags = [
+      ["ipv4_broadcast"], ["tcp_finish"], ["tcp_reset"], ["tcp_ack_only"], ["tcp_connection_attempt"], [],
+    ] satisfies typeof base.tags[];
+    result.records = tags.map((tags, index) => ({ ...base, id: String(10 - index), source_port: 50000 + index, tags }));
+    const original = JSON.stringify(result);
+    vi.mocked(getFirewallDenyLog).mockResolvedValue(result);
+    wrapper = mount(PossibleMissingRulesView, { global: { stubs } });
+    const broadcast = wrapper.get<HTMLInputElement>('[aria-label="Hide broadcast drops"]');
+    const tcp = wrapper.get<HTMLInputElement>('[aria-label="Hide TCP FIN/RST drops"]');
+    expect(wrapper.get(".missing-rules-toolbar").findAll('input[type="checkbox"]')).toHaveLength(2);
+    expect(broadcast.element.checked).toBe(true); expect(tcp.element.checked).toBe(true);
+    await flushPromises();
+    const totals = () => wrapper!.findAll(".missing-rules-totals [data-color]").map(chip => chip.text());
+    expect(totals()).toEqual(["3 packets", "180 bytes"]);
+    await broadcast.setValue(false); await tcp.setValue(false);
+    expect(totals()).toEqual(["6 packets", "360 bytes"]);
+    await broadcast.setValue(true);
+    expect(totals()).toEqual(["5 packets", "300 bytes"]);
+    await tcp.setValue(true);
+    expect(totals()).toEqual(["3 packets", "180 bytes"]);
+    expect(wrapper.get('[data-label="Packets"]').text()).toBe("3");
+    expect(wrapper.text()).not.toContain("loaded drops shown");
+    expect(wrapper.text()).not.toContain("Captured input/forward drops only");
+    expect(wrapper.text()).not.toContain("Source ports are ignored");
+    await wrapper.get('[aria-label="Time period"]').setValue("4");
+    expect(totals()).toEqual(["3 packets", "180 bytes"]);
+    await broadcast.setValue(false);
+    expect(totals()).toEqual(["4 packets", "240 bytes"]);
+    await tcp.setValue(false);
+    expect(totals()).toEqual(["6 packets", "360 bytes"]);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).toBe(original);
+    expect(useControllerStore().draft).toBeNull();
+  });
+  it("distinguishes hidden retained history from empty history and never hides real read failures", async () => {
+    const result = page(); result.records[0]!.tags = ["ipv4_broadcast"];
+    vi.mocked(getFirewallDenyLog).mockResolvedValue(result);
+    wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).toContain("No drops are visible with these hide filters");
+    expect(wrapper.text()).not.toContain("No retained drops in this period");
+    vi.mocked(getFirewallDenyLog).mockRejectedValue(new ApiFailure("HTTP 500: drop history failed", 500));
+    await wrapper.get('[aria-label="Refresh"]').trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("HTTP 500: drop history failed");
+  });
+  it("does not warn about disabled capture before a completed read and preserves history when logging is disabled", async () => {
+    let resolve!: (value: FirewallDenyPage) => void;
+    vi.mocked(getFirewallDenyLog).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).not.toContain("Drop logging is disabled");
+    const result = page(); result.capture.status = "disabled";
+    resolve(result); await flushPromises();
+    expect(wrapper.text()).toContain("Drop logging is disabled. Existing history is retained");
+    expect(wrapper.get('[data-label="Packets"]').text()).toBe("1");
+    expect(wrapper.text()).not.toContain("Capture is disabled");
+  });
   it("appears directly after Firewall drops in Diagnostics navigation", () => {
     const pages = navigationSections.find(section => section.name === "diagnostics-section")!.pages;
     expect(pages[pages.findIndex(item => item.name === "firewall-drops") + 1]!.name).toBe("possible-missing-rules");
@@ -105,16 +166,16 @@ describe("possible missing rules page", () => {
     expect(useControllerStore().draft).toBeNull();
   });
 
-  it("formats the fixed period boundary in the saved timezone with seconds only, not an unsaved draft", async () => {
+  it("omits period captions while retaining fixed query boundaries and saved-timezone row timestamps", async () => {
     const store = useControllerStore();
     store.state.data!.desired.system = { hostname: "", domain: "", timezone: "America/Los_Angeles" };
     store.draft = cloneConfig(store.state.data!.desired); store.draft.system!.timezone = "Asia/Tokyo";
     wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
-    expect(wrapper.text()).toContain("Period (America/Los_Angeles): 2026-11-08 03:34:56 to 2026-11-08 04:34:56.");
+    expect(wrapper.text()).not.toContain("Period (");
     expect(wrapper.get('[data-label="Last seen (America/Los_Angeles)"] time').text()).toBe("2026-11-08 04:34:56");
     expect(wrapper.get("time").attributes("datetime")).toBe("2026-11-08T12:34:56.789Z");
     expect(wrapper.text()).not.toContain(".789");
-    expect(getFirewallDenyLog).toHaveBeenCalledWith(expect.objectContaining({ until_ms: until }), expect.any(AbortSignal));
+    expect(getFirewallDenyLog).toHaveBeenCalledWith(expect.objectContaining({ since_ms: until - 7 * 86400000, until_ms: until }), expect.any(AbortSignal));
     const updated = cloneConfig(store.state.data!.desired);
     updated.system!.timezone = "Asia/Tokyo";
     store.state.data = { ...store.state.data!, desired: updated };

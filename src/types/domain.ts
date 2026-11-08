@@ -310,6 +310,7 @@ export const configSchema = z.object({
   interfaces: list(interfaceSchema), routes: list(routeSchema),
   firewall: z.object({
     allow_all_icmp: z.boolean().default(true),
+    drop_logging_enabled: z.boolean().default(true),
     policy: z.enum(["accept", "drop"]), rules: list(filterSchema),
     nat: z.object({ masquerade: list(masqueradeSchema), destination_rewrite: z.array(destinationRewriteSchema).optional() }).strict(),
     policies: firewallPoliciesSchema.nullable().optional(),

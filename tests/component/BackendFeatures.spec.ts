@@ -2648,6 +2648,24 @@ describe("October 17 frontend workflows", () => {
     await wrapper.findAll("button").find(button => button.text() === "Reconcile all managed services")!.trigger("click");
     for (const permission of ["gateway_monitors.write", "ntp.write", "syslog.write", "vnstat.write"]) expect(wrapper.text()).toContain(permission);
   });
+  it("places global drop logging last in General settings and stages explicit false through the shared SAVE flow", async () => {
+    const store = useControllerStore(), desired = structuredClone(store.state.data!.desired);
+    const draft = structuredClone(desired); draft.routes[0]!.metric = 42; store.stage(draft);
+    const apply = vi.spyOn(store, "apply");
+    const wrapper = await render(SettingsView, "/settings/general");
+    try {
+      expect(wrapper.findAll(".setting-row").at(-1)!.get(".setting-name").text()).toBe("Log firewall drops");
+      const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-drop-logging")!;
+      expect(toggle.props("modelValue")).toBe(true);
+      toggle.vm.$emit("update:modelValue", false); await flushPromises();
+      await wrapper.get("form").trigger("submit");
+      expect(store.draft!.firewall.drop_logging_enabled).toBe(false);
+      expect(store.draft!.routes[0]!.metric).toBe(42);
+      expect(store.state.data!.desired).toEqual(desired);
+      expect(requiredPermissions(store.diff)).toContain("firewall.write");
+      expect(apply).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
   it("stages global ICMP from General settings in both firewall modes without adding implicit rows", async () => {
     const store = useControllerStore();
     for (const policyMode of [false, true]) {
@@ -2730,7 +2748,7 @@ describe("October 17 frontend workflows", () => {
     const submit = vi.spyOn(api, "submitPackage");
     const wrapper = await render(SettingsView, "/settings/general");
     const toggles = wrapper.findAllComponents(stubs.VSwitch);
-    expect(toggles.map(toggle => toggle.attributes("id"))).toEqual(["general-ipv6", "general-icmp", "general-dhcp-dns"]);
+    expect(toggles.map(toggle => toggle.attributes("id"))).toEqual(["general-ipv6", "general-icmp", "general-dhcp-dns", "general-drop-logging"]);
     expect(wrapper.get('label[for="general-ipv6"]').text()).toBe("Enable IPv6");
     expect(wrapper.get('label[for="general-icmp"]').text()).toBe("Allow all IPv4 ICMP");
     expect(store.ipv6Enabled).toBe(true);
@@ -2788,7 +2806,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).not.toContain("Observed IPv6 controls");
     expect(wrapper.find('[aria-label="Refresh IPv6 runtime"]').exists()).toBe(false);
     expect(wrapper.find("details").exists()).toBe(false);
-    expect(wrapper.findAllComponents(stubs.VSwitch)).toHaveLength(3);
+    expect(wrapper.findAllComponents(stubs.VSwitch)).toHaveLength(4);
     wrapper.unmount();
   });
   it("keeps IPv6 enabled when disabling would invalidate saved IPv6 settings", async () => {

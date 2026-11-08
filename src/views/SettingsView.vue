@@ -7,6 +7,7 @@ import { getTimezones } from "@/services/netcontrol";
 const store = useControllerStore();
 const selectedConfig = computed(() => store.draft ?? store.state.data?.desired);
 const allowICMP = ref(true);
+const logDrops = ref(true);
 const enableIPv6 = ref(false);
 const overrideDhcpDns = ref(true);
 const dnsOverrideChanged = ref(false);
@@ -25,6 +26,7 @@ const blocked = computed(() => Boolean(store.readOnlyReason) || !selectedConfig.
 watch(() => selectedConfig.value?.firewall.allow_all_icmp, value => {
   if (value !== undefined) allowICMP.value = value;
 }, { immediate: true });
+watch(() => selectedConfig.value?.firewall.drop_logging_enabled, value => { logDrops.value = value !== false; }, { immediate: true });
 watch(() => selectedConfig.value?.ipv6_enabled, value => { enableIPv6.value = value === true; }, { immediate: true });
 watch(selectedConfig, value => {
   overrideDhcpDns.value = value?.interfaces.every(link => value.dns?.[link.name]?.override_dhcp_dns !== false) ?? true;
@@ -56,6 +58,7 @@ function stage(): void {
       if (conflicts.length) throw new Error(`Remove IPv6 settings before disabling IPv6: ${conflicts.join(", ")}.`);
     }
     candidate.firewall.allow_all_icmp = allowICMP.value;
+    candidate.firewall.drop_logging_enabled = logDrops.value;
     if (dnsOverrideChanged.value) {
       candidate.dns ??= {};
       for (const link of candidate.interfaces) {
@@ -276,6 +279,35 @@ function stage(): void {
             <template v-if="dnsOverrideMixed && !dnsOverrideChanged">
               Current interfaces have different values. Toggle to choose one value for all.
             </template>
+          </p>
+        </div>
+      </div>
+      <v-divider />
+      <div class="setting-row">
+        <label
+          for="general-drop-logging"
+          class="setting-name"
+        >
+          Log firewall drops
+        </label>
+        <div class="setting-control">
+          <v-switch
+            id="general-drop-logging"
+            v-model="logDrops"
+            aria-label="Log firewall drops"
+            aria-describedby="general-drop-logging-description"
+            :disabled="blocked"
+            density="compact"
+            hide-details
+            color="primary"
+          />
+          <p
+            id="general-drop-logging-description"
+            class="setting-desc"
+          >
+            Record dropped packets for drop history and Discord alerts. Turning this off keeps
+            existing history, firewall protection and rule counters, but new drops are not recorded.
+            Turning it back on resumes future capture without backfilling missed drops.
           </p>
         </div>
       </div>

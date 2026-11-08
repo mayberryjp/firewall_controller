@@ -16,6 +16,7 @@ import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures
 import { pathTestRequest, pathTestStatus } from "../pathTestFixtures";
 import { conntrackCatalog, conntrackSnapshot } from "../conntrackFixtures";
 import { discordStatus, webhookReference, webhookUrl } from "../discordFixtures";
+import { discordDefaults } from "@/services/discord";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -58,7 +59,7 @@ describe("controller-proxied API boundary", () => {
   });
   it("preserves private references in complete confirmed packages and refuses to confirm dropped Discord settings", async () => {
     const candidate = config();
-    candidate.discord = { enabled: true, webhook_ref: webhookReference };
+    candidate.discord = { ...discordDefaults(), enabled: true, webhook_ref: webhookReference };
     const pending = transaction(); pending.candidate = candidate;
     status = 202; body = encodeJson(pending);
     expect((await net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 })).candidate.discord)

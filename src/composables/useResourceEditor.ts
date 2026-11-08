@@ -7,7 +7,7 @@ import { record, type Field } from "@/types/forms";
 import { preset, resourceFields, type Section } from "@/services/resourceForms";
 import { cloneConfig, numericAddress, prefix, stableJson, validateConfig } from "@/services/configuration";
 import { interfaceChoice, resourceItems, replaceResourceItems, routeGatewayMode } from "@/services/resourceCollections";
-import { supportsFirewallPorts, parseFirewallPorts } from "@/services/firewallProtocols";
+import { firewallEditorSupportsPorts, expandFirewallProtocol, parseFirewallPorts } from "@/services/firewallProtocols";
 import { compareInterfaceNames, formatInterfaceName } from "@/services/interfaceNames";
 
 export function useResourceEditor(section: Section, wireguard = false, vlan = false, loopbacks = false) {
@@ -47,7 +47,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       adopted.value, immutable.value, form.value.kind, form.value.family, familyInterfaces.value, wireguard, editingIndex.value < 0, vlan)
       .map(field => loopbacks && field.key === "kind" ? { ...field, disabled: true, choices: [{ title: "Loopback", value: "dummy" }] } :
         field.key === "family" && !store.ipv6Enabled ? { ...field, choices: field.choices?.filter(choice => choice.value !== "ipv6") } :
-          section === "firewall" && field.key === "destination_ports" ? { ...field, disabled: !supportsFirewallPorts(form.value.protocol) } : field);
+          section === "firewall" && field.key === "destination_ports" ? { ...field, disabled: !firewallEditorSupportsPorts(form.value.protocol) } : field);
     if (section !== "routes") return result;
     return result.map(field => field.key === "gateway" ? { ...field, disabled: form.value.gateway_mode !== "static" } :
       field.key === "gateway_mode" ? {
@@ -181,7 +181,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
         else delete next.gateway;
       }
     }
-    if (section === "firewall" && key === "protocol" && !supportsFirewallPorts(value)) next.destination_ports = "";
+    if (section === "firewall" && key === "protocol" && !firewallEditorSupportsPorts(value)) next.destination_ports = "";
     if (section === "gateway_monitors" && ["interface", "target"].includes(key)) {
       next = inferMonitor(next);
       errors.value = {}; formError.value = "";
@@ -279,11 +279,19 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
         for (const key of ["address_mode", "dhcp_client", "resolver_enabled", "resolver"]) delete value[key];
       }
       const values = [...resourceItems(candidate, section)], index = editingIndex.value < 0 ? values.length : editingIndex.value;
-      values[index] = value;
+      const additions = section === "firewall" ? expandFirewallProtocol(value.protocol, editingIndex.value < 0).map(protocol => {
+        const rule = { ...value };
+        if (protocol) rule.protocol = protocol;
+        else delete rule.protocol;
+        return rule;
+      }) : [value];
+      values.splice(index, editingIndex.value < 0 ? 0 : 1, ...additions);
       replaceResourceItems(candidate, section, values);
       const basePath = section === "firewall" ? `firewall.rules.${index}` : section === "nat" ? `firewall.nat.masquerade.${index}` : `${section}.${index}`;
       const ownIssues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.state.data?.desired).filter(issue =>
         issue.path === basePath || issue.path.startsWith(`${basePath}.`) ||
+        (section === "firewall" && additions.some((_, offset) =>
+          issue.path === `firewall.rules.${index + offset}` || issue.path.startsWith(`firewall.rules.${index + offset}.`))) ||
         (section === "firewall" && issue.path === "firewall.rules") ||
         (section === "interfaces" && ["dhcp_clients", "dns"].some(area => issue.path === `${area}.${String(value.name)}` || issue.path.startsWith(`${area}.${String(value.name)}.`))));
       for (const issue of ownIssues) {

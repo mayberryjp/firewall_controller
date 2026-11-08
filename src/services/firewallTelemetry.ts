@@ -4,6 +4,7 @@ import { selectedRelayPrefix, stableJson } from "@/services/configuration";
 import type { Config, StateView } from "@/types/domain";
 import { ruleOwnershipShape, validateRuleOwnership, withoutRuleOwnership, type RuleOwnership } from "@/services/ruleOwnership";
 import { compareInterfaceNames, formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
+import { formatIpProtocol } from "@/services/firewallProtocols";
 
 const integer = z.number().int().safe().nonnegative();
 const decimal = z.string().regex(/^(0|[1-9]\d*)$/);
@@ -14,6 +15,7 @@ const hash = z.string().regex(/^[0-9a-f]{64}$/);
 const milliseconds = integer.max(253402300799999);
 const port = integer.max(65535).nullable();
 const interfaceIndex = integer.positive().nullable();
+export const firewallDropTagSchema = z.enum(["tcp_finish", "tcp_reset", "tcp_ack_only", "tcp_connection_attempt", "ipv4_broadcast"]);
 
 export const firewallDenyQuerySchema = z.object({
   limit: integer.min(1).max(500).optional(),
@@ -33,6 +35,8 @@ export const firewallDenyRecordSchema = z.object({
   ingress: z.string().nullable(), egress: z.string().nullable(),
   packet_length: integer, chain: z.enum(["input", "forward"]), reason: z.enum(["rule", "policy"]),
   compiled_rule_index: integer.nullable(), ruleset_id: hash,
+  tcp_flags: integer.max(255).nullable(), tcp_payload_length: integer.nullable(),
+  tags: z.array(firewallDropTagSchema),
 }).strict().refine(value => value.reason !== "policy" || value.compiled_rule_index === null, "Default-policy records cannot have a rule index");
 export const firewallDenyPageSchema = z.object({
   records: z.array(firewallDenyRecordSchema).max(500),
@@ -40,7 +44,7 @@ export const firewallDenyPageSchema = z.object({
   cursor_expired: z.boolean(),
   retention: z.object({ max_records: integer.positive(), max_segment_bytes: integer.positive(), segments: integer.positive() }).strict(),
   capture: z.object({
-    status: z.enum(["starting", "capturing", "error", "stopped"]), error: z.string().nullable(),
+    status: z.enum(["starting", "capturing", "disabled", "error", "stopped"]), error: z.string().nullable(),
     group: integer, rate_limit_per_second: integer,
     discarded_records: uint64, malformed_records: uint64, overflow_events: uint64, sequence_gaps: uint64,
     counters_scope: z.literal("daemon_session"), loss_count_exact: z.literal(false),
@@ -54,6 +58,31 @@ export const firewallDenyPageSchema = z.object({
   }
 });
 export type FirewallDenyPage = z.infer<typeof firewallDenyPageSchema>;
+export function visibleFirewallDrops(rows: readonly FirewallDenyPage["records"][number][], hideBroadcast: boolean, hideTcp: boolean): FirewallDenyPage["records"] {
+  return rows.filter(row => !(hideBroadcast && row.tags.includes("ipv4_broadcast")) &&
+    !(hideTcp && row.tags.some(tag => tag === "tcp_finish" || tag === "tcp_reset")));
+}
+export type FirewallDropSortColumn = "timestamp_ms" | "source" | "destination" | "protocol" | "ingress" | "egress" | "packet_length" | "reason";
+
+export function sortFirewallDrops(rows: readonly FirewallDenyPage["records"][number][], column: FirewallDropSortColumn, descending: boolean): FirewallDenyPage["records"] {
+  const compare = (first: string | number | null, second: string | number | null): number => {
+    if (first === null) return second === null ? 0 : 1;
+    if (second === null) return -1;
+    const comparison = typeof first === "string" && typeof second === "string"
+      ? first.localeCompare(second, undefined, { numeric: true, sensitivity: "base" })
+      : first < second ? -1 : first > second ? 1 : 0;
+    return descending ? -comparison : comparison;
+  };
+  const value = (row: FirewallDenyPage["records"][number]) => column === "protocol" ? formatIpProtocol(row.protocol) : row[column];
+  return [...rows].sort((left, right) => {
+    const comparison = compare(value(left), value(right));
+    if (comparison) return comparison;
+    if (column === "source") return compare(left.source_port, right.source_port);
+    if (column === "destination") return compare(left.destination_port, right.destination_port);
+    if (column === "reason") return compare(left.chain, right.chain);
+    return 0;
+  });
+}
 
 export const firewallCountersSchema = z.object({
   schema: z.literal("netcontrol-firewall-counters/v1"),

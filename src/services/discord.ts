@@ -1,9 +1,12 @@
 import { z } from "zod";
 
 const reference = z.string().regex(/^(?:|[a-f0-9]{32})$/, "Use a stored Discord webhook reference.");
-export interface DiscordConfig { enabled: boolean; webhook_ref: string }
-export const discordConfigSchema: z.ZodType<DiscordConfig, z.ZodTypeDef, { enabled?: boolean; webhook_ref?: string }> = z.object({
+export interface DiscordConfig { enabled: boolean; webhook_ref: string; notify_broadcast: boolean; notify_tcp_closures: boolean }
+export const discordConfigSchema: z.ZodType<DiscordConfig, z.ZodTypeDef, {
+  enabled?: boolean; webhook_ref?: string; notify_broadcast?: boolean; notify_tcp_closures?: boolean;
+}> = z.object({
   enabled: z.boolean().default(false), webhook_ref: reference.default(""),
+  notify_broadcast: z.boolean().default(false), notify_tcp_closures: z.boolean().default(false),
 }).strict().refine(value => !value.enabled || Boolean(value.webhook_ref), {
   path: ["webhook_ref"], message: "Store a webhook before enabling Discord notifications.",
 });
@@ -19,6 +22,7 @@ export function redactDiscordError(text: string): string {
 }
 export interface DiscordStatus {
   enabled: boolean;
+  notify_broadcast: boolean; notify_tcp_closures: boolean;
   state: "starting" | "disabled" | "simulated" | "unavailable" | "paused" | "ready" | "error" | "stopped";
   delivered: string; failed: string; last_drop_id: string | null; error: string | null;
   counters_scope: "daemon_session";
@@ -26,10 +30,11 @@ export interface DiscordStatus {
 }
 export const discordStatusSchema: z.ZodType<DiscordStatus> = z.object({
   enabled: z.boolean(),
+  notify_broadcast: z.boolean(), notify_tcp_closures: z.boolean(),
   state: z.enum(["starting", "disabled", "simulated", "unavailable", "paused", "ready", "error", "stopped"]),
   delivered: z.string().regex(/^(0|[1-9]\d*)$/), failed: z.string().regex(/^(0|[1-9]\d*)$/),
   last_drop_id: z.string().nullable(), error: z.string().transform(redactDiscordError).nullable(),
   counters_scope: z.literal("daemon_session"),
   deduplication: z.tuple([z.literal("source"), z.literal("destination"), z.literal("destination_port"), z.literal("protocol")]),
 });
-export const discordDefaults = (): DiscordConfig => ({ enabled: false, webhook_ref: "" });
+export const discordDefaults = (): DiscordConfig => ({ enabled: false, webhook_ref: "", notify_broadcast: false, notify_tcp_closures: false });

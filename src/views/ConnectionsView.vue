@@ -4,8 +4,10 @@ import { useControllerStore } from "@/stores/controller";
 import { getConnections, connectionSelector, deleteConnection, deleteAllConnections, type ConnectionsQuery } from "@/services/netcontrol";
 import { ApiFailure } from "@/services/api";
 import { useTimestamps } from "@/composables/useTimestamps";
+import { useHostnames } from "@/composables/useHostnames";
 import type { Connection, ConnectionsPage } from "@/types/domain";
 const { formatTimestamp, timeZone } = useTimestamps();
+const { formatHostAddress } = useHostnames();
 
 const store = useControllerStore();
 const data = ref<ConnectionsPage | null>(null), loading = ref(false), error = ref("");
@@ -383,7 +385,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
             v-if="selectedConnection"
             class="mono"
           >
-            {{ selectedConnection.original.source }} to {{ selectedConnection.original.destination }} / {{ selectedConnection.family }} / {{ selectedConnection.protocol }} / zone {{ selectedConnection.zone }} / ID {{ selectedConnection.id }}
+            {{ formatHostAddress(selectedConnection.original.source) }} to {{ formatHostAddress(selectedConnection.original.destination) }} / {{ selectedConnection.family }} / {{ selectedConnection.protocol }} / zone {{ selectedConnection.zone }} / ID {{ selectedConnection.id }}
           </p>
           <p v-else>
             All IPv4 and IPv6 connection states in every zone of {{ selectedScope }} will be removed, including local and unmanaged traffic. Current filters and pagination do not limit this flush.
@@ -480,7 +482,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
                 data-label="Source"
               >
                 <div class="endpoint-value">
-                  <span class="mono">{{ row.original.source }}</span>
+                  <span class="mono">{{ formatHostAddress(row.original.source) }}</span>
                 </div>
               </td>
               <td
@@ -488,7 +490,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
                 data-label="Destination"
               >
                 <div class="endpoint-value">
-                  <span class="mono">{{ row.original.destination }}</span><v-chip
+                  <span class="mono">{{ formatHostAddress(row.original.destination) }}</span><v-chip
                     v-if="row.original.destination_port !== null"
                     size="x-small"
                     variant="tonal"

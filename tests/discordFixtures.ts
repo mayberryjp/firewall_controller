@@ -5,6 +5,7 @@ export const webhookUrl = "https://discord.com/api/webhooks/123456789/abcdefghij
 export function discordStatus(): DiscordStatus {
   return {
     enabled: false, state: "disabled", delivered: "0", failed: "0", last_drop_id: null, error: null,
+    notify_broadcast: false, notify_tcp_closures: false,
     counters_scope: "daemon_session", deduplication: ["source", "destination", "destination_port", "protocol"],
   };
 }

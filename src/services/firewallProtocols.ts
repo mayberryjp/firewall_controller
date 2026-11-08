@@ -5,6 +5,18 @@ export const firewallProtocolChoices = [
   { title: "Any", value: "" }, { title: "TCP", value: "tcp" }, { title: "UDP", value: "udp" },
   { title: "ICMP", value: "icmp" }, { title: "ICMPv6", value: "icmpv6" },
 ];
+export const firewallCreationProtocolChoices = [
+  ...firewallProtocolChoices.slice(0, 3),
+  { title: "TCP & UDP", value: "tcp_udp" },
+  ...firewallProtocolChoices.slice(3),
+];
+export function firewallEditorSupportsPorts(protocol: unknown): boolean {
+  return protocol === "tcp_udp" || supportsFirewallPorts(protocol);
+}
+export function expandFirewallProtocol(protocol: unknown, creating: boolean): Array<z.infer<typeof firewallProtocolSchema>> {
+  if (creating && protocol === "tcp_udp") return ["tcp", "udp"];
+  return [firewallProtocolSchema.parse(protocol === undefined ? "" : protocol)];
+}
 export function supportsFirewallPorts(protocol: unknown): boolean {
   return protocol === "tcp" || protocol === "udp";
 }

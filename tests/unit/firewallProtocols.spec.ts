@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { configSchema, destinationRewriteSchema, type Config } from "@/types/domain";
 import { cloneConfig, differences, importConfig, normalize, validateConfig } from "@/services/configuration";
-import { firewallProtocolSchema, parseFirewallPorts, formatFirewallProtocol } from "@/services/firewallProtocols";
+import { firewallProtocolSchema, expandFirewallProtocol, firewallEditorSupportsPorts, supportsFirewallPorts, parseFirewallPorts, formatFirewallProtocol } from "@/services/firewallProtocols";
 import { utf8Size } from "@/services/json";
 import { config } from "../fixtures";
 
@@ -39,7 +39,7 @@ describe.each(scopes)("%s firewall protocols", scope => {
     expect(differences(before, candidate)).toHaveLength(scope === "legacy" ? 2 : 1);
     expect(rules(candidate, scope)[0]!.destination_ports).toEqual(protocol === "tcp" || protocol === "udp" ? [443, 80] : undefined);
   });
-  it.each(["ICMP", "icmp6", "ipv6-icmp", "sctp", 1, 58, null])("rejects unsupported protocol %j rather than broadening to Any", protocol => {
+  it.each(["ICMP", "icmp6", "ipv6-icmp", "sctp", "tcp_udp", 1, 58, null])("rejects unsupported protocol %j rather than broadening to Any", protocol => {
     const candidate = configured(scope, "icmp");
     const wire = JSON.parse(JSON.stringify(candidate));
     Object.assign(rules(wire, scope)[0]!, { protocol });
@@ -64,6 +64,14 @@ describe.each(scopes)("%s firewall protocols", scope => {
 });
 
 describe("firewall protocol limits", () => {
+  it("expands the creation-only TCP/UDP option without widening the wire protocol or port validator", () => {
+    expect(expandFirewallProtocol("tcp_udp", true)).toEqual(["tcp", "udp"]);
+    expect(firewallEditorSupportsPorts("tcp_udp")).toBe(true);
+    expect(supportsFirewallPorts("tcp_udp")).toBe(false);
+    expect(() => expandFirewallProtocol("tcp_udp", false)).toThrow();
+    expect(expandFirewallProtocol(undefined, true)).toEqual([""]);
+    expect(expandFirewallProtocol("tcp", false)).toEqual(["tcp"]);
+  });
   it("normalizes legacy Any/empty ports and sorted port sets without reordering rules", () => {
     const before = configured("legacy", "tcp");
     before.firewall.rules = [{ protocol: "", destination_ports: [], action: "drop" }, { protocol: "tcp", destination_ports: [443, 80], action: "accept" }];

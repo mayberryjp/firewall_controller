@@ -4,6 +4,27 @@ import { decodeJson, encodeJson, utf8Size } from "@/services/json";
 import { differenceContext, differences, endpoint, equalConfig, importConfig, normalize, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, statistics, transaction } from "../fixtures";
 
+describe("global firewall drop logging", () => {
+  it("defaults omitted input to enabled and preserves explicit false through import, normalization and review", () => {
+    const before = config();
+    const omitted = { ...before, firewall: { ...before.firewall, drop_logging_enabled: undefined } };
+    expect(configSchema.parse(omitted).firewall.drop_logging_enabled).toBe(true);
+    expect(equalConfig(before, configSchema.parse(omitted))).toBe(true);
+    const after = config(); after.firewall.drop_logging_enabled = false;
+    expect(importConfig(encodeJson(after)).firewall.drop_logging_enabled).toBe(false);
+    expect(normalize(after).firewall.drop_logging_enabled).toBe(false);
+    const diff = differences(before, after);
+    expect(diff).toEqual([{
+      area: "firewall-logging", identity: "Log firewall drops", kind: "modified", before: true, after: false,
+    }]);
+    expect(requiredPermissions(diff)).toEqual(["transactions.write", "firewall.write"]);
+    expect(differenceContext(before, after, diff[0]!).after.firewall.drop_logging_enabled).toBe(false);
+  });
+  it.each([null, 0, "false"])("rejects invalid drop logging value %j", value => {
+    expect(configSchema.safeParse({ ...config(), firewall: { ...config().firewall, drop_logging_enabled: value } }).success).toBe(false);
+  });
+});
+
 describe("explicit IPv6 policy", () => {
   function ipv4Config() {
     const value = config();
@@ -281,7 +302,7 @@ describe("semantic configuration comparison", () => {
   it("ignores backend-normalized ordering and JSON key order", () => {
     const before = config(), after = config();
     after.interfaces[0]!.addresses.reverse();
-    after.firewall = { nat: after.firewall.nat, rules: after.firewall.rules, policy: after.firewall.policy, allow_all_icmp: after.firewall.allow_all_icmp };
+    after.firewall = { nat: after.firewall.nat, rules: after.firewall.rules, policy: after.firewall.policy, allow_all_icmp: after.firewall.allow_all_icmp, drop_logging_enabled: after.firewall.drop_logging_enabled };
     expect(equalConfig(before, after)).toBe(true);
   });
   it("preserves ordered firewall/NAT moves and counts default policy separately", () => {

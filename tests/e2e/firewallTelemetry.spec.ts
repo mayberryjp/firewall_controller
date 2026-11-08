@@ -12,6 +12,129 @@ async function connect(page: Page) {
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
 }
 
+test("drop hide switches preserve history, use untouched cursors and recalculate missing-rule totals locally", async ({ page, isMobile }) => {
+  const backend = await mockBackend(page), queries: URLSearchParams[] = [];
+  const until = Date.parse("2026-11-08T12:34:56.789Z");
+  await page.route("**/firewall/deny-log*", route => {
+    const params = new URL(route.request().url()).searchParams; queries.push(params);
+    const result = firewallDenyPage(), base = { ...result.records[0]!, timestamp_ms: until };
+    result.capture.status = "disabled";
+    result.records = params.has("before_id") ? [
+      { ...base, id: "8", tags: ["tcp_ack_only"], tcp_flags: 16, tcp_payload_length: 0 },
+      { ...base, id: "7", tags: ["tcp_connection_attempt"], tcp_flags: 2 },
+      { ...base, id: "6", tags: ["tcp_reset", "ipv4_broadcast"], tcp_flags: 4 },
+      { ...base, id: "5", tags: [] },
+    ] : [
+      { ...base, id: "10", tags: ["ipv4_broadcast"] },
+      { ...base, id: "9", tags: ["tcp_finish"], tcp_flags: 1 },
+    ];
+    result.next_before_id = params.has("before_id") ? null : "9";
+    return route.fulfill({ json: result });
+  });
+  await connect(page); await page.clock.setFixedTime(until);
+  await page.goto("/diagnostics/firewall-drops");
+  const drops = page.getByRole("region", { name: "Firewall drops", exact: true });
+  const broadcast = drops.getByRole("checkbox", { name: "Hide broadcast drops", exact: true });
+  const tcp = drops.getByRole("checkbox", { name: "Hide TCP FIN/RST drops", exact: true });
+  await expect(broadcast).toBeChecked(); await expect(tcp).toBeChecked();
+  await expect(drops).not.toContainText("Retained input/forward drops only");
+  await expect(drops).not.toContainText("Bytes are IP packet lengths, not flow totals");
+  await expect(drops.locator(".drop-toolbar .drop-visibility-controls .v-switch")).toHaveCount(2);
+  if (!isMobile) {
+    const positions = await drops.locator(".drop-visibility-controls").evaluate(toolbar => {
+      const timeFilter = toolbar.querySelector('[aria-label="More filters"]')!.getBoundingClientRect();
+      return Array.from(toolbar.querySelectorAll(".v-switch")).map(toggle => {
+        const bounds = toggle.getBoundingClientRect();
+        return { centerOffset: bounds.top + bounds.height / 2 - timeFilter.top - timeFilter.height / 2, afterTimeFilter: bounds.left >= timeFilter.right };
+      });
+    });
+    for (const position of positions) {
+      expect(Math.abs(position.centerOffset)).toBeLessThanOrEqual(1);
+      expect(position.afterTimeFilter).toBe(true);
+    }
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(drops).toContainText("Drop logging is disabled. Existing history is retained");
+  await expect(drops.locator(".drop-row")).toHaveCount(0);
+  await expect(drops).toContainText("No loaded drops are visible with these hide filters");
+  expect(queries).toHaveLength(1);
+  await drops.getByRole("button", { name: "Load older", exact: true }).click();
+  await expect(drops.locator(".drop-row")).toHaveCount(3);
+  expect(queries[1]!.get("before_id")).toBe("9");
+  await broadcast.uncheck(); await tcp.uncheck();
+  await expect(drops.locator(".drop-row")).toHaveCount(6);
+  expect(queries).toHaveLength(2);
+  await page.goto("/diagnostics/possible-missing-rules");
+  const missing = page.getByRole("region", { name: "Possible missing rules", exact: true });
+  const totals = missing.locator(".missing-rules-totals .v-chip");
+  const hideBroadcast = missing.getByRole("checkbox", { name: "Hide broadcast drops", exact: true });
+  const hideTcp = missing.getByRole("checkbox", { name: "Hide TCP FIN/RST drops", exact: true });
+  await expect(totals).toHaveText(["3 packets", "180 bytes"]);
+  await expect(hideBroadcast).toBeChecked(); await expect(hideTcp).toBeChecked();
+  await expect(missing.locator(".missing-rules-toolbar .v-switch")).toHaveCount(2);
+  if (!isMobile) {
+    const positions = await missing.locator(".missing-rules-toolbar").evaluate(toolbar => {
+      const period = toolbar.querySelector(".missing-rules-period")!.getBoundingClientRect();
+      return Array.from(toolbar.querySelectorAll(".v-switch")).map(toggle => {
+        const bounds = toggle.getBoundingClientRect();
+        return { centerOffset: bounds.top + bounds.height / 2 - period.top - period.height / 2, afterDropdown: bounds.left >= period.right };
+      });
+    });
+    for (const position of positions) {
+      expect(Math.abs(position.centerOffset)).toBeLessThanOrEqual(1);
+      expect(position.afterDropdown).toBe(true);
+    }
+  }
+  await hideBroadcast.uncheck(); await hideTcp.uncheck();
+  await expect(totals).toHaveText(["6 packets", "360 bytes"]);
+  await hideBroadcast.check();
+  await expect(totals).toHaveText(["4 packets", "240 bytes"]);
+  await hideTcp.check();
+  await expect(totals).toHaveText(["3 packets", "180 bytes"]);
+  await hideBroadcast.uncheck(); await hideTcp.uncheck();
+  await expect(totals).toHaveText(["6 packets", "360 bytes"]);
+  expect(queries).toHaveLength(4);
+  expect(queries.every(params => !params.has("tag") && !params.has("exclude_tags"))).toBe(true);
+  expect(backend.writes).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.reload();
+  await expect(hideBroadcast).toBeChecked(); await expect(hideTcp).toBeChecked();
+  await expect(totals).toHaveText(["3 packets", "180 bytes"]);
+  await page.goto("/diagnostics/firewall-drops");
+  await expect(broadcast).toBeChecked(); await expect(tcp).toBeChecked();
+  await expect(drops.locator(".drop-row")).toHaveCount(0);
+});
+
+test("General settings places drop logging last and preserves explicit false through reviewed SAVE and confirmation", async ({ page }) => {
+  const backend = await mockBackend(page), dialogs: string[] = [];
+  page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
+  await page.route("**/*timezones*", route => route.fulfill({ json: { timezones: ["UTC"] } }));
+  await connect(page); await page.goto("/settings/general");
+  const settings = page.getByRole("region", { name: "General settings", exact: true });
+  await expect(settings.locator(".setting-row").last().locator(".setting-name")).toHaveText("Log firewall drops");
+  const logging = settings.getByRole("checkbox", { name: "Log firewall drops", exact: true });
+  await expect(logging).toBeChecked();
+  await logging.uncheck();
+  await settings.getByRole("button", { name: "Save", exact: true }).click();
+  expect(backend.writes).toEqual([]); expect(dialogs).toEqual([]);
+  await page.getByRole("link", { name: "Save configuration", exact: true }).click();
+  await expect(page.getByRole("region", { name: "SAVE", exact: true })).toContainText("Log firewall drops");
+  await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+  const push = page.getByRole("dialog");
+  await expect(push).toContainText("firewall.write");
+  await push.getByRole("button", { name: "Push changes", exact: true }).click();
+  await expect(push.getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
+  expect(backend.writes.find(write => write.path === "/transactions")?.body).toMatchObject({
+    config: { firewall: { drop_logging_enabled: false } },
+  });
+  await push.getByRole("button", { name: "Confirm changes", exact: true }).click();
+  await expect(push).not.toBeVisible();
+  await page.goto("/settings/general");
+  await expect(logging).not.toBeChecked();
+  expect(dialogs).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("possible missing rules summarizes all drop pages across time periods and fits compact screens", async ({ page }) => {
   const backend = await mockBackend(page);
   const until = Date.parse("2026-11-08T12:34:56.789Z");
@@ -51,7 +174,10 @@ test("possible missing rules summarizes all drop pages across time periods and f
   await expect(table.locator('[data-label="Reason"] .v-chip')).toHaveClass(/text-error/);
   await expect(table.locator('[data-label="Last seen (UTC)"] time')).toHaveText("2026-11-08 12:34:56");
   await expect(table.locator("time")).toHaveAttribute("datetime", "2026-11-08T12:34:56.789Z");
-  await expect(view).toContainText("Period (UTC): 2026-11-08 11:34:56 to 2026-11-08 12:34:56.");
+  await expect(view).not.toContainText("Period (");
+  await expect(view).not.toContainText("Captured input/forward drops only");
+  await expect(view).not.toContainText("Source ports are ignored");
+  await expect(view).not.toContainText("loaded drops shown");
   for (const [period, count] of [["Last 4 hours", "2"], ["Last 8 hours", "3"], ["Last day", "4"], ["Last week", "5"]]) {
     await view.getByRole("combobox", { name: "Time period", exact: true }).press("ArrowDown");
     await page.getByRole("option", { name: period, exact: true }).click();
@@ -61,6 +187,47 @@ test("possible missing rules summarizes all drop pages across time periods and f
   expect(queries).toHaveLength(2);
   expect(queries[1]!.get("before_id")).toBe("9");
   expect(queries.every(params => params.get("since_ms") === String(until - 7 * 86400000) && params.get("until_ms") === String(until))).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(backend.writes).toEqual([]);
+});
+
+test("firewall drops sorts loaded rows with keyboard-accessible headers on desktop and mobile", async ({ page }) => {
+  const backend = await mockBackend(page);
+  const queries: URLSearchParams[] = [];
+  await page.route("**/firewall/deny-log*", route => {
+    const params = new URL(route.request().url()).searchParams; queries.push(params);
+    const result = firewallDenyPage(), base = result.records[0]!;
+    result.records = params.has("before_id") ? [{ ...base, id: "3", source: "192.0.2.3", packet_length: 100 }] : [
+      { ...base, id: "6", source: "192.0.2.10", packet_length: 1000 },
+      { ...base, id: "5", source: "192.0.2.2", packet_length: 60 },
+      { ...base, id: "4", source: "192.0.2.20", packet_length: 200 },
+    ];
+    result.next_before_id = params.has("before_id") ? null : "4";
+    return route.fulfill({ json: result });
+  });
+  await connect(page); await page.goto("/diagnostics/firewall-drops");
+  const view = page.getByRole("region", { name: "Firewall drops", exact: true });
+  const sources = view.locator('.drop-row [data-label="Source / port"] .mono');
+  const values = view.locator('.drop-row [data-label="Bytes"]');
+  await expect(sources).toHaveText(["192.0.2.10", "192.0.2.2", "192.0.2.20"]);
+  const sourceHeader = view.getByRole("columnheader", { name: "Source / port", exact: true });
+  await sourceHeader.getByRole("button").press("Enter");
+  await expect(sourceHeader).toHaveAttribute("aria-sort", "ascending");
+  await expect(sources).toHaveText(["192.0.2.2", "192.0.2.10", "192.0.2.20"]);
+  expect(queries).toHaveLength(1);
+  const bytesHeader = view.getByRole("columnheader", { name: "Bytes", exact: true });
+  await bytesHeader.getByRole("button").click();
+  await expect(bytesHeader).toHaveAttribute("aria-sort", "ascending");
+  await expect(values).toHaveText(["60", "200", "1000"]);
+  await bytesHeader.getByRole("button").press("Enter");
+  await expect(bytesHeader).toHaveAttribute("aria-sort", "descending");
+  await expect(values).toHaveText(["1000", "200", "60"]);
+  await view.getByRole("button", { name: "Load older", exact: true }).click();
+  await expect(values).toHaveText(["1000", "200", "100", "60"]);
+  expect(queries.at(-1)!.get("before_id")).toBe("4");
+  await view.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(values).toHaveText(["1000", "200", "60"]);
+  await expect(bytesHeader).toHaveAttribute("aria-sort", "descending");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(backend.writes).toEqual([]);
 });

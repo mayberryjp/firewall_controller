@@ -7,6 +7,7 @@ import { getDiscordStatus, uploadDiscordWebhook } from "@/services/netcontrol";
 import { cloneConfig, requiredPermissions } from "@/services/configuration";
 import { state } from "../fixtures";
 import { discordStatus, webhookReference, webhookUrl } from "../discordFixtures";
+import { discordDefaults } from "@/services/discord";
 
 vi.mock("@/services/netcontrol", async importOriginal => ({
   ...await importOriginal<typeof import("@/services/netcontrol")>(),
@@ -14,6 +15,7 @@ vi.mock("@/services/netcontrol", async importOriginal => ({
 }));
 const stubs = {
   VDivider: true,
+  VChip: { name: "VChip", props: ["color", "variant", "size"], template: "<span><slot /></span>" },
   VBtn: { props: ["disabled", "type"], template: '<button :disabled="disabled" :type="type || \'button\'"><slot /></button>' },
   VAlert: { template: "<div><slot /></div>" },
   VSwitch: {
@@ -27,7 +29,7 @@ const stubs = {
 };
 let wrapper: ReturnType<typeof mount> | undefined;
 const secret = () => wrapper!.get<HTMLInputElement>('[aria-label="Discord webhook URL"]');
-const enabled = () => wrapper!.get<HTMLInputElement>('[aria-label="Enable Discord notifications"]');
+const enabled = () => wrapper!.get<HTMLInputElement>('[aria-label="Enable firewall drop notifications"]');
 const save = () => wrapper!.get('button[type="submit"]');
 const start = async () => { wrapper = mount(NotificationsView, { global: { stubs } }); await flushPromises(); };
 beforeEach(() => {
@@ -42,9 +44,48 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; useControllerStore().$dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("Notification settings", () => {
-  it("matches General Settings rows, compact password field and Save action without extra panels", async () => {
+  it("provides independent default-off category switches in the existing row layout", async () => {
     await start();
-    expect(wrapper!.findAll(".setting-row")).toHaveLength(3);
+    for (const label of ["Broadcast drop notifications", "TCP FIN/RST/empty ACK notifications"]) {
+      const input = wrapper!.get<HTMLInputElement>(`input[aria-label="${label}"]`);
+      expect(input.element.checked).toBe(false);
+      expect(input.attributes("disabled")).toBeUndefined();
+      expect(input.element.closest(".setting-row")?.querySelector(".setting-name")?.textContent?.trim()).toBe(label);
+    }
+  });
+  it.each([
+    [true, false], [false, true], [true, true],
+  ])("stages category-only changes broadcast=%s TCP=%s without uploading, applying or losing the stored reference", async (broadcast, tcp) => {
+    const store = useControllerStore();
+    store.state.data!.desired.discord = { ...discordDefaults(), enabled: true, webhook_ref: webhookReference };
+    const apply = vi.spyOn(store, "apply");
+    await start();
+    await wrapper!.get('input[aria-label="Broadcast drop notifications"]').setValue(broadcast);
+    await wrapper!.get('input[aria-label="TCP FIN/RST/empty ACK notifications"]').setValue(tcp);
+    await wrapper!.get("form").trigger("submit"); await flushPromises();
+    expect(store.draft!.discord).toEqual({
+      ...discordDefaults(), enabled: true, webhook_ref: webhookReference, notify_broadcast: broadcast, notify_tcp_closures: tcp,
+    });
+    expect(requiredPermissions(store.diff)).toEqual(["transactions.write", "discord.write"]);
+    expect(uploadDiscordWebhook).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+  });
+  it("matches General Settings rows, password field and Save action without extra panels", async () => {
+    await start();
+    expect(wrapper!.findAll(".setting-row")).toHaveLength(5);
+    expect(wrapper!.findAll(".setting-name").map(label => label.text())).toEqual([
+      "Enable firewall drop notifications", "Webhook URL", "Broadcast drop notifications",
+      "TCP FIN/RST/empty ACK notifications", "Notification status",
+    ]);
+    expect(wrapper!.get("h1").text()).toBe("Firewall drop notifications");
+    expect(wrapper!.get("#notifications-discord-description").text()).toContain("Discord alerts for newly seen firewall drops");
+    expect(wrapper!.text()).toContain("Notification status");
+    expect(wrapper!.text()).not.toContain("Committed delivery");
+    const chips = wrapper!.findAllComponents({ name: "VChip" });
+    expect(chips.map(chip => [chip.text(), chip.props("color")])).toEqual([
+      ["Delivered: 0", "success"], ["Failed: 0", "error"],
+    ]);
+    expect(wrapper!.text()).not.toContain("Counts for this session");
     expect(wrapper!.get(".settings-head").text()).toBe("Setting");
     expect(secret().attributes("type")).toBe("password");
     expect(wrapper!.get(".setting-field").attributes("variant")).toBeUndefined();
@@ -63,11 +104,12 @@ describe("Notification settings", () => {
     await wrapper!.get("form").trigger("submit"); await flushPromises();
     expect(uploadDiscordWebhook).toHaveBeenCalledExactlyOnceWith(webhookUrl, expect.any(AbortSignal));
     expect(secret().element.value).toBe("");
-    expect(store.draft?.discord).toEqual({ enabled: true, webhook_ref: webhookReference });
+    expect(wrapper!.findAll(".setting-row")[1]!.get(".setting-name").text()).toBe("Replacement webhook URL");
+    expect(store.draft?.discord).toEqual({ ...discordDefaults(), enabled: true, webhook_ref: webhookReference });
     expect(JSON.stringify(store.draft)).not.toContain(webhookUrl);
     expect(wrapper!.text()).not.toContain(webhookUrl);
     expect(wrapper!.text()).toContain("Webhook stored; notification changes staged");
-    expect(wrapper!.text()).toContain("Disabled - disabled");
+    expect(wrapper!.findAllComponents({ name: "VChip" }).map(chip => chip.text())).toEqual(["Delivered: 0", "Failed: 0"]);
     expect(requiredPermissions(store.diff)).toEqual(["transactions.write", "discord.write"]);
     expect(store.editorDirty).toBe(false);
     expect(apply).not.toHaveBeenCalled(); expect(lifecycle).not.toHaveBeenCalled();
@@ -79,12 +121,12 @@ describe("Notification settings", () => {
     expect(uploadDiscordWebhook).not.toHaveBeenCalled();
     wrapper!.unmount();
     const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
-    desired.discord = { enabled: true, webhook_ref: webhookReference };
+    desired.discord = { ...discordDefaults(), enabled: true, webhook_ref: webhookReference };
     store.state.data = { ...store.state.data!, desired };
     await start();
     expect(wrapper!.text()).toContain("Replacement webhook URL");
     await enabled().setValue(false); await wrapper!.get("form").trigger("submit"); await flushPromises();
-    expect(store.draft?.discord).toEqual({ enabled: false, webhook_ref: webhookReference });
+    expect(store.draft?.discord).toEqual({ ...discordDefaults(), enabled: false, webhook_ref: webhookReference });
     expect(uploadDiscordWebhook).not.toHaveBeenCalled();
   });
   it("keeps pending reads neutral, then establishes support on success", async () => {
@@ -93,10 +135,13 @@ describe("Notification settings", () => {
     wrapper = mount(NotificationsView, { global: { stubs } }); await flushPromises();
     expect(wrapper.text()).toContain("Loading notifications");
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(wrapper.findAllComponents({ name: "VChip" })).toHaveLength(0);
     expect(enabled().attributes("disabled")).toBeDefined();
+    expect(wrapper.findAll('input[type="checkbox"]').every(input => input.attributes("disabled") !== undefined)).toBe(true);
     resolve(discordStatus()); await flushPromises();
     expect(enabled().attributes("disabled")).toBeUndefined();
     expect(wrapper.text()).not.toContain("Loading notifications");
+    expect(wrapper.findAllComponents({ name: "VChip" }).map(chip => chip.text())).toEqual(["Delivered: 0", "Failed: 0"]);
   });
   it("shows actual initial read failure, keeps controls disabled and recovers through Retry", async () => {
     vi.mocked(getDiscordStatus).mockRejectedValueOnce(new Error("HTTP 404: Discord support unavailable"));
@@ -181,7 +226,7 @@ describe("Notification settings", () => {
     await start(); await enabled().setValue(true); await secret().setValue(webhookUrl);
     await wrapper!.get("form").trigger("submit"); await flushPromises();
     const store = useControllerStore(), candidate = cloneConfig(store.state.data!.desired);
-    candidate.discord = { enabled: false, webhook_ref: "b".repeat(32) }; store.stage(candidate);
+    candidate.discord = { ...discordDefaults(), enabled: false, webhook_ref: "b".repeat(32) }; store.stage(candidate);
     resolve({ webhook_ref: webhookReference }); await flushPromises();
     expect(store.draft).toEqual(candidate);
     expect(wrapper!.get('[role="alert"]').text()).toContain("Webhook stored, but notification settings changed");
@@ -212,11 +257,50 @@ describe("Notification settings", () => {
     await vi.advanceTimersByTimeAsync(7500); await flushPromises();
     expect(wrapper!.text()).toContain("18446744073709551615");
     expect(wrapper!.text()).toContain("9007199254740993");
+    expect(wrapper!.findAllComponents({ name: "VChip" }).map(chip => [chip.text(), chip.props("color")])).toEqual([
+      ["Delivery error", "error"], ["Delivered: 18446744073709551615", "success"], ["Failed: 9007199254740993", "error"],
+    ]);
     expect(wrapper!.get('[role="alert"]').text()).toContain("Rate-limit response invalid");
     const calls = vi.mocked(getDiscordStatus).mock.calls.length;
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     await vi.advanceTimersByTimeAsync(15000);
     expect(getDiscordStatus).toHaveBeenCalledTimes(calls);
     expect(uploadDiscordWebhook).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["starting", "Starting", "info"],
+    ["simulated", "Simulation only", "info"], ["unavailable", "Unavailable", "warning"],
+    ["paused", "Paused", "warning"], ["ready", "Active", "success"],
+    ["error", "Delivery error", "error"], ["stopped", "Stopped", "secondary"],
+  ] as const)("shows a readable %s status chip without raw combined state text", async (state, label, color) => {
+    vi.mocked(getDiscordStatus).mockResolvedValue({ ...discordStatus(), enabled: true, state });
+    await start();
+    const chip = wrapper!.findAllComponents({ name: "VChip" })[0]!;
+    expect(chip.text()).toBe(label);
+    expect(chip.props("color")).toBe(color);
+    expect(wrapper!.text()).not.toContain("Enabled -");
+    expect(wrapper!.text()).not.toContain("Disabled -");
+  });
+  it.each(["disabled", "ready"] as const)("omits the disabled chip for disabled notifications in %s state", async state => {
+    vi.mocked(getDiscordStatus).mockResolvedValue({ ...discordStatus(), state });
+    await start();
+    expect(wrapper!.findAllComponents({ name: "VChip" }).map(chip => [chip.text(), chip.props("color")])).toEqual([
+      ["Delivered: 0", "success"], ["Failed: 0", "error"],
+    ]);
+  });
+  it("keeps stale status and previously loaded counts visible after a polling failure and recovers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.mocked(getDiscordStatus).mockResolvedValue({ ...discordStatus(), enabled: true, state: "ready", delivered: "7", failed: "2" });
+    await start();
+    vi.mocked(getDiscordStatus).mockRejectedValueOnce(new Error("Status read failed"));
+    await vi.advanceTimersByTimeAsync(7500); await flushPromises();
+    expect(wrapper!.get('[role="alert"]').text()).toContain("Status read failed");
+    const chips = () => wrapper!.findAllComponents({ name: "VChip" });
+    expect(chips().map(chip => chip.text())).toEqual(["Stale", "Delivered: 7", "Failed: 2"]);
+    expect(chips()[0]!.props("color")).toBe("warning");
+    expect(enabled().attributes("disabled")).toBeDefined();
+    await wrapper!.findAll("button").find(button => button.text() === "Retry")!.trigger("click"); await flushPromises();
+    expect(chips()[0]!.text()).toBe("Active");
+    expect(enabled().attributes("disabled")).toBeUndefined();
   });
 });

@@ -62,7 +62,7 @@ onMounted(() => { void store.refreshTransactions(); });
             {{ item.status.replaceAll("_", " ") }}
           </td>
           <td :title="item.actor">
-            {{ item.description || "—" }}
+            {{ item.actor === "system-conntrack-ownership" ? "Automatic conntrack settings" : item.description || "—" }}
           </td>
           <td class="text-no-wrap">
             {{ formatTimestamp(item.submitted_at, "—") }}

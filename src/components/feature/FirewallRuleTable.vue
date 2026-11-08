@@ -13,7 +13,7 @@ import FirewallCounterCells from "@/components/feature/FirewallCounterCells.vue"
 import { dhcpRelaySystemRules, firewallSystemRules, type FirewallSystemRule } from "@/services/firewallTelemetry";
 import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
 import { manualRuleOwnership } from "@/services/ruleOwnership";
-import { firewallProtocolSchema, firewallProtocolChoices, supportsFirewallPorts, parseFirewallPorts, firewallProtocolNotice, formatFirewallProtocol } from "@/services/firewallProtocols";
+import { firewallProtocolChoices, firewallCreationProtocolChoices, firewallEditorSupportsPorts, expandFirewallProtocol, parseFirewallPorts, firewallProtocolNotice, formatFirewallProtocol } from "@/services/firewallProtocols";
 import { useRuleDrag } from "@/composables/useRuleDrag";
 
 type Rule = NonNullable<Config["firewall"]["policies"]>["hosts"][number]["rules"][number];
@@ -79,8 +79,8 @@ const fields = computed<Field[]>(() => editing.value === "default"
       choices: [{ title: "None", value: "" }, ...(selected.value?.firewall.policies?.hosts ?? []).map(host => ({ title: host.name, value: host.id }))],
     }]),
     { key: "destination", label: "Destination network (blank = Any)", kind: "text", disabled: Boolean(form.value.destination_host) },
-    { key: "protocol", label: "Protocol", kind: "select", choices: firewallProtocolChoices },
-    { key: "ports", label: "Destination ports (comma separated)", kind: "text", disabled: !supportsFirewallPorts(form.value.protocol) },
+    { key: "protocol", label: "Protocol", kind: "select", choices: editing.value === rules.value.length ? firewallCreationProtocolChoices : firewallProtocolChoices },
+    { key: "ports", label: "Destination ports (comma separated)", kind: "text", disabled: !firewallEditorSupportsPorts(form.value.protocol) },
     ...(props.scope === "input" ? [] : [{
       key: "out_interface", label: "Egress interface", kind: "select" as const,
       choices: [{ title: "Any", value: "" }, ...interfaceChoices(selected.value?.interfaces ?? [])],
@@ -141,7 +141,7 @@ function change(key: string, value: unknown): void {
   form.value = {
     ...form.value, [key]: value,
     ...(key === "destination_host" && value ? { destination: "" } : {}),
-    ...(key === "protocol" && !supportsFirewallPorts(value) ? { ports: "" } : {}),
+    ...(key === "protocol" && !firewallEditorSupportsPorts(value) ? { ports: "" } : {}),
   };
 }
 function mutate(update: (candidate: Config, entries: Rule[]) => void): boolean {
@@ -191,16 +191,20 @@ function save(): void {
       if (typeof value === "string" && value.trim()) rule[key] = value.trim();
       else delete rule[key];
     }
-    const protocol = firewallProtocolSchema.parse(form.value.protocol === undefined ? "" : form.value.protocol);
-    if (protocol) rule.protocol = protocol;
-    else delete rule.protocol;
+    const protocols = expandFirewallProtocol(form.value.protocol, index === entries.length);
     const ports = parseFirewallPorts(form.value.ports);
     if (ports.length) rule.destination_ports = ports;
     else delete rule.destination_ports;
-    if (index === entries.length) entries.push(rule);
+    const expanded = protocols.map(protocol => {
+      const entry = { ...rule };
+      if (protocol) entry.protocol = protocol;
+      else delete entry.protocol;
+      return entry;
+    });
+    if (index === entries.length) entries.push(...expanded);
     else {
       if (!entries[index]) throw new Error("The rule no longer exists. Cancel and reopen the editor.");
-      entries[index] = rule;
+      entries[index] = expanded[0]!;
     }
   })) cancel();
 }

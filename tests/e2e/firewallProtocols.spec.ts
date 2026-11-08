@@ -10,7 +10,7 @@ async function choose(page: Page, editor: Locator, label: string, value: string)
 }
 
 for (const scope of ["host", "interface", "input", "legacy"] as const) {
-  test(`${scope} filters preserve ICMP and ICMPv6 with port clearing and confirmed transactions`, async ({ page }) => {
+  test(`${scope} filters expand TCP & UDP and preserve ICMP with confirmed transactions`, async ({ page }) => {
     const initial = scope === "legacy" ? config() : hostPolicyConfig();
     if (initial.firewall.policies) {
       initial.firewall.policies.hosts[0]!.addresses.push("2001:db8::20");
@@ -42,11 +42,22 @@ for (const scope of ["host", "interface", "input", "legacy"] as const) {
       await expect(row).toContainText("UDP");
       await expect(row).toContainText("8443, 443");
     }
+    await page.getByRole("button", { name: "Add rule", exact: true }).click();
+    const pairEditor = scope === "legacy" ? page.getByRole("dialog") : page.locator(".rule-editor");
+    await choose(page, pairEditor, "Protocol", "TCP & UDP");
+    await pairEditor.getByLabel("Destination network (blank = Any)", { exact: true }).fill("203.0.113.0/24");
+    await pairEditor.getByLabel("Destination ports (comma separated)", { exact: true }).fill("53, 5353");
+    await pairEditor.getByRole("button", { name: scope === "legacy" ? "Save" : "Save rule", exact: true }).click();
+    await expect(pairEditor).toHaveCount(0);
+    const pairRows = page.getByRole("row").filter({ has: page.getByText("53, 5353", { exact: true }) });
+    await expect(pairRows).toHaveCount(2);
+    await expect(pairRows.nth(0)).toContainText("TCP");
+    await expect(pairRows.nth(1)).toContainText("UDP");
     for (const protocol of ["icmp", "icmpv6"] as const) {
       await page.getByRole("button", { name: "Add rule", exact: true }).click();
       const editor = scope === "legacy" ? page.getByRole("dialog") : page.locator(".rule-editor");
       await editor.getByLabel("Protocol", { exact: true }).press("Enter");
-      await expect(page.getByRole("option")).toHaveText(["Any", "TCP", "UDP", "ICMP", "ICMPv6"]);
+      await expect(page.getByRole("option")).toHaveText(["Any", "TCP", "UDP", "TCP & UDP", "ICMP", "ICMPv6"]);
       await page.getByRole("option", { name: "TCP", exact: true }).click();
       const ports = editor.getByLabel("Destination ports (comma separated)", { exact: true });
       await ports.fill("443, 8443");
@@ -70,6 +81,9 @@ for (const scope of ["host", "interface", "input", "legacy"] as const) {
     if (scope === "legacy") expect(submitted.firewall.rules[1]).toMatchObject({ protocol: "udp", destination_ports: [8443, 443] });
     const rules = scope === "legacy" ? submitted.firewall.rules : scope === "input" ? submitted.firewall.input!.interfaces[0]!.rules
       : scope === "interface" ? submitted.firewall.policies!.interfaces[0]!.rules : submitted.firewall.policies!.hosts[0]!.rules;
+    expect(rules.slice(-4, -2)).toEqual(["tcp", "udp"].map(protocol => ({
+      origin: "manual", import_source: null, protocol, destination: "203.0.113.0/24", destination_ports: [53, 5353], action: "accept",
+    })));
     expect(rules.slice(-2)).toEqual([
       { origin: "manual", import_source: null, protocol: "icmp", destination: "198.51.100.0/24", action: "drop" },
       { origin: "manual", import_source: null, protocol: "icmpv6", destination: "2001:db8:2::/64", action: "drop" },
@@ -78,6 +92,9 @@ for (const scope of ["host", "interface", "input", "legacy"] as const) {
     await expect(page.getByRole("region", { name: "Commit detail", exact: true })).toContainText("committed");
     await page.goto(path);
     if (scope === "host") await page.getByRole("button", { name: /WORKSTATION \(/ }).click();
+    await expect(pairRows).toHaveCount(2);
+    await expect(pairRows.nth(0)).toContainText("TCP");
+    await expect(pairRows.nth(1)).toContainText("UDP");
     await expect(page.getByRole("row").filter({ has: page.getByText("ICMPv6", { exact: true }) })).toContainText("drop");
   });
 }
