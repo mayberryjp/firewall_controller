@@ -2021,7 +2021,7 @@ test("operational pages keep content compact with readable details", async ({ pa
     await navigate(page, entry.title);
     const main = page.getByRole("main");
     await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-    const hasPageHeading = !["/settings/remote-dns", "/settings/conntrack-tuning"].includes(entry.path) &&
+    const hasPageHeading = entry.path !== "/settings/remote-dns" &&
       /^\/(settings|connections|config\/(upgrade|editor))/.test(entry.path);
     await expect(main.getByRole("heading", { level: 1 }), entry.path).toHaveCount(hasPageHeading ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
