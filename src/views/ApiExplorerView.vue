@@ -10,7 +10,7 @@ import { useRouter } from "vue-router";
 
 const store = useControllerStore();
 const router = useRouter();
-const path = ref("/api/v1/services/vnstat/status");
+const path = ref("/api/v1/platform/status");
 const loading = ref(false), error = ref("");
 const response = ref<{ path: string; status: number; body: string } | null>(null);
 const copying = ref(false), copied = ref(false), copyError = ref("");
@@ -221,16 +221,6 @@ async function send(): Promise<void> {
         </p>
       </template>
     </form>
-    <details class="mt-3">
-      <summary>Paired path-test API methods</summary>
-      <p><code>GET /api/v1/diagnostics/path-tests</code> reads status with state.read.</p>
-      <p><code>POST /api/v1/diagnostics/path-tests</code> starts a test; <code>POST /api/v1/diagnostics/path-tests/{id}/cancel</code> requests cancellation and restoration. Both require diagnostics.run, interfaces.write and firewall.write.</p>
-      <p>
-        POST actions use the <router-link to="/diagnostics/path-tests">
-          Path MTU/MSS form
-        </router-link> for explicit interface approvals and write-only secret handling. They are never emulated with GET, included in read-only inspection or automatically retried.
-      </p>
-    </details>
     <p
       v-if="refreshingCapabilities || readingCapabilities"
       class="text-body-2 mt-3"

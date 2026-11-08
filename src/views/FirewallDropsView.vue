@@ -10,14 +10,15 @@ import { useTimestamps } from "@/composables/useTimestamps";
 import { useHostnames } from "@/composables/useHostnames";
 import FirewallDropVisibility from "@/components/feature/FirewallDropVisibility.vue";
 const { formatTimestamp, parseTimestamp, timeZone } = useTimestamps();
-const { formatHostAddress } = useHostnames();
+const { formatHostAddress, hostnamesError } = useHostnames();
 
 const store = useControllerStore();
 const data = ref<FirewallDenyPage | null>(null), loading = ref(false), error = ref(""), filterError = ref("");
 const showFilters = ref(false);
 const hideBroadcast = ref(true), hideTcp = ref(true);
 const filters = reactive({ address: "", protocol: "", chain: "", since: "", until: "" });
-const query = ref<FirewallDenyQuery>({ limit: 100 });
+const pageSize = 100, page = ref(1);
+const query = ref<FirewallDenyQuery>({ limit: pageSize });
 const chains = [{ title: "All chains", value: "" }, { title: "Input", value: "input" }, { title: "Forward", value: "forward" }];
 const columns = computed<Array<{ key: FirewallDropSortColumn; label: string }>>(() => [
   { key: "timestamp_ms", label: `Time (${timeZone.value})` },
@@ -30,9 +31,14 @@ const visibleRows = computed(() => visibleFirewallDrops(data.value?.records ?? [
 const sortedRows = computed(() => sortColumn.value
   ? sortFirewallDrops(visibleRows.value, sortColumn.value, sortDescending.value)
   : visibleRows.value);
+const pageCount = computed(() => Math.max(1, Math.ceil(sortedRows.value.length / pageSize)));
+const pagedRows = computed(() => sortedRows.value.slice((page.value - 1) * pageSize, page.value * pageSize));
+watch([hideBroadcast, hideTcp], () => { page.value = 1; });
+watch(pageCount, count => { page.value = Math.min(page.value, count); });
 function sort(column: FirewallDropSortColumn): void {
   sortDescending.value = sortColumn.value === column ? !sortDescending.value : false;
   sortColumn.value = column;
+  page.value = 1;
 }
 const losses = computed(() => {
   const capture = data.value?.capture;
@@ -48,21 +54,33 @@ let controller: AbortController | undefined, generation = 0, disposed = false;
 async function read(nextQuery: FirewallDenyQuery, older = false): Promise<void> {
   if (loading.value || !store.connected || disposed) return;
   const version = generation;
-  const cursor = older ? data.value?.next_before_id : undefined;
+  let cursor = older ? data.value?.next_before_id : undefined;
   if (older && !cursor) return;
+  const initialRecords = data.value?.records ?? [];
+  const remaining = () => pageSize - (visibleRows.value.length -
+    visibleFirewallDrops(initialRecords, hideBroadcast.value, hideTcp.value).length);
   loading.value = true; controller = new AbortController();
   try {
-    const result = await getFirewallDenyLog({ ...nextQuery, before_id: cursor ?? undefined }, controller.signal);
-    if (version !== generation || disposed) return;
-    if (cursor && result.next_before_id && BigInt(result.next_before_id) >= BigInt(cursor)) throw new Error("The backend returned a non-advancing history cursor.");
-    if (older && data.value) {
-      const ids = new Set(data.value.records.map(row => row.id));
-      data.value = {
-        ...result, records: [...data.value.records, ...result.records.filter(row => !ids.has(row.id))],
-        cursor_expired: data.value.cursor_expired || result.cursor_expired,
-      };
-    } else data.value = result;
-    query.value = nextQuery; error.value = "";
+    do {
+      const result = await getFirewallDenyLog({
+        ...nextQuery, limit: older ? Math.min(pageSize, remaining()) : nextQuery.limit,
+        before_id: cursor ?? undefined,
+      }, controller.signal);
+      if (version !== generation || disposed) return;
+      if (cursor && result.next_before_id && BigInt(result.next_before_id) >= BigInt(cursor)) throw new Error("The backend returned a non-advancing history cursor.");
+      if (older && data.value) {
+        const ids = new Set(data.value.records.map(row => row.id));
+        data.value = {
+          ...result, records: [...data.value.records, ...result.records.filter(row => !ids.has(row.id))],
+          cursor_expired: data.value.cursor_expired || result.cursor_expired,
+        };
+      } else {
+        data.value = result;
+        page.value = 1;
+      }
+      query.value = nextQuery; error.value = "";
+      cursor = result.next_before_id;
+    } while (older && cursor && remaining() > 0);
   } catch (failure) {
     if (version !== generation || disposed) return;
     error.value = firewallDenyReadError(failure);
@@ -72,7 +90,7 @@ function applyFilters(): void {
   filterError.value = "";
   try {
     const next = firewallDenyQuerySchema.parse({
-      limit: 100, address: filters.address.trim() || undefined,
+      limit: pageSize, address: filters.address.trim() || undefined,
       protocol: filters.protocol.trim() === "" ? undefined : Number(filters.protocol),
       chain: filters.chain || undefined, since_ms: parseTimestamp(filters.since), until_ms: parseTimestamp(filters.until),
     });
@@ -84,7 +102,7 @@ function applyFilters(): void {
 }
 function reset(): void {
   generation++; controller?.abort(); loading.value = false;
-  data.value = null; error.value = "";
+  data.value = null; error.value = ""; page.value = 1;
   if (store.connected) void read(query.value);
 }
 watch(() => store.sessionVersion, reset);
@@ -198,6 +216,15 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
       </div>
     </form>
     <v-alert
+      v-if="hostnamesError"
+      type="error"
+      variant="tonal"
+      class="mb-3"
+      role="alert"
+    >
+      {{ hostnamesError }}
+    </v-alert>
+    <v-alert
       v-if="filterError || error"
       type="error"
       variant="tonal"
@@ -281,7 +308,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
         </thead>
         <tbody>
           <template
-            v-for="row in sortedRows"
+            v-for="row in pagedRows"
             :key="row.id"
           >
             <tr class="drop-row">
@@ -382,7 +409,15 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
         </tbody>
       </v-table>
       <div class="drop-footer">
-        <span class="text-caption text-medium-emphasis">{{ sortedRows.length }} of {{ data.records.length }} loaded drops shown</span>
+        <span class="text-caption text-medium-emphasis">{{ pagedRows.length }} of {{ sortedRows.length }} visible drops shown</span>
+        <v-pagination
+          v-if="pageCount > 1"
+          v-model="page"
+          :length="pageCount"
+          :total-visible="5"
+          density="compact"
+          aria-label="Firewall drop pages"
+        />
         <v-btn
           v-if="data.next_before_id"
           variant="text"

@@ -559,7 +559,7 @@ test("top navigation opens routed sections in the black reference theme", async 
       });
       await pages.getByRole("tab", { name: entry.title, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-      if (["connections", "firewall", "firewall-drops"].includes(entry.name) && !isMobile) await expect(pages.getByRole("tab")).toHaveCount(0);
+      if (["connections", "firewall", "firewall-drops", "possible-missing-rules"].includes(entry.name) && !isMobile) await expect(pages.getByRole("tab")).toHaveCount(0);
       else await expect(pages.getByRole("tab", { name: entry.title, exact: true })).toHaveAttribute("aria-current", "page");
     }
   }

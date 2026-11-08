@@ -262,9 +262,12 @@ require separate real-appliance acceptance; mocked UI tests do not prove forward
 ### Firewall Drop History And Rule Counters
 
 Firewall drops, Connections (including deletion review), and Possible missing rules
-show known endpoints as **HOSTNAME (IP address)**, using saved firewall host display
-names or host names (including Sando imports), and the appliance hostname for its
-own interface addresses. Unknown hosts remain IP-only. Labels do not change API
+show known endpoints as **NAME (IP address)**. When saved Sando synchronization is
+enabled, inventory devices use `local_description`, not DNS, DHCP or lease names;
+devices without a local description remain IP-only. Other endpoints use saved
+firewall host display names or host names, and the appliance hostname for its own
+interface addresses. Unknown hosts remain IP-only. Inventory read failures appear
+inline; unsaved Sando settings do not affect labels. Labels do not change API
 filters, numeric-address sorting, connection identities, or drop aggregation.
 Firewall drops has sortable column headers, including horizontally scrollable
 headers on mobile. Click a header to sort loaded records ascending, then descending;
@@ -281,12 +284,19 @@ Firewall drops places the switches after its search and time-filter controls;
 Possible missing rules places them alongside its Time period selector,
 wrapping on compact screens.
 Possible missing rules filters packets before grouping and recalculates visible totals.
-Load older remains available on fully hidden drop pages using the original backend cursor.
+Firewall drops uses numbered pages of 100 visible rows, after hide filters and
+sorting; hidden records do not contribute to the page count. Changing hide filters,
+sorting, or successfully refreshing/applying filters returns to page 1.
+Load older remains available on fully hidden drop pages using the original backend
+cursor. Each click continues through backend batches until 100 additional visible
+drops are loaded or retained history ends. Loaded hidden records remain available
+when their hide switches are turned off. Page numbers cover loaded visible history,
+not an estimated total for history that has not been fetched.
 
 Diagnostics > **FIREWALL DROPS** (`/diagnostics/firewall-drops`) reads
 `GET /api/v1/firewall/deny-log` with the independent `firewall.logs.read`
 permission. It supports address, numeric IP protocol, chain and inclusive system-timezone
-time filters, manual refresh and exact exclusive-cursor pagination. Desktop section
+time filters, manual refresh and exact exclusive-cursor pagination. On both drop pages, desktop section
 navigation starts collapsed and can be expanded from the hamburger button, as on
 Connections. The compact toolbar keeps system-timezone bounds behind **More filters**;
 protocols, ports, chains and drop reasons use colored chips. Tables stack on mobile.
@@ -620,7 +630,7 @@ or appliance acceptance.
 | `/diagnostics/traffic-flow` | Compatibility redirect to `/overview` |
 | `/diagnostics/process-health` | Read-only daemon/component health, recovery states, collection freshness and active alerts |
 | `/diagnostics/interface-capabilities` | Saved per-interface performance capabilities shown as color-coded chips: green Enabled, amber Disabled, blue Supported (activation unknown), red Unsupported, and neutral Unknown or N/A. Hover a chip for its separate support and enabled states. No Details controls or collection-error lists. **Refresh capabilities** explicitly scans hardware and saves observations; opening the page only reads the saved snapshot. No automatic scans, tuning, retries or configuration edits. Unknown and simulated results are not treated as measured support; partial results replace older evidence and failed requests retain the previous snapshot marked stale with an inline request error. Collection time uses the saved system timezone. |
-| `/diagnostics/api` | API explorer with GET inspection, explicit interface-capability scan/save, and explicit POST adoption of an existing unmanaged VLAN. Focus the response box and use Ctrl+A (Cmd+A on macOS) to select only its body, or use its copy icon to copy the displayed response with full numeric precision. Clipboard access requires browser support and HTTPS or localhost; errors appear inline. |
+| `/diagnostics/api` | API explorer defaults to `/api/v1/platform/status`, without automatically sending a request. Supports GET inspection, explicit interface-capability scan/save, and explicit POST adoption of an existing unmanaged VLAN. Focus the response box and use Ctrl+A (Cmd+A on macOS) to select only its body, or use its copy icon to copy the displayed response with full numeric precision. Clipboard access requires browser support and HTTPS or localhost; errors appear inline. |
 | `/diagnostics/rps` | RPS Configuration: CPU steering for managed Ethernet and kernel WireGuard RX queues, staged through the shared SAVE flow. No NIC inventory snapshot is required. |
 | `/diagnostics/nic-offloads` | NIC Offloads: all settings for one interface in the General settings layout, with Enabled/Disabled dropdowns initialized from reported state. Settings have detailed descriptions and Linux names on hover. |
 | `/diagnostics/path-tests` | Path MTU/MSS: explicitly approved two-firewall packet-size and TCP MSS tests, temporary MTU/permission changes, live progress, directional measurements, cancellation and restoration. Requires a native backend with the path-test API; unsupported older backends stay disabled. |
@@ -775,8 +785,8 @@ The client uses `POST /api/v1/diagnostics/path-tests` to start and
 `diagnostics.run`, `interfaces.write` and `firewall.write` together (not
 `transactions.write`). Only `GET /api/v1/diagnostics/path-tests`, requiring
 `state.read`, is polled, single-flight and across page navigation. Start/Cancel
-are never automatically retried. API Explorer lists the status GET and both
-POST methods; POST actions link to the approved form rather than exposing a
+are never automatically retried. API Explorer lists only the status GET;
+POST actions use the approved Path MTU/MSS form rather than exposing a
 generic secret-bearing JSON editor or pretending a GET starts/cancels tests.
 
 Status distinguishes arming, pairing, measurements and restoration. Shared

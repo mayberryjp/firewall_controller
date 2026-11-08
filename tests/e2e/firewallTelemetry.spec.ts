@@ -12,6 +12,50 @@ async function connect(page: Page) {
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
 }
 
+test("firewall drop page numbers count visible rows and older loading skips hidden batches", async ({ page }) => {
+  const backend = await mockBackend(page), queries: URLSearchParams[] = [];
+  const base = firewallDenyPage().records[0]!;
+  const records = Array.from({ length: 350 }, (_, index) => ({
+    ...base, id: String(1000 - index), packet_length: index,
+    tags: index < 60 || (index >= 100 && index < 250) ? ["ipv4_broadcast"] : [],
+  }));
+  await page.route("**/firewall/deny-log*", route => {
+    const params = new URL(route.request().url()).searchParams; queries.push(params);
+    const start = params.has("before_id") ? 1001 - Number(params.get("before_id")) : 0;
+    const end = Math.min(records.length, start + Number(params.get("limit")));
+    return route.fulfill({ json: {
+      ...firewallDenyPage(), records: records.slice(start, end),
+      next_before_id: end < records.length ? records[end - 1]!.id : null,
+    } });
+  });
+  await connect(page); await page.goto("/diagnostics/firewall-drops");
+  const view = page.getByRole("region", { name: "Firewall drops", exact: true });
+  await expect(view.locator(".drop-row")).toHaveCount(40);
+  await expect(view.getByLabel("Firewall drop pages")).toHaveCount(0);
+  await view.getByRole("button", { name: "Load older", exact: true }).click();
+  await expect(view.locator(".drop-row")).toHaveCount(100);
+  await expect(view).toContainText("100 of 140 visible drops shown");
+  const pagination = view.getByLabel("Firewall drop pages");
+  await expect(pagination).toBeVisible();
+  await expect(pagination.getByRole("button", { name: "Go to page 3", exact: true })).toHaveCount(0);
+  await pagination.getByRole("button", { name: "Go to page 2", exact: true }).click();
+  await expect(view.locator(".drop-row")).toHaveCount(40);
+  expect(queries.map(query => [query.get("before_id"), query.get("limit")])).toEqual([
+    [null, "100"], ["901", "100"], ["801", "100"], ["701", "50"],
+  ]);
+  await view.getByRole("checkbox", { name: "Hide broadcast drops", exact: true }).uncheck();
+  await expect(view.locator(".drop-row")).toHaveCount(100);
+  await expect(view.locator('.drop-row [data-label="Bytes"]').first()).toHaveText("0");
+  await pagination.getByRole("button", { name: "Go to page 4", exact: true }).click();
+  await expect(view.locator(".drop-row")).toHaveCount(50);
+  await view.getByRole("checkbox", { name: "Hide broadcast drops", exact: true }).check();
+  await expect(view.locator(".drop-row")).toHaveCount(100);
+  await expect(view.locator('.drop-row [data-label="Bytes"]').first()).toHaveText("60");
+  expect(queries).toHaveLength(4);
+  expect(backend.writes).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("drop hide switches preserve history, use untouched cursors and recalculate missing-rule totals locally", async ({ page, isMobile }) => {
   const backend = await mockBackend(page), queries: URLSearchParams[] = [];
   const until = Date.parse("2026-11-08T12:34:56.789Z");
@@ -135,7 +179,7 @@ test("General settings places drop logging last and preserves explicit false thr
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test("possible missing rules summarizes all drop pages across time periods and fits compact screens", async ({ page }) => {
+test("possible missing rules summarizes all drop pages across time periods and fits compact screens", async ({ page, isMobile }) => {
   const backend = await mockBackend(page);
   const until = Date.parse("2026-11-08T12:34:56.789Z");
   const queries: URLSearchParams[] = [];
@@ -156,11 +200,28 @@ test("possible missing rules summarizes all drop pages across time periods and f
   await page.goto("/diagnostics/possible-missing-rules");
   const view = page.getByRole("region", { name: "Possible missing rules", exact: true });
   const navigation = page.getByRole("navigation", { name: "Diagnostics pages", exact: true });
-  await expect(page.locator(".section-layout")).not.toHaveClass(/section-layout--collapsed/);
-  await expect(navigation.getByRole("button", { name: "Expand Diagnostics navigation", exact: true })).toHaveCount(0);
+  if (!isMobile) {
+    await expect(page.locator(".section-layout")).toHaveClass(/section-layout--collapsed/);
+    await expect(navigation.getByRole("tab")).toHaveCount(0);
+    expect((await navigation.boundingBox())!.width).toBeLessThanOrEqual(60);
+    const expand = navigation.getByRole("button", { name: "Expand Diagnostics navigation", exact: true });
+    await expect(expand).toHaveAttribute("aria-expanded", "false");
+    await expand.click();
+    await expect(page.locator(".section-layout")).not.toHaveClass(/section-layout--collapsed/);
+  } else {
+    await expect(page.locator(".section-layout")).not.toHaveClass(/section-layout--collapsed/);
+    await expect(navigation.getByRole("button", { name: "Expand Diagnostics navigation", exact: true })).toHaveCount(0);
+  }
   await expect(navigation.getByRole("tab", { name: "POSSIBLE MISSING RULES", exact: true })).toHaveAttribute("aria-selected", "true");
   const tabs = await navigation.getByRole("tab").allTextContents();
   expect(tabs[tabs.findIndex(title => title.includes("FIREWALL DROPS")) + 1]).toContain("POSSIBLE MISSING RULES");
+  if (!isMobile) {
+    const collapse = navigation.getByRole("button", { name: "Collapse Diagnostics navigation", exact: true });
+    await expect(collapse).toHaveAttribute("aria-expanded", "true");
+    await collapse.click();
+    await expect(page.locator(".section-layout")).toHaveClass(/section-layout--collapsed/);
+    await expect(navigation.getByRole("tab")).toHaveCount(0);
+  }
   const table = view.locator(".missing-rules-table");
   await expect(table.locator(".missing-rule-row")).toHaveCount(1);
   await expect(table.locator('[data-label="Packets"]')).toHaveText("1");

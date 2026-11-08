@@ -7,7 +7,7 @@ import { useTimestamps } from "@/composables/useTimestamps";
 import { useHostnames } from "@/composables/useHostnames";
 import type { Connection, ConnectionsPage } from "@/types/domain";
 const { formatTimestamp, timeZone } = useTimestamps();
-const { formatHostAddress } = useHostnames();
+const { formatHostAddress, hostnamesError } = useHostnames();
 
 const store = useControllerStore();
 const data = ref<ConnectionsPage | null>(null), loading = ref(false), error = ref("");
@@ -349,6 +349,15 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
       class="mb-3"
     >
       {{ filterError }}
+    </v-alert>
+    <v-alert
+      v-if="hostnamesError"
+      type="error"
+      variant="tonal"
+      class="mb-3"
+      role="alert"
+    >
+      {{ hostnamesError }}
     </v-alert>
     <v-alert
       v-if="error"

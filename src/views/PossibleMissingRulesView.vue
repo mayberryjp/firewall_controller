@@ -10,7 +10,7 @@ import { firewallDenyReadError, missingRulePeriods, readMissingRuleHistory, sort
 
 const store = useControllerStore();
 const { formatTimestamp, timeZone } = useTimestamps();
-const { formatHostAddress } = useHostnames();
+const { formatHostAddress, hostnamesError } = useHostnames();
 const hours = ref(1), loading = ref(false), error = ref("");
 const hideBroadcast = ref(true), hideTcp = ref(true);
 const data = ref<MissingRuleHistory | null>(null);
@@ -93,6 +93,15 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
         v-model:hide-tcp="hideTcp"
       />
     </div>
+    <v-alert
+      v-if="hostnamesError"
+      type="error"
+      variant="tonal"
+      class="mb-3"
+      role="alert"
+    >
+      {{ hostnamesError }}
+    </v-alert>
     <v-alert
       v-if="error"
       type="error"

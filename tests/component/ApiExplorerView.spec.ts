@@ -32,6 +32,19 @@ async function render(send = true) {
   if (send) { await wrapper.get("form").trigger("submit"); await flushPromises(); }
   return wrapper;
 }
+describe("API Explorer defaults", () => {
+  it("prefills platform status without automatic reads or unrelated method guidance", async () => {
+    const wrapper = await render(false);
+    try {
+      expect(wrapper.get<HTMLInputElement>("input").element.value).toBe("/api/v1/platform/status");
+      expect(wrapper.find("details").exists()).toBe(false);
+      expect(wrapper.text()).not.toContain("Paired path-test API methods");
+      expect(api.inspectApiPath).not.toHaveBeenCalled();
+      await wrapper.get("form").trigger("submit"); await flushPromises();
+      expect(api.inspectApiPath).toHaveBeenCalledExactlyOnceWith("/api/v1/platform/status", expect.any(AbortSignal));
+    } finally { wrapper.unmount(); }
+  });
+});
 describe("API Explorer private Discord routes", () => {
   it("registers status and directs private upload to Notifications rather than issuing GET or echoing credentials", async () => {
     const wrapper = await render(false);
@@ -174,8 +187,8 @@ describe("API response selection and copying", () => {
       const items = wrapper.getComponent({ name: "VCombobox" }).props("items");
       expect(items).toContainEqual({ value: "/api/v1/statistics/performance", title: "/api/v1/statistics/performance" });
       expect(items).toContainEqual({ value: "/api/v1/diagnostics/path-tests", title: "/api/v1/diagnostics/path-tests" });
-      expect(wrapper.text()).toContain("POST /api/v1/diagnostics/path-tests");
-      expect(wrapper.text()).toContain("POST /api/v1/diagnostics/path-tests/{id}/cancel");
+      expect(wrapper.text()).not.toContain("POST /api/v1/diagnostics/path-tests");
+      expect(wrapper.text()).not.toContain("POST /api/v1/diagnostics/path-tests/{id}/cancel");
       expect(items).toContainEqual({ value: cachedPath, title: `${cachedPath} (Read saved interface capabilities)` });
       expect(items).toContainEqual({ value: refreshPath, title: `${refreshPath} (Scans hardware and saves)` });
       await wrapper.get("input").setValue(refreshPath);

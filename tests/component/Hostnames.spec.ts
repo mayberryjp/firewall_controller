@@ -9,6 +9,7 @@ import PossibleMissingRulesView from "@/views/PossibleMissingRulesView.vue";
 import { getConnections, getFirewallDenyLog, deleteConnection } from "@/services/netcontrol";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
+import { getSandoDevices, type SandoDevice } from "@/services/sando";
 import { connections, hostPolicyConfig, state } from "../fixtures";
 import { firewallDenyPage } from "../firewallTelemetryFixtures";
 
@@ -16,6 +17,18 @@ vi.mock("@/services/netcontrol", async importOriginal => ({
   ...await importOriginal<typeof import("@/services/netcontrol")>(),
   getConnections: vi.fn(), getFirewallDenyLog: vi.fn(), deleteConnection: vi.fn(),
 }));
+vi.mock("@/services/sando", async importOriginal => ({
+  ...await importOriginal<typeof import("@/services/sando")>(), getSandoDevices: vi.fn(),
+}));
+const inventory = (): SandoDevice[] => [
+  { ip_address: "192.0.2.20", ip6_address: "2001:db8::20", local_description: " Living room tablet ", dns_hostname: "dns-tablet", dhcp_hostname: "dhcp-tablet" },
+  { ip_address: "198.51.100.10", local_description: " Database server ", dns_hostname: "dns-server" },
+];
+function enableSando(): void {
+  useControllerStore().state.data!.desired.sando = {
+    api_url: "https://sando.example", sync_enabled: true, hosts_import: null, rules_import: null,
+  };
+}
 const box = { template: "<div><slot /></div>" };
 const stubs = {
   VTable: { template: "<table><slot /></table>" },
@@ -47,10 +60,46 @@ beforeEach(() => {
   sample.connections[0]!.original.destination = "198.51.100.10";
   vi.mocked(getFirewallDenyLog).mockResolvedValue(drops);
   vi.mocked(getConnections).mockResolvedValue(sample);
+  vi.mocked(getSandoDevices).mockResolvedValue(inventory());
 });
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; useControllerStore().$dispose(); vi.restoreAllMocks(); });
 
 describe.each(views)("$name hostname displays", ({ view, source, destination }) => {
+  it("uses local descriptions instead of DNS or imported host names without changing telemetry", async () => {
+    enableSando();
+    const sample = await getConnections({ limit: 100 }), before = JSON.stringify(sample);
+    wrapper = mount(view, { global: { stubs } }); await flushPromises();
+    expect(wrapper.get(source).text()).toBe("LIVING ROOM TABLET (192.0.2.20)");
+    expect(wrapper.get(destination).text()).toBe("DATABASE SERVER (198.51.100.10)");
+    expect(wrapper.text()).not.toContain("DNS-TABLET");
+    expect(JSON.stringify(sample)).toBe(before);
+    expect(getSandoDevices).toHaveBeenCalledWith("https://sando.example", expect.any(AbortSignal));
+    expect(useControllerStore().draft).toBeNull();
+  });
+  it("keeps inventory devices without descriptions IP-only rather than using DNS names", async () => {
+    enableSando();
+    vi.mocked(getSandoDevices).mockResolvedValue(inventory().map(device => ({ ...device, local_description: " " })));
+    wrapper = mount(view, { global: { stubs } }); await flushPromises();
+    expect(wrapper.get(source).text()).toBe("192.0.2.20");
+    expect(wrapper.get(destination).text()).toBe("198.51.100.10");
+  });
+  it.each(["success", "failure"])("keeps pending inventory neutral and handles %s inline", async outcome => {
+    enableSando();
+    let resolve!: (devices: SandoDevice[]) => void, reject!: (error: Error) => void;
+    vi.mocked(getSandoDevices).mockReturnValue(new Promise((yes, no) => { resolve = yes; reject = no; }));
+    wrapper = mount(view, { global: { stubs } }); await flushPromises();
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    if (outcome === "success") resolve(inventory());
+    else reject(new Error("Unable to load host descriptions from Sando."));
+    await flushPromises();
+    if (outcome === "success") {
+      expect(wrapper.get(source).text()).toBe("LIVING ROOM TABLET (192.0.2.20)");
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    } else {
+      expect(wrapper.get('[role="alert"]').text()).toContain("Unable to load host descriptions from Sando.");
+      expect(wrapper.find(source).exists()).toBe(true);
+    }
+  });
   it("shows saved host names and display labels while preserving telemetry and ports", async () => {
     const drops = firewallDenyPage(), sample = await getConnections({ limit: 100 });
     const before = JSON.stringify(sample);
@@ -102,6 +151,40 @@ describe("shared hostname formatting", () => {
       expect(names.vm.formatHostAddress("198.51.100.10")).toBe("198.51.100.10");
       expect(names.vm.formatHostAddress("203.0.113.9")).toBe("203.0.113.9");
     } finally { names.unmount(); }
+  });
+  it("uses local descriptions for equivalent IPv6 addresses and inventory devices outside host policies", async () => {
+    enableSando();
+    vi.mocked(getSandoDevices).mockResolvedValue([
+      ...inventory(), { ip_address: "203.0.113.9", local_description: "Printer" },
+    ]);
+    const names = mount(Names); wrapper = names; await flushPromises();
+    expect(names.vm.formatHostAddress("2001:0db8:0:0:0:0:0:20")).toBe("LIVING ROOM TABLET (2001:0db8:0:0:0:0:0:20)");
+    expect(names.vm.formatHostAddress("203.0.113.9")).toBe("PRINTER (203.0.113.9)");
+  });
+  it("ignores draft endpoints and discards inventory results from a previous session", async () => {
+    enableSando();
+    const store = useControllerStore();
+    let resolve!: (devices: SandoDevice[]) => void;
+    vi.mocked(getSandoDevices).mockReturnValueOnce(new Promise(yes => { resolve = yes; }));
+    const names = mount(Names); wrapper = names;
+    store.draft = cloneConfig(store.state.data!.desired);
+    store.draft.sando!.api_url = "https://unsaved.example";
+    await flushPromises();
+    expect(getSandoDevices).toHaveBeenCalledTimes(1);
+    const signal = vi.mocked(getSandoDevices).mock.calls[0]![1];
+    store.sessionVersion++;
+    vi.mocked(getSandoDevices).mockResolvedValue([]);
+    await flushPromises();
+    expect(signal.aborted).toBe(true);
+    resolve(inventory()); await flushPromises();
+    expect(names.vm.formatHostAddress("192.0.2.20")).toBe("SANDO (192.0.2.20)");
+  });
+  it("uses local descriptions in connection deletion review while preserving the selected identity", async () => {
+    enableSando();
+    wrapper = mount(ConnectionsView, { global: { stubs } }); await flushPromises();
+    await wrapper.get('[aria-label="Delete connection 42"]').trigger("click");
+    expect(wrapper.get('[role="dialog"]').text()).toContain("LIVING ROOM TABLET (192.0.2.20) to DATABASE SERVER (198.51.100.10)");
+    expect(deleteConnection).not.toHaveBeenCalled();
   });
   it("labels the appliance's own IPv4 and IPv6 addresses with its hostname", () => {
     const config = useControllerStore().state.data!.desired;
