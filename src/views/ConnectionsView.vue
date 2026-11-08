@@ -491,7 +491,10 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
                 data-label="Source"
               >
                 <div class="endpoint-value">
-                  <span class="mono">{{ formatHostAddress(row.original.source) }}</span>
+                  <span
+                    class="mono"
+                    :title="formatHostAddress(row.original.source)"
+                  >{{ formatHostAddress(row.original.source) }}</span>
                 </div>
               </td>
               <td
@@ -499,7 +502,10 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
                 data-label="Destination"
               >
                 <div class="endpoint-value">
-                  <span class="mono">{{ formatHostAddress(row.original.destination) }}</span><v-chip
+                  <span
+                    class="mono"
+                    :title="formatHostAddress(row.original.destination)"
+                  >{{ formatHostAddress(row.original.destination) }}</span><v-chip
                     v-if="row.original.destination_port !== null"
                     size="x-small"
                     variant="tonal"
@@ -642,8 +648,9 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
 .connection-protocol-cell { min-width: 88px; }
 .connection-family { display: block; color: var(--text-muted); font-size: 11px; line-height: 16px; padding-left: 8px; }
 .endpoint { min-width: 120px; max-width: 280px; }
-.endpoint-value { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; max-width: 100%; }
-.endpoint-value .mono { font-size: 13px; overflow-wrap: anywhere; white-space: normal; min-width: 0; max-width: 100%; }
+.endpoint-value { display: flex; align-items: center; gap: 8px; min-width: 0; width: 264px; max-width: 100%; }
+.endpoint-value .mono { flex: 1 1 0; font-size: 13px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.endpoint-value > :not(.mono) { flex-shrink: 0; }
 .connection-state { white-space: nowrap; }
 .state-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .connection-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 13px; }
@@ -667,6 +674,7 @@ onUnmounted(() => { disposed = true; clearTimeout(timer); controller?.abort(); d
   .connection-row > .connection-state { grid-column: 2 / -1; grid-row: 1; justify-self: end; }
   .state-chips { flex-wrap: wrap; justify-content: end; }
   .connection-row > .endpoint { grid-column: 1 / -1; display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: start; gap: 8px; }
+  .endpoint-value { width: 100%; }
   .connection-row > .connection-number { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; }
   .connection-timeout { grid-column: 1 / -1; text-align: right; }
   .endpoint::before, .connection-number::before, .connection-timeout::before { content: attr(data-label); color: var(--text-muted); font-size: 11px; }

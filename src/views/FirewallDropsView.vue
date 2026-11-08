@@ -5,7 +5,7 @@ import { useControllerStore } from "@/stores/controller";
 import { getFirewallDenyLog } from "@/services/netcontrol";
 import { firewallDenyReadError } from "@/services/possibleMissingRules";
 import { formatIpProtocol, ipProtocolColor } from "@/services/firewallProtocols";
-import { firewallDenyQuerySchema, sortFirewallDrops, visibleFirewallDrops, type FirewallDenyPage, type FirewallDenyQuery, type FirewallDropSortColumn } from "@/services/firewallTelemetry";
+import { firewallDenyQuerySchema, sortFirewallDrops, type FirewallDenyPage, type FirewallDenyQuery, type FirewallDropSortColumn } from "@/services/firewallTelemetry";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { useHostnames } from "@/composables/useHostnames";
 import FirewallDropVisibility from "@/components/feature/FirewallDropVisibility.vue";
@@ -15,10 +15,10 @@ const { formatHostAddress, hostnamesError } = useHostnames();
 const store = useControllerStore();
 const data = ref<FirewallDenyPage | null>(null), loading = ref(false), error = ref(""), filterError = ref("");
 const showFilters = ref(false);
-const hideBroadcast = ref(true), hideTcp = ref(true);
+const includeBroadcast = ref(false), includeTcp = ref(false);
 const filters = reactive({ address: "", protocol: "", chain: "", since: "", until: "" });
 const pageSize = 100, page = ref(1);
-const query = ref<FirewallDenyQuery>({ limit: pageSize });
+const query = ref<FirewallDenyQuery>({ limit: pageSize, include_broadcast: false, include_tcp_closures: false });
 const chains = [{ title: "All chains", value: "" }, { title: "Input", value: "input" }, { title: "Forward", value: "forward" }];
 const columns = computed<Array<{ key: FirewallDropSortColumn; label: string }>>(() => [
   { key: "timestamp_ms", label: `Time (${timeZone.value})` },
@@ -27,13 +27,15 @@ const columns = computed<Array<{ key: FirewallDropSortColumn; label: string }>>(
   { key: "egress", label: "Egress" }, { key: "packet_length", label: "Bytes" }, { key: "reason", label: "Reason" },
 ]);
 const sortColumn = ref<FirewallDropSortColumn | null>(null), sortDescending = ref(false);
-const visibleRows = computed(() => visibleFirewallDrops(data.value?.records ?? [], hideBroadcast.value, hideTcp.value));
 const sortedRows = computed(() => sortColumn.value
-  ? sortFirewallDrops(visibleRows.value, sortColumn.value, sortDescending.value)
-  : visibleRows.value);
+  ? sortFirewallDrops(data.value?.records ?? [], sortColumn.value, sortDescending.value)
+  : data.value?.records ?? []);
 const pageCount = computed(() => Math.max(1, Math.ceil(sortedRows.value.length / pageSize)));
 const pagedRows = computed(() => sortedRows.value.slice((page.value - 1) * pageSize, page.value * pageSize));
-watch([hideBroadcast, hideTcp], () => { page.value = 1; });
+watch([includeBroadcast, includeTcp], () => {
+  query.value = { ...query.value, include_broadcast: includeBroadcast.value, include_tcp_closures: includeTcp.value };
+  reset();
+});
 watch(pageCount, count => { page.value = Math.min(page.value, count); });
 function sort(column: FirewallDropSortColumn): void {
   sortDescending.value = sortColumn.value === column ? !sortDescending.value : false;
@@ -57,8 +59,7 @@ async function read(nextQuery: FirewallDenyQuery, older = false): Promise<void> 
   let cursor = older ? data.value?.next_before_id : undefined;
   if (older && !cursor) return;
   const initialRecords = data.value?.records ?? [];
-  const remaining = () => pageSize - (visibleRows.value.length -
-    visibleFirewallDrops(initialRecords, hideBroadcast.value, hideTcp.value).length);
+  const remaining = () => pageSize - ((data.value?.records.length ?? 0) - initialRecords.length);
   loading.value = true; controller = new AbortController();
   try {
     do {
@@ -93,8 +94,10 @@ function applyFilters(): void {
       limit: pageSize, address: filters.address.trim() || undefined,
       protocol: filters.protocol.trim() === "" ? undefined : Number(filters.protocol),
       chain: filters.chain || undefined, since_ms: parseTimestamp(filters.since), until_ms: parseTimestamp(filters.until),
+      include_broadcast: includeBroadcast.value, include_tcp_closures: includeTcp.value,
     });
-    void read(next);
+    query.value = next;
+    reset();
   } catch (failure) {
     filterError.value = failure instanceof ZodError ? failure.issues.map(issue => issue.message).join("; ")
       : failure instanceof Error ? failure.message : "Invalid drop-history filters.";
@@ -177,8 +180,8 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
             @click="showFilters = !showFilters"
           />
           <FirewallDropVisibility
-            v-model:hide-broadcast="hideBroadcast"
-            v-model:hide-tcp="hideTcp"
+            v-model:include-broadcast="includeBroadcast"
+            v-model:include-tcp="includeTcp"
           />
         </div>
         <v-btn
@@ -323,7 +326,10 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
                 data-label="Source / port"
               >
                 <div class="drop-endpoint-value">
-                  <span class="mono">{{ formatHostAddress(row.source) }}</span>
+                  <span
+                    class="mono"
+                    :title="formatHostAddress(row.source)"
+                  >{{ formatHostAddress(row.source) }}</span>
                   <v-chip
                     v-if="row.source_port !== null"
                     size="x-small"
@@ -344,7 +350,10 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
                 data-label="Destination / port"
               >
                 <div class="drop-endpoint-value">
-                  <span class="mono">{{ formatHostAddress(row.destination) }}</span>
+                  <span
+                    class="mono"
+                    :title="formatHostAddress(row.destination)"
+                  >{{ formatHostAddress(row.destination) }}</span>
                   <v-chip
                     v-if="row.destination_port !== null"
                     size="x-small"
@@ -403,13 +412,13 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
           </template>
           <tr v-if="!sortedRows.length">
             <td colspan="8">
-              {{ data.records.length ? "No loaded drops are visible with these hide filters." : "No retained drops match these filters." }}
+              {{ data.oldest_id === null && data.newest_id === null ? "No retained firewall drops." : "No retained drops match these filters." }}
             </td>
           </tr>
         </tbody>
       </v-table>
       <div class="drop-footer">
-        <span class="text-caption text-medium-emphasis">{{ pagedRows.length }} of {{ sortedRows.length }} visible drops shown</span>
+        <span class="text-caption text-medium-emphasis">{{ pagedRows.length }} of {{ sortedRows.length }} drops shown</span>
         <v-pagination
           v-if="pageCount > 1"
           v-model="page"
@@ -453,8 +462,10 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
 .drop-row:hover { background: var(--bg-hover); }
 .drop-time { white-space: nowrap; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .drop-endpoint { min-width: 120px; max-width: 280px; }
-.drop-endpoint-value, .drop-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.drop-endpoint-value .mono { overflow-wrap: anywhere; min-width: 0; }
+.drop-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.drop-endpoint-value { display: flex; align-items: center; gap: 8px; min-width: 0; width: 264px; max-width: 100%; }
+.drop-endpoint-value .mono { flex: 1 1 0; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.drop-endpoint-value > :not(.mono) { flex-shrink: 0; }
 .drop-number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .drop-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; }
 @media (max-width: 600px) {
@@ -469,6 +480,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
   .drop-table :deep(.v-table__wrapper > table > tbody > tr > td) { min-width: 0; max-width: none; height: auto; padding: 0; border: 0; overflow-wrap: anywhere; }
   .drop-table :deep(td[data-label])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--text-muted); }
   .drop-time, .drop-endpoint { grid-column: 1 / -1; }
+  .drop-endpoint-value { width: 100%; }
   .drop-number { text-align: left; }
   .drop-table :deep(td[colspan]) { grid-column: 1 / -1; }
 }

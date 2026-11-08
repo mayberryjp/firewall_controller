@@ -14,7 +14,7 @@ import { cloneConfig } from "@/services/configuration";
 import type { FirewallCounters, FirewallDenyPage } from "@/services/firewallTelemetry";
 import { hostPolicyConfig, runtime, state, transaction } from "../fixtures";
 import { dnatRule } from "../bgpFixtures";
-import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
+import { firewallCounters, firewallDenyPage, filteredFirewallDenyPage } from "../firewallTelemetryFixtures";
 
 vi.mock("@/services/netcontrol", async importOriginal => ({
   ...await importOriginal<typeof import("@/services/netcontrol")>(),
@@ -58,33 +58,38 @@ const button = (text: string) => wrapper.findAll("button").find(item => item.tex
 const values = () => wrapper.findAll(".host-rule")[0]!.findAll(".counter-value").map(item => item.text());
 
 describe("firewall drop history", () => {
-  it("numbers pages using only visible rows, slices after sorting and resets pages when filters or results change", async () => {
+  it("numbers server-selected rows, slices after sorting and clears pages when category selection changes", async () => {
     const initial = firewallDenyPage(), base = initial.records[0]!;
     initial.records = Array.from({ length: 455 }, (_, index) => ({
       ...base, id: String(1000 - index), packet_length: index,
       tags: index < 250 ? ["ipv4_broadcast"] : [],
     }));
-    initial.next_before_id = null;
-    vi.mocked(getFirewallDenyLog).mockResolvedValue(initial);
+    vi.mocked(getFirewallDenyLog).mockImplementation(async query => filteredFirewallDenyPage(initial.records, query ?? {}));
     wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(0);
+    await button("Load older").trigger("click"); await flushPromises();
+    await button("Load older").trigger("click"); await flushPromises();
     expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(3);
     expect(wrapper.findAll(".drop-row")).toHaveLength(100);
-    expect(wrapper.text()).toContain("100 of 205 visible drops shown");
+    expect(wrapper.text()).toContain("100 of 205 drops shown");
     await wrapper.get('[aria-label="Page 3"]').trigger("click");
     expect(wrapper.findAll('.drop-row [data-label="Bytes"]').map(cell => cell.text())).toEqual(["450", "451", "452", "453", "454"]);
-    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
-    await wrapper.get('[aria-label="Hide broadcast drops"]').setValue(false);
-    expect(wrapper.get('[aria-label="Page 1"]').attributes("aria-current")).toBe("page");
-    expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(5);
-    await wrapper.get('[aria-label="Page 5"]').trigger("click");
-    await wrapper.get('[aria-label="Hide broadcast drops"]').setValue(true);
-    expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(3);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(3);
+    await wrapper.get('[aria-label="Include broadcast drops"]').setValue(true); await flushPromises();
+    expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(0);
+    expect(wrapper.findAll('.drop-row [data-label="Bytes"]')[0]!.text()).toBe("0");
+    await button("Load older").trigger("click"); await flushPromises();
+    await wrapper.get('[aria-label="Page 2"]').trigger("click");
+    await wrapper.get('[aria-label="Include broadcast drops"]').setValue(false); await flushPromises();
+    expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(0);
     expect(wrapper.findAll(".drop-row")).toHaveLength(100);
+    await button("Load older").trigger("click"); await flushPromises();
     await wrapper.get('[aria-label="Page 2"]').trigger("click");
     const bytes = wrapper.findAll("th").find(cell => cell.text() === "Bytes")!;
     await bytes.get("button").trigger("click"); await bytes.get("button").trigger("click");
     expect(wrapper.get('[aria-label="Page 1"]').attributes("aria-current")).toBe("page");
-    expect(wrapper.findAll('.drop-row [data-label="Bytes"]')[0]!.text()).toBe("454");
+    expect(wrapper.findAll('.drop-row [data-label="Bytes"]')[0]!.text()).toBe("449");
+    await button("Load older").trigger("click"); await flushPromises();
     await wrapper.get('[aria-label="Page 3"]').trigger("click");
     vi.mocked(getFirewallDenyLog).mockResolvedValue({ ...initial, records: initial.records.slice(-1) });
     await wrapper.get("form").trigger("submit"); await flushPromises();
@@ -92,48 +97,38 @@ describe("firewall drop history", () => {
     expect(wrapper.findAll(".drop-row")).toHaveLength(1);
     expect(useControllerStore().draft).toBeNull();
   });
-  it("loads 100 additional visible rows across hidden batches using exact cursors and remaining visible capacity", async () => {
+  it("loads 100 additional matching rows across cursor gaps with fixed flags and remaining capacity", async () => {
     const initial = firewallDenyPage(), base = initial.records[0]!;
     initial.records = [{ ...base, id: "1000" }]; initial.next_before_id = "1000";
-    const hidden: FirewallDenyPage = {
-      ...initial, next_before_id: "900", cursor_expired: true,
-      records: Array.from({ length: 100 }, (_, index) => ({ ...base, id: String(999 - index), tags: ["tcp_finish"] })),
-    };
     const mixed: FirewallDenyPage = {
-      ...initial, next_before_id: "800",
-      records: Array.from({ length: 100 }, (_, index) => ({
-        ...base, id: String(899 - index), tags: index < 60 ? ["ipv4_broadcast"] : [],
-      })),
+      ...initial, next_before_id: "800", cursor_expired: true,
+      records: Array.from({ length: 40 }, (_, index) => ({ ...base, id: String(839 - index) })),
     };
     const last: FirewallDenyPage = {
-      ...initial, next_before_id: "740",
+      ...initial, next_before_id: null, oldest_id: "700",
       records: Array.from({ length: 60 }, (_, index) => ({ ...base, id: String(799 - index) })),
     };
     vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(initial)
-      .mockResolvedValueOnce(hidden)
       .mockResolvedValueOnce(mixed).mockResolvedValueOnce(last);
     wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
     await button("Load older").trigger("click"); await flushPromises();
     expect(vi.mocked(getFirewallDenyLog).mock.calls.map(([query]) => query)).toEqual([
-      { limit: 100, before_id: undefined }, { limit: 100, before_id: "1000" },
-      { limit: 100, before_id: "900" }, { limit: 60, before_id: "800" },
+      { limit: 100, before_id: undefined, include_broadcast: false, include_tcp_closures: false },
+      { limit: 100, before_id: "1000", include_broadcast: false, include_tcp_closures: false },
+      { limit: 60, before_id: "800", include_broadcast: false, include_tcp_closures: false },
     ]);
     expect(wrapper.findAll(".drop-row")).toHaveLength(100);
     expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(2);
     await wrapper.get('[aria-label="Page 2"]').trigger("click");
     expect(wrapper.findAll(".drop-row")).toHaveLength(1);
     expect(wrapper.text()).toContain("Retention gap");
-    expect(button("Load older").exists()).toBe(true);
-    await wrapper.get('[aria-label="Hide broadcast drops"]').setValue(false);
-    await wrapper.get('[aria-label="Hide TCP FIN/RST drops"]').setValue(false);
-    expect(wrapper.findAll('[aria-label^="Page "]')).toHaveLength(3);
-    expect(wrapper.text()).toContain("100 of 261 visible drops shown");
-    expect(getFirewallDenyLog).toHaveBeenCalledTimes(4);
+    expect(wrapper.findAll("button").some(item => item.text() === "Load older")).toBe(false);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(3);
   });
   it("retains partial history and its cursor when a later batch fails, and retries without duplicates", async () => {
     const initial = firewallDenyPage(), base = initial.records[0]!;
     initial.records = [{ ...base, id: "10" }]; initial.next_before_id = "10";
-    const partial: FirewallDenyPage = { ...initial, records: [{ ...base, id: "9", tags: ["tcp_finish"] }], next_before_id: "9" };
+    const partial: FirewallDenyPage = { ...initial, records: [{ ...base, id: "9" }], next_before_id: "9" };
     let reject!: (error: Error) => void;
     vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(initial).mockResolvedValueOnce(partial)
       .mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
@@ -143,59 +138,50 @@ describe("firewall drop history", () => {
     expect(wrapper.text()).not.toContain("Previous results are retained");
     reject(new ApiFailure("unavailable", 503)); await flushPromises();
     expect(wrapper.text()).toContain("Previous results are retained");
-    expect(wrapper.findAll(".drop-row")).toHaveLength(1);
+    expect(wrapper.findAll(".drop-row")).toHaveLength(2);
     vi.mocked(getFirewallDenyLog).mockResolvedValueOnce({
-      ...initial, records: [{ ...base, id: "9", tags: ["tcp_finish"] }, { ...base, id: "8" }], next_before_id: null,
+      ...initial, records: [{ ...base, id: "9" }, { ...base, id: "8" }], next_before_id: null,
     });
     await button("Load older").trigger("click"); await flushPromises();
-    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({ limit: 100, before_id: "9" }, expect.any(AbortSignal));
+    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({ limit: 100, before_id: "9", include_broadcast: false, include_tcp_closures: false }, expect.any(AbortSignal));
     expect(wrapper.text()).not.toContain("Previous results are retained");
-    await wrapper.get('[aria-label="Hide TCP FIN/RST drops"]').setValue(false);
     expect(wrapper.findAll(".drop-row")).toHaveLength(3);
   });
-  it("defaults hide switches on at page load, keeps toggles local and retains fully hidden pages for cursor pagination", async () => {
+  it("defaults categories off and requests independent server inclusion including empty ACK and overlapping tags", async () => {
     const initial = firewallDenyPage(), base = initial.records[0]!;
     initial.records = [
-      { ...base, id: "8", tags: ["ipv4_broadcast"], packet_length: 80 },
-      { ...base, id: "7", tags: ["tcp_finish"], packet_length: 70 },
+      { ...base, id: "9", tags: ["ipv4_broadcast"], packet_length: 90 },
+      { ...base, id: "8", tags: ["tcp_finish"], packet_length: 80 },
+      { ...base, id: "7", tags: ["tcp_reset"], packet_length: 70 },
       { ...base, id: "6", tags: ["tcp_reset", "ipv4_broadcast"], packet_length: 60 },
+      { ...base, id: "5", tags: ["tcp_ack_only"], tcp_flags: 16, tcp_payload_length: 0, packet_length: 50 },
+      { ...base, id: "4", tags: ["tcp_connection_attempt"], packet_length: 40 },
+      { ...base, id: "3", tags: [], tcp_flags: 16, tcp_payload_length: null, packet_length: 30 },
+      { ...base, id: "2", tags: [], tcp_flags: 16, tcp_payload_length: 4, packet_length: 20 },
+      { ...base, id: "1", tags: [], packet_length: 10 },
     ];
-    initial.next_before_id = "6";
     const original = JSON.stringify(initial);
-    vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(initial);
+    vi.mocked(getFirewallDenyLog).mockImplementation(async query => filteredFirewallDenyPage(initial.records, query ?? {}));
     wrapper = mount(FirewallDropsView, { global: { stubs } });
-    const broadcast = wrapper.get<HTMLInputElement>('[aria-label="Hide broadcast drops"]');
-    const tcp = wrapper.get<HTMLInputElement>('[aria-label="Hide TCP FIN/RST drops"]');
-    expect(broadcast.element.checked).toBe(true); expect(tcp.element.checked).toBe(true);
+    const broadcast = wrapper.get<HTMLInputElement>('[aria-label="Include broadcast drops"]');
+    const tcp = wrapper.get<HTMLInputElement>('[aria-label="Include TCP FIN/RST/empty ACK drops"]');
+    expect(broadcast.element.checked).toBe(false); expect(tcp.element.checked).toBe(false);
     await flushPromises();
-    expect(wrapper.findAll(".drop-row")).toHaveLength(0);
-    await broadcast.setValue(false); await tcp.setValue(false);
-    expect(wrapper.findAll(".drop-row")).toHaveLength(3);
+    expect(wrapper.findAll(".drop-row")).toHaveLength(4);
     const header = wrapper.findAll("th").find(cell => cell.text() === "Bytes")!;
     await header.get("button").trigger("click");
-    await broadcast.setValue(true);
-    expect(wrapper.findAll(".drop-row")).toHaveLength(1);
-    await tcp.setValue(true);
-    expect(wrapper.findAll(".drop-row")).toHaveLength(0);
-    expect(wrapper.text()).toContain("No loaded drops are visible with these hide filters");
-    expect(wrapper.text()).not.toContain("No retained drops");
-    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
-    expect(button("Load older").attributes("disabled")).toBeUndefined();
-    vi.mocked(getFirewallDenyLog).mockResolvedValueOnce({
-      ...initial, next_before_id: null, records: [
-        { ...base, id: "5", tags: ["tcp_ack_only"], packet_length: 50 },
-        { ...base, id: "4", tags: ["tcp_connection_attempt"], packet_length: 40 },
-        { ...base, id: "3", tags: [], packet_length: 30 },
-      ],
-    });
-    await button("Load older").trigger("click"); await flushPromises();
-    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({ limit: 100, before_id: "6" }, expect.any(AbortSignal));
-    expect(wrapper.findAll('.drop-row [data-label="Bytes"]').map(cell => cell.text())).toEqual(["30", "40", "50"]);
+    await broadcast.setValue(true); await flushPromises();
+    expect(wrapper.findAll(".drop-row")).toHaveLength(5);
+    await tcp.setValue(true); await flushPromises();
+    expect(wrapper.findAll(".drop-row")).toHaveLength(9);
     expect(header.attributes("aria-sort")).toBe("ascending");
-    await broadcast.setValue(false); await tcp.setValue(false);
-    expect(wrapper.findAll(".drop-row")).toHaveLength(6);
-    expect(wrapper.text()).toContain("6 of 6 visible drops shown");
-    expect(getFirewallDenyLog).toHaveBeenCalledTimes(2);
+    await broadcast.setValue(false); await flushPromises();
+    expect(wrapper.findAll(".drop-row")).toHaveLength(7);
+    await tcp.setValue(false); await flushPromises();
+    expect(wrapper.findAll(".drop-row")).toHaveLength(4);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(5);
+    expect(vi.mocked(getFirewallDenyLog).mock.calls.map(([query]) => [query?.include_broadcast, query?.include_tcp_closures, query?.before_id]))
+      .toEqual([[false, false, undefined], [true, false, undefined], [true, true, undefined], [false, true, undefined], [false, false, undefined]]);
     expect(JSON.stringify(initial)).toBe(original);
     expect(useControllerStore().draft).toBeNull();
   });
@@ -209,6 +195,58 @@ describe("firewall drop history", () => {
     expect(wrapper.text()).toContain("Drop logging is disabled. Existing history is retained");
     expect(wrapper.findAll(".drop-row")).toHaveLength(retained.records.length);
     expect(wrapper.text()).not.toContain("Capture is disabled");
+  });
+  it("aborts an older read on selection changes, clears its cursor and ignores late old results while the new selection loads", async () => {
+    const initial = firewallDenyPage(), base = initial.records[0]!;
+    initial.records = [{ ...base, id: "10" }]; initial.next_before_id = "10";
+    let resolveOld!: (value: FirewallDenyPage) => void, resolveNew!: (value: FirewallDenyPage) => void;
+    vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(initial)
+      .mockImplementationOnce(() => new Promise(done => { resolveOld = done; }))
+      .mockImplementationOnce(() => new Promise(done => { resolveNew = done; }));
+    wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
+    await button("Load older").trigger("click"); await flushPromises();
+    const oldSignal = vi.mocked(getFirewallDenyLog).mock.calls[1]![1]!;
+    await wrapper.get('[aria-label="Include broadcast drops"]').setValue(true); await flushPromises();
+    expect(oldSignal.aborted).toBe(true);
+    expect(wrapper.findAll(".drop-row")).toHaveLength(0);
+    expect(wrapper.text()).not.toContain("No retained");
+    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({
+      limit: 100, before_id: undefined, include_broadcast: true, include_tcp_closures: false,
+    }, expect.any(AbortSignal));
+    resolveOld({ ...initial, records: [{ ...base, id: "9", packet_length: 999 }], next_before_id: null });
+    await flushPromises();
+    expect(wrapper.findAll(".drop-row")).toHaveLength(0);
+    expect(wrapper.get('[aria-label="Refresh"]').attributes("disabled")).toBeDefined();
+    resolveNew({ ...initial, records: [{ ...base, id: "20", packet_length: 200 }], next_before_id: null });
+    await flushPromises();
+    expect(wrapper.get('.drop-row [data-label="Bytes"]').text()).toBe("200");
+    expect(wrapper.findAll("button").some(item => item.text() === "Load older")).toBe(false);
+  });
+  it("preserves applied filters and the selected flags after a rejected category read without showing old rows or falling back", async () => {
+    const initial = firewallDenyPage(); initial.next_before_id = null;
+    vi.mocked(getFirewallDenyLog).mockResolvedValue(initial);
+    wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
+    await wrapper.get('[aria-label="Source or destination IP"]').setValue("192.0.2.20");
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    vi.mocked(getFirewallDenyLog).mockRejectedValueOnce(new ApiFailure("Unknown include_tcp_closures query", 400));
+    await wrapper.get('[aria-label="Include TCP FIN/RST/empty ACK drops"]').setValue(true); await flushPromises();
+    expect(wrapper.text()).toContain("Unknown include_tcp_closures query");
+    expect(wrapper.findAll(".drop-row")).toHaveLength(0);
+    expect(wrapper.text()).not.toContain("No retained");
+    await wrapper.get('[aria-label="Refresh"]').trigger("click"); await flushPromises();
+    expect(getFirewallDenyLog).toHaveBeenLastCalledWith(expect.objectContaining({
+      address: "192.0.2.20", before_id: undefined, include_broadcast: false, include_tcp_closures: true,
+    }), expect.any(AbortSignal));
+    expect(wrapper.findAll(".drop-row")).toHaveLength(1);
+  });
+  it.each([true, false])("distinguishes empty matching results from globally empty history (retained=%s)", async retained => {
+    const empty = firewallDenyPage(); empty.records = []; empty.next_before_id = null;
+    if (!retained) { empty.oldest_id = null; empty.newest_id = null; }
+    vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(empty);
+    wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).toContain(retained ? "No retained drops match these filters." : "No retained firewall drops.");
+    expect(wrapper.findAll("button").some(item => item.text() === "Load older")).toBe(false);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
   });
   it("sorts through accessible headers and preserves the selection across older pages, filters and refreshes without changing cursors", async () => {
     const initial = firewallDenyPage(), base = initial.records[0]!;
@@ -240,7 +278,7 @@ describe("firewall drop history", () => {
     vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(older);
     await button("Load older").trigger("click"); await flushPromises();
     expect(sources()).toEqual(["192.0.2.10", "192.0.2.20", "192.0.2.3", "192.0.2.2"]);
-    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({ limit: 100, before_id: "4" }, expect.any(AbortSignal));
+    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({ limit: 100, before_id: "4", include_broadcast: false, include_tcp_closures: false }, expect.any(AbortSignal));
     vi.mocked(getFirewallDenyLog).mockResolvedValue(initial);
     await wrapper.get('[aria-label="Refresh"]').trigger("click"); await flushPromises();
     expect(sources()).toEqual(["192.0.2.10", "192.0.2.20", "192.0.2.2"]);
@@ -320,7 +358,7 @@ describe("firewall drop history", () => {
     vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(firewallDenyPage()).mockResolvedValueOnce(older);
     wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
     await button("Load older").trigger("click"); await flushPromises();
-    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({ limit: 100, before_id: "18446744073709551614" }, expect.any(AbortSignal));
+    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({ limit: 100, before_id: "18446744073709551614", include_broadcast: false, include_tcp_closures: false }, expect.any(AbortSignal));
     expect(wrapper.findAll("time").map(item => item.text())).toEqual(["2026-10-30 12:34:56", "2026-10-30 12:34:57"]);
     expect(wrapper.text()).toContain("Retention gap"); expect(button("Load older")).toBeUndefined();
   });

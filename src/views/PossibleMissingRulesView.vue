@@ -4,7 +4,6 @@ import { useControllerStore } from "@/stores/controller";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { useHostnames } from "@/composables/useHostnames";
 import FirewallDropVisibility from "@/components/feature/FirewallDropVisibility.vue";
-import { visibleFirewallDrops } from "@/services/firewallTelemetry";
 import { formatIpProtocol, ipProtocolColor } from "@/services/firewallProtocols";
 import { firewallDenyReadError, missingRulePeriods, readMissingRuleHistory, sortMissingRules, summarizeMissingRules, type MissingRuleHistory, type MissingRuleSortColumn } from "@/services/possibleMissingRules";
 
@@ -12,12 +11,10 @@ const store = useControllerStore();
 const { formatTimestamp, timeZone } = useTimestamps();
 const { formatHostAddress, hostnamesError } = useHostnames();
 const hours = ref(1), loading = ref(false), error = ref("");
-const hideBroadcast = ref(true), hideTcp = ref(true);
+const includeBroadcast = ref(false), includeTcp = ref(false);
 const data = ref<MissingRuleHistory | null>(null);
 const since = computed(() => data.value ? Math.max(0, data.value.until - hours.value * 3600000) : 0);
-const periodRecords = computed(() => data.value?.records.filter(row => row.timestamp_ms >= since.value && row.timestamp_ms <= data.value!.until) ?? []);
-const visibleRecords = computed(() => visibleFirewallDrops(periodRecords.value, hideBroadcast.value, hideTcp.value));
-const rows = computed(() => data.value ? summarizeMissingRules(visibleRecords.value, since.value, data.value.until) : []);
+const rows = computed(() => data.value ? summarizeMissingRules(data.value.records, since.value, data.value.until) : []);
 const columns = computed<Array<{ key: MissingRuleSortColumn; label: string }>>(() => [
   { key: "source", label: "Source" }, { key: "destination", label: "Destination" },
   { key: "destinationPort", label: "Destination port" }, { key: "protocol", label: "Protocol" },
@@ -35,12 +32,16 @@ function sort(column: MissingRuleSortColumn): void {
 const packets = computed(() => rows.value.reduce((total, row) => total + row.packets, 0n));
 const bytes = computed(() => rows.value.reduce((total, row) => total + row.bytes, 0n));
 let controller: AbortController | undefined, generation = 0, disposed = false;
-async function read(): Promise<void> {
+let queryUntil: number | undefined;
+async function read(until = Date.now()): Promise<void> {
   if (loading.value || !store.connected || disposed) return;
+  queryUntil = until;
   const version = generation;
   loading.value = true; controller = new AbortController();
   try {
-    const result = await readMissingRuleHistory(Date.now(), controller.signal);
+    const result = await readMissingRuleHistory(until, controller.signal, {
+      include_broadcast: includeBroadcast.value, include_tcp_closures: includeTcp.value,
+    });
     if (version !== generation || disposed) return;
     data.value = result; error.value = "";
   } catch (failure) {
@@ -50,12 +51,13 @@ async function read(): Promise<void> {
     if (version === generation) loading.value = false;
   }
 }
-function reset(): void {
+function reset(until = Date.now()): void {
   generation++; controller?.abort(); loading.value = false;
   data.value = null; error.value = "";
-  if (store.connected) void read();
+  if (store.connected) void read(until);
 }
-watch(() => store.sessionVersion, reset);
+watch([includeBroadcast, includeTcp], () => reset(queryUntil));
+watch(() => store.sessionVersion, () => reset());
 onMounted(() => { void read(); });
 onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
 </script>
@@ -86,11 +88,11 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
         title="Refresh"
         :loading="loading"
         :disabled="loading || !store.connected"
-        @click="read"
+        @click="read()"
       />
       <FirewallDropVisibility
-        v-model:hide-broadcast="hideBroadcast"
-        v-model:hide-tcp="hideTcp"
+        v-model:include-broadcast="includeBroadcast"
+        v-model:include-tcp="includeTcp"
       />
     </div>
     <v-alert
@@ -201,15 +203,15 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
           >
             <td
               data-label="Source"
-              class="mono"
+              class="missing-rule-endpoint mono"
             >
-              {{ formatHostAddress(row.source) }}
+              <span :title="formatHostAddress(row.source)">{{ formatHostAddress(row.source) }}</span>
             </td>
             <td
               data-label="Destination"
-              class="mono"
+              class="missing-rule-endpoint mono"
             >
-              {{ formatHostAddress(row.destination) }}
+              <span :title="formatHostAddress(row.destination)">{{ formatHostAddress(row.destination) }}</span>
             </td>
             <td data-label="Destination port">
               <v-chip
@@ -298,7 +300,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
           </tr>
           <tr v-if="!rows.length">
             <td colspan="11">
-              {{ periodRecords.length ? "No drops are visible with these hide filters." : "No retained drops in this period. This does not prove there were no drops." }}
+              {{ data.hasRetainedHistory ? "No retained drops match these filters in this period." : "No retained firewall drops." }}
             </td>
           </tr>
         </tbody>
@@ -321,6 +323,8 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
 .missing-rule-sort:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
 .missing-rules-mobile-sort { display: none; }
 .missing-rules-table :deep(td) { font-size: 13px; overflow-wrap: anywhere; }
+.missing-rule-endpoint { min-width: 120px; max-width: 280px; }
+.missing-rule-endpoint > span { display: block; width: 264px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 900px) {
   .missing-rules-mobile-sort { display: flex; align-items: center; gap: 8px; }
   .missing-rules-mobile-sort :deep(.v-input) { flex: 1; min-width: 0; }
@@ -328,6 +332,8 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
   .missing-rules-table :deep(thead) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .missing-rules-table :deep(tbody > tr) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 12px 8px; border-bottom: 1px solid var(--border); }
   .missing-rules-table :deep(.v-table__wrapper > table > tbody > tr > td) { min-width: 0; height: auto; padding: 0; border: 0; }
+  .missing-rules-table :deep(.v-table__wrapper > table > tbody > tr > .missing-rule-endpoint) { max-width: none; }
+  .missing-rule-endpoint > span { width: 100%; }
   .missing-rules-table :deep(td[data-label])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--text-muted); }
   .missing-rules-table :deep(td[colspan]) { grid-column: 1 / -1; }
   .missing-rule-time { grid-column: 1 / -1; }

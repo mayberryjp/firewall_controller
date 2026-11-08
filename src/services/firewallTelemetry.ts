@@ -23,6 +23,8 @@ export const firewallDenyQuerySchema = z.object({
   since_ms: milliseconds.optional(), until_ms: milliseconds.optional(),
   address: z.string().ip().optional(), protocol: integer.max(255).optional(),
   chain: z.enum(["input", "forward"]).optional(),
+  include_broadcast: z.boolean().optional(),
+  include_tcp_closures: z.boolean().optional(),
 }).strict().refine(value => value.since_ms === undefined || value.until_ms === undefined || value.since_ms <= value.until_ms,
   "Since must not be after Until");
 export type FirewallDenyQuery = z.infer<typeof firewallDenyQuerySchema>;
@@ -58,10 +60,6 @@ export const firewallDenyPageSchema = z.object({
   }
 });
 export type FirewallDenyPage = z.infer<typeof firewallDenyPageSchema>;
-export function visibleFirewallDrops(rows: readonly FirewallDenyPage["records"][number][], hideBroadcast: boolean, hideTcp: boolean): FirewallDenyPage["records"] {
-  return rows.filter(row => !(hideBroadcast && row.tags.includes("ipv4_broadcast")) &&
-    !(hideTcp && row.tags.some(tag => tag === "tcp_finish" || tag === "tcp_reset")));
-}
 export type FirewallDropSortColumn = "timestamp_ms" | "source" | "destination" | "protocol" | "ingress" | "egress" | "packet_length" | "reason";
 
 export function sortFirewallDrops(rows: readonly FirewallDenyPage["records"][number][], column: FirewallDropSortColumn, descending: boolean): FirewallDenyPage["records"] {

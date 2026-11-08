@@ -361,13 +361,22 @@ describe("controller-proxied API boundary", () => {
   });
   it("reads historical drops using the exact exclusive cursor and AND filters", async () => {
     body = JSON.stringify(firewallDenyPage());
-    expect(await net.getFirewallDenyLog({ limit: 100, before_id: "18446744073709551614", address: "2001:db8::1", protocol: 0, chain: "input", since_ms: 0, until_ms: 1 })).toEqual(firewallDenyPage());
+    expect(await net.getFirewallDenyLog({ limit: 100, before_id: "18446744073709551614", address: "2001:db8::1", protocol: 0, chain: "input", since_ms: 0, until_ms: 1, include_broadcast: true, include_tcp_closures: false })).toEqual(firewallDenyPage());
     expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
     const url = new URL(captured!.url!, "https://test.invalid");
     expect(url.pathname).toBe("/firewall/deny-log");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ limit: "100", before_id: "18446744073709551614", address: "2001:db8::1", protocol: "0", chain: "input", since_ms: "0", until_ms: "1" });
+    expect(Object.fromEntries(url.searchParams)).toEqual({ limit: "100", before_id: "18446744073709551614", address: "2001:db8::1", protocol: "0", chain: "input", since_ms: "0", until_ms: "1", include_broadcast: "true", include_tcp_closures: "false" });
     expect(() => net.getFirewallDenyLog({ protocol: 256 })).toThrow();
     expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it.each([[false, false], [false, true], [true, false], [true, true]])("serializes each category combination as lowercase boolean strings (%s, %s)", async (broadcast, tcp) => {
+    body = JSON.stringify(firewallDenyPage());
+    await net.getFirewallDenyLog({ include_broadcast: broadcast, include_tcp_closures: tcp });
+    const url = new URL(captured!.url!, "https://test.invalid");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      include_broadcast: String(broadcast), include_tcp_closures: String(tcp),
+    });
+    expect(captured?.method).toBe("get"); expect(captured?.data).toBeUndefined();
   });
   it.each([403, 503])("surfaces telemetry HTTP %s instead of returning measured zeros or empty history", async code => {
     status = code; body = '{"error":"Telemetry unavailable"}';

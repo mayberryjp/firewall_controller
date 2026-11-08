@@ -7,7 +7,7 @@ import { ApiFailure } from "@/services/api";
 import { useControllerStore } from "@/stores/controller";
 import { navigationSections } from "@/constants/navigation";
 import { cloneConfig } from "@/services/configuration";
-import { firewallDenyPage } from "../firewallTelemetryFixtures";
+import { firewallDenyPage, filteredFirewallDenyPage } from "../firewallTelemetryFixtures";
 import { state } from "../fixtures";
 import type { FirewallDenyPage } from "@/services/firewallTelemetry";
 
@@ -45,47 +45,51 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; useControllerStore().$dispose(); vi.restoreAllMocks(); });
 
 describe("possible missing rules page", () => {
-  it("filters tagged packets before aggregation, restores totals and keeps period changes and toggles entirely local", async () => {
+  it("aggregates server-selected packets and refetches category changes while keeping period changes local", async () => {
     const result = page(), base = result.records[0]!;
     const tags = [
       ["ipv4_broadcast"], ["tcp_finish"], ["tcp_reset"], ["tcp_ack_only"], ["tcp_connection_attempt"], [],
     ] satisfies typeof base.tags[];
     result.records = tags.map((tags, index) => ({ ...base, id: String(10 - index), source_port: 50000 + index, tags }));
     const original = JSON.stringify(result);
-    vi.mocked(getFirewallDenyLog).mockResolvedValue(result);
+    vi.mocked(getFirewallDenyLog).mockImplementation(async query => filteredFirewallDenyPage(result.records, query ?? {}));
     wrapper = mount(PossibleMissingRulesView, { global: { stubs } });
-    const broadcast = wrapper.get<HTMLInputElement>('[aria-label="Hide broadcast drops"]');
-    const tcp = wrapper.get<HTMLInputElement>('[aria-label="Hide TCP FIN/RST drops"]');
+    const broadcast = wrapper.get<HTMLInputElement>('[aria-label="Include broadcast drops"]');
+    const tcp = wrapper.get<HTMLInputElement>('[aria-label="Include TCP FIN/RST/empty ACK drops"]');
     expect(wrapper.get(".missing-rules-toolbar").findAll('input[type="checkbox"]')).toHaveLength(2);
-    expect(broadcast.element.checked).toBe(true); expect(tcp.element.checked).toBe(true);
+    expect(broadcast.element.checked).toBe(false); expect(tcp.element.checked).toBe(false);
     await flushPromises();
     const totals = () => wrapper!.findAll(".missing-rules-totals [data-color]").map(chip => chip.text());
+    expect(totals()).toEqual(["2 packets", "120 bytes"]);
+    await broadcast.setValue(true); await flushPromises();
     expect(totals()).toEqual(["3 packets", "180 bytes"]);
-    await broadcast.setValue(false); await tcp.setValue(false);
+    await tcp.setValue(true); await flushPromises();
     expect(totals()).toEqual(["6 packets", "360 bytes"]);
-    await broadcast.setValue(true);
-    expect(totals()).toEqual(["5 packets", "300 bytes"]);
-    await tcp.setValue(true);
+    await tcp.setValue(false); await flushPromises();
     expect(totals()).toEqual(["3 packets", "180 bytes"]);
-    expect(wrapper.get('[data-label="Packets"]').text()).toBe("3");
+    await broadcast.setValue(false); await flushPromises();
+    expect(totals()).toEqual(["2 packets", "120 bytes"]);
+    await tcp.setValue(true); await flushPromises();
+    expect(totals()).toEqual(["5 packets", "300 bytes"]);
+    expect(wrapper.get('[data-label="Packets"]').text()).toBe("5");
     expect(wrapper.text()).not.toContain("loaded drops shown");
     expect(wrapper.text()).not.toContain("Captured input/forward drops only");
     expect(wrapper.text()).not.toContain("Source ports are ignored");
     await wrapper.get('[aria-label="Time period"]').setValue("4");
-    expect(totals()).toEqual(["3 packets", "180 bytes"]);
-    await broadcast.setValue(false);
-    expect(totals()).toEqual(["4 packets", "240 bytes"]);
-    await tcp.setValue(false);
+    expect(totals()).toEqual(["5 packets", "300 bytes"]);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(6);
+    await broadcast.setValue(true); await flushPromises();
     expect(totals()).toEqual(["6 packets", "360 bytes"]);
-    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(7);
+    expect(vi.mocked(getFirewallDenyLog).mock.calls.every(([query]) => query?.before_id === undefined)).toBe(true);
     expect(JSON.stringify(result)).toBe(original);
     expect(useControllerStore().draft).toBeNull();
   });
-  it("distinguishes hidden retained history from empty history and never hides real read failures", async () => {
-    const result = page(); result.records[0]!.tags = ["ipv4_broadcast"];
+  it("shows an empty matching view and never hides real read failures", async () => {
+    const result = page(); result.records = [];
     vi.mocked(getFirewallDenyLog).mockResolvedValue(result);
     wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
-    expect(wrapper.text()).toContain("No drops are visible with these hide filters");
+    expect(wrapper.text()).toContain("No retained drops match these filters in this period.");
     expect(wrapper.text()).not.toContain("No retained drops in this period");
     vi.mocked(getFirewallDenyLog).mockRejectedValue(new ApiFailure("HTTP 500: drop history failed", 500));
     await wrapper.get('[aria-label="Refresh"]').trigger("click"); await flushPromises();
@@ -101,6 +105,56 @@ describe("possible missing rules page", () => {
     expect(wrapper.text()).toContain("Drop logging is disabled. Existing history is retained");
     expect(wrapper.get('[data-label="Packets"]').text()).toBe("1");
     expect(wrapper.text()).not.toContain("Capture is disabled");
+  });
+  it("cancels the previous selection's paginated read and ignores late results until the new selection finishes", async () => {
+    const first = page(), base = first.records[0]!;
+    first.records = Array.from({ length: 500 }, (_, index) => ({ ...base, id: String(1000 - index) }));
+    first.next_before_id = "501";
+    let resolveOld!: (value: FirewallDenyPage) => void, resolveNew!: (value: FirewallDenyPage) => void;
+    vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(first)
+      .mockImplementationOnce(() => new Promise(done => { resolveOld = done; }))
+      .mockImplementationOnce(() => new Promise(done => { resolveNew = done; }));
+    wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
+    const signal = vi.mocked(getFirewallDenyLog).mock.calls[1]![1]!;
+    expect(wrapper.find(".missing-rules-totals").exists()).toBe(false);
+    await wrapper.get('[aria-label="Include broadcast drops"]').setValue(true); await flushPromises();
+    expect(signal.aborted).toBe(true);
+    expect(getFirewallDenyLog).toHaveBeenLastCalledWith({
+      limit: 500, before_id: undefined, since_ms: until - 7 * 86400000, until_ms: until,
+      include_broadcast: true, include_tcp_closures: false,
+    }, expect.any(AbortSignal));
+    resolveOld({ ...first, records: [{ ...base, id: "500" }], next_before_id: null });
+    await flushPromises();
+    expect(wrapper.find(".missing-rules-totals").exists()).toBe(false);
+    expect(wrapper.findAll(".missing-rule-row")).toHaveLength(0);
+    resolveNew({ ...first, records: [{ ...base, id: "2000", packet_length: 90 }], next_before_id: null });
+    await flushPromises();
+    expect(wrapper.findAll(".missing-rules-totals [data-color]").map(chip => chip.text())).toEqual(["1 packets", "90 bytes"]);
+    expect(wrapper.text()).not.toContain("500 packets");
+  });
+  it("clears old totals on a failed category change, surfaces the error and retries the same flags only on request", async () => {
+    wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.find(".missing-rules-totals").exists()).toBe(true);
+    vi.mocked(getFirewallDenyLog).mockRejectedValueOnce(new ApiFailure("Unknown include_tcp_closures query", 400));
+    const tcp = wrapper.get<HTMLInputElement>('[aria-label="Include TCP FIN/RST/empty ACK drops"]');
+    await tcp.setValue(true); await flushPromises();
+    expect(tcp.element.checked).toBe(true);
+    expect(wrapper.text()).toContain("Unknown include_tcp_closures query");
+    expect(wrapper.find(".missing-rules-totals").exists()).toBe(false);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(2);
+    await wrapper.get('[aria-label="Refresh"]').trigger("click"); await flushPromises();
+    expect(getFirewallDenyLog).toHaveBeenLastCalledWith(expect.objectContaining({
+      before_id: undefined, include_broadcast: false, include_tcp_closures: true,
+    }), expect.any(AbortSignal));
+    expect(wrapper.find(".missing-rules-totals").exists()).toBe(true);
+  });
+  it.each([true, false])("distinguishes no matching drops from no global retained history (retained=%s)", async retained => {
+    const empty = page(); empty.records = [];
+    if (!retained) { empty.oldest_id = null; empty.newest_id = null; }
+    vi.mocked(getFirewallDenyLog).mockResolvedValueOnce(empty);
+    wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).toContain(retained ? "No retained drops match these filters in this period." : "No retained firewall drops.");
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
   });
   it("appears directly after Firewall drops in Diagnostics navigation", () => {
     const pages = navigationSections.find(section => section.name === "diagnostics-section")!.pages;

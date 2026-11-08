@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { counterConfigurationMatches, dhcpRelayCounterSummaries, dhcpRelaySystemRules, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime, sortFirewallDrops, visibleFirewallDrops } from "@/services/firewallTelemetry";
+import { counterConfigurationMatches, dhcpRelayCounterSummaries, dhcpRelaySystemRules, firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, firewallSystemRules, parseDenyTime, sortFirewallDrops } from "@/services/firewallTelemetry";
 import { cloneConfig } from "@/services/configuration";
 import { hostPolicyConfig, state, transaction } from "../fixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
@@ -16,19 +16,12 @@ describe("firewall telemetry contracts", () => {
     expect(firewallDenyPageSchema.safeParse({ ...page, records: [{ ...page.records[0]!, tags: ["guessed_broadcast"] }] }).success).toBe(false);
     expect(firewallDenyPageSchema.safeParse({ ...page, records: [{ ...page.records[0]!, tags: undefined }] }).success).toBe(false);
   });
-  it("filters only observed broadcast and FIN/RST tags without hiding ACK-only traffic or mutating raw history", () => {
-    const base = firewallDenyPage().records[0]!;
-    const tags = [
-      ["ipv4_broadcast"], ["tcp_finish"], ["tcp_reset"], ["tcp_ack_only"],
-      ["tcp_connection_attempt"], ["tcp_finish", "ipv4_broadcast"], [],
-    ] satisfies typeof base.tags[];
-    const rows = tags.map((tags, index) => ({ ...base, id: String(7 - index), tags }));
-    const before = JSON.stringify(rows);
-    expect(visibleFirewallDrops(rows, false, false)).toEqual(rows);
-    expect(visibleFirewallDrops(rows, true, false).map(row => row.id)).toEqual(["6", "5", "4", "3", "1"]);
-    expect(visibleFirewallDrops(rows, false, true).map(row => row.id)).toEqual(["7", "4", "3", "1"]);
-    expect(visibleFirewallDrops(rows, true, true).map(row => row.id)).toEqual(["4", "3", "1"]);
-    expect(JSON.stringify(rows)).toBe(before);
+  it.each(["include_broadcast", "include_tcp_closures"] as const)("accepts only boolean client values for %s", key => {
+    expect(firewallDenyQuerySchema.parse({})).toEqual({});
+    for (const value of [false, true]) expect(firewallDenyQuerySchema.parse({ [key]: value })).toEqual({ [key]: value });
+    for (const value of [null, "", 0, 1, "true", "false", "TRUE", " false "]) {
+      expect(firewallDenyQuerySchema.safeParse({ [key]: value }).success).toBe(false);
+    }
   });
   it("preserves exact uint128 counters, real zeros and uint64 cursors", () => {
     const sample = firewallCounters();

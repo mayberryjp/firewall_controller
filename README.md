@@ -269,29 +269,36 @@ firewall host display names or host names, and the appliance hostname for its ow
 interface addresses. Unknown hosts remain IP-only. Inventory read failures appear
 inline; unsaved Sando settings do not affect labels. Labels do not change API
 filters, numeric-address sorting, connection identities, or drop aggregation.
+Source and destination values stay on one line with ellipsis rather than wrapping
+or overflowing their columns; hover to see the full label and address. Port chips
+remain visible.
 Firewall drops has sortable column headers, including horizontally scrollable
 headers on mobile. Click a header to sort loaded records ascending, then descending;
 sorting is retained across refreshes, filter changes and loading older records.
 The initial display and history cursors retain the backend's newest-first record
 ID order; sorting never changes API pagination or stored records.
 
-Both Firewall drops and Possible missing rules have **Hide broadcast drops** and
-**Hide TCP FIN/RST drops** switches, initially on each time the page loads. They filter loaded backend tags
-locally, without new requests, configuration writes, discarding history or resetting
-pagination. Broadcast is based on observed `ipv4_broadcast` tags, not address guesses;
-the TCP switch hides `tcp_finish`/`tcp_reset`, not ACK-only or connection-attempt drops.
+Both Firewall drops and Possible missing rules have **Include broadcast drops** and
+**Include TCP FIN/RST/empty ACK drops** switches, initially off each time the page loads.
+They request server-side inclusion using `include_broadcast` and `include_tcp_closures`,
+requiring the backend's November 9, 2026 deny-log retrieval contract. Ordinary matching
+traffic is always included. Broadcast uses saved `ipv4_broadcast` tags; TCP closures use
+`tcp_finish`, `tcp_reset`, and `tcp_ack_only` tags. Overlapping categories require both
+switches on. Untagged traffic, connection attempts, unknown ACK payloads, and nonempty
+ACKs are not guessed into the excluded categories.
 Firewall drops places the switches after its search and time-filter controls;
 Possible missing rules places them alongside its Time period selector,
 wrapping on compact screens.
-Possible missing rules filters packets before grouping and recalculates visible totals.
-Firewall drops uses numbered pages of 100 visible rows, after hide filters and
-sorting; hidden records do not contribute to the page count. Changing hide filters,
-sorting, or successfully refreshing/applying filters returns to page 1.
-Load older remains available on fully hidden drop pages using the original backend
-cursor. Each click continues through backend batches until 100 additional visible
-drops are loaded or retained history ends. Loaded hidden records remain available
-when their hide switches are turned off. Page numbers cover loaded visible history,
-not an estimated total for history that has not been fetched.
+Changing either switch cancels the previous selection's read, clears its history and
+cursor, and fetches matching records from the beginning without configuration writes.
+Possible missing rules keeps its fixed query window across category changes and groups
+only the completely read, server-selected history; its Time period selector stays local.
+Both inclusion flags and other query filters remain fixed across pagination. Firewall
+drops uses numbered pages of 100 loaded matching rows after sorting. Sorting,
+refreshing, applying filters, or changing inclusion returns to page 1. Load older follows
+the exact matching cursor until 100 additional matching drops are loaded or matching
+history ends. Global retention boundaries do not imply another matching page. Page
+numbers cover loaded history, not an estimated total for history that has not been fetched.
 
 Diagnostics > **FIREWALL DROPS** (`/diagnostics/firewall-drops`) reads
 `GET /api/v1/firewall/deny-log` with the independent `firewall.logs.read`

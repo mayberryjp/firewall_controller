@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { hostPolicyConfig } from "../fixtures";
 import { dnatRule } from "../bgpFixtures";
-import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
+import { firewallCounters, firewallDenyPage, filteredFirewallDenyPage } from "../firewallTelemetryFixtures";
 
 async function connect(page: Page) {
   await page.goto("/connect");
@@ -12,75 +12,93 @@ async function connect(page: Page) {
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
 }
 
-test("firewall drop page numbers count visible rows and older loading skips hidden batches", async ({ page }) => {
+test("firewall drop page numbers count server matches and restart on inclusion changes", async ({ page }) => {
   const backend = await mockBackend(page), queries: URLSearchParams[] = [];
   const base = firewallDenyPage().records[0]!;
-  const records = Array.from({ length: 350 }, (_, index) => ({
+  const records: typeof base[] = Array.from({ length: 400 }, (_, index) => ({
     ...base, id: String(1000 - index), packet_length: index,
-    tags: index < 60 || (index >= 100 && index < 250) ? ["ipv4_broadcast"] : [],
+    tags: index < 60 || (index >= 100 && index < 250) || index >= 350 ? ["ipv4_broadcast"] : [],
   }));
   await page.route("**/firewall/deny-log*", route => {
     const params = new URL(route.request().url()).searchParams; queries.push(params);
-    const start = params.has("before_id") ? 1001 - Number(params.get("before_id")) : 0;
-    const end = Math.min(records.length, start + Number(params.get("limit")));
-    return route.fulfill({ json: {
-      ...firewallDenyPage(), records: records.slice(start, end),
-      next_before_id: end < records.length ? records[end - 1]!.id : null,
-    } });
+    return route.fulfill({ json: filteredFirewallDenyPage(records, {
+      limit: Number(params.get("limit")), before_id: params.get("before_id") ?? undefined,
+      include_broadcast: params.get("include_broadcast") === "true",
+      include_tcp_closures: params.get("include_tcp_closures") === "true",
+    }) });
   });
   await connect(page); await page.goto("/diagnostics/firewall-drops");
   const view = page.getByRole("region", { name: "Firewall drops", exact: true });
-  await expect(view.locator(".drop-row")).toHaveCount(40);
+  await expect(view.locator(".drop-row")).toHaveCount(100);
   await expect(view.getByLabel("Firewall drop pages")).toHaveCount(0);
   await view.getByRole("button", { name: "Load older", exact: true }).click();
   await expect(view.locator(".drop-row")).toHaveCount(100);
-  await expect(view).toContainText("100 of 140 visible drops shown");
+  await expect(view).toContainText("100 of 140 drops shown");
+  await expect(view.getByRole("button", { name: "Load older", exact: true })).toHaveCount(0);
   const pagination = view.getByLabel("Firewall drop pages");
   await expect(pagination).toBeVisible();
   await expect(pagination.getByRole("button", { name: "Go to page 3", exact: true })).toHaveCount(0);
   await pagination.getByRole("button", { name: "Go to page 2", exact: true }).click();
   await expect(view.locator(".drop-row")).toHaveCount(40);
   expect(queries.map(query => [query.get("before_id"), query.get("limit")])).toEqual([
-    [null, "100"], ["901", "100"], ["801", "100"], ["701", "50"],
+    [null, "100"], ["691", "100"],
   ]);
-  await view.getByRole("checkbox", { name: "Hide broadcast drops", exact: true }).uncheck();
+  expect(queries.every(query => query.get("include_broadcast") === "false" && query.get("include_tcp_closures") === "false")).toBe(true);
+  await view.getByRole("checkbox", { name: "Include broadcast drops", exact: true }).check();
   await expect(view.locator(".drop-row")).toHaveCount(100);
   await expect(view.locator('.drop-row [data-label="Bytes"]').first()).toHaveText("0");
+  expect(queries[2]!.get("before_id")).toBeNull();
+  expect(queries[2]!.get("include_broadcast")).toBe("true");
+  for (const count of [200, 300, 400]) {
+    await view.getByRole("button", { name: "Load older", exact: true }).click();
+    await expect(view).toContainText(`100 of ${count} drops shown`);
+  }
   await pagination.getByRole("button", { name: "Go to page 4", exact: true }).click();
-  await expect(view.locator(".drop-row")).toHaveCount(50);
-  await view.getByRole("checkbox", { name: "Hide broadcast drops", exact: true }).check();
+  await expect(view.locator(".drop-row")).toHaveCount(100);
+  await expect(view.locator('.drop-row [data-label="Bytes"]').first()).toHaveText("300");
+  await view.getByRole("checkbox", { name: "Include broadcast drops", exact: true }).uncheck();
   await expect(view.locator(".drop-row")).toHaveCount(100);
   await expect(view.locator('.drop-row [data-label="Bytes"]').first()).toHaveText("60");
-  expect(queries).toHaveLength(4);
+  await expect(pagination).toHaveCount(0);
+  expect(queries).toHaveLength(7);
+  expect(queries[6]!.get("before_id")).toBeNull();
   expect(backend.writes).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test("drop hide switches preserve history, use untouched cursors and recalculate missing-rule totals locally", async ({ page, isMobile }) => {
+test("drop inclusion switches request server categories and replace missing-rule totals", async ({ page, isMobile }) => {
   const backend = await mockBackend(page), queries: URLSearchParams[] = [];
   const until = Date.parse("2026-11-08T12:34:56.789Z");
   await page.route("**/firewall/deny-log*", route => {
     const params = new URL(route.request().url()).searchParams; queries.push(params);
-    const result = firewallDenyPage(), base = { ...result.records[0]!, timestamp_ms: until };
-    result.capture.status = "disabled";
-    result.records = params.has("before_id") ? [
-      { ...base, id: "8", tags: ["tcp_ack_only"], tcp_flags: 16, tcp_payload_length: 0 },
-      { ...base, id: "7", tags: ["tcp_connection_attempt"], tcp_flags: 2 },
-      { ...base, id: "6", tags: ["tcp_reset", "ipv4_broadcast"], tcp_flags: 4 },
-      { ...base, id: "5", tags: [] },
-    ] : [
-      { ...base, id: "10", tags: ["ipv4_broadcast"] },
-      { ...base, id: "9", tags: ["tcp_finish"], tcp_flags: 1 },
+    const base = { ...firewallDenyPage().records[0]!, timestamp_ms: until };
+    const records: typeof base[] = [
+      { ...base, id: "9", tags: ["ipv4_broadcast"] },
+      { ...base, id: "8", tags: ["tcp_finish"], tcp_flags: 1 },
+      { ...base, id: "7", tags: ["tcp_reset"], tcp_flags: 4 },
+      { ...base, id: "6", tags: ["tcp_ack_only"], tcp_flags: 16, tcp_payload_length: 0 },
+      { ...base, id: "5", tags: ["tcp_reset", "ipv4_broadcast"], tcp_flags: 4 },
+      { ...base, id: "4", tags: ["tcp_connection_attempt"], tcp_flags: 2 },
+      { ...base, id: "3", tags: [], tcp_flags: 16, tcp_payload_length: null },
+      { ...base, id: "2", tags: [], tcp_flags: 16, tcp_payload_length: 4 },
+      { ...base, id: "1", tags: [] },
     ];
-    result.next_before_id = params.has("before_id") ? null : "9";
+    const result = filteredFirewallDenyPage(records, {
+      limit: Number(params.get("limit")), before_id: params.get("before_id") ?? undefined,
+      since_ms: params.has("since_ms") ? Number(params.get("since_ms")) : undefined,
+      until_ms: params.has("until_ms") ? Number(params.get("until_ms")) : undefined,
+      include_broadcast: params.get("include_broadcast") === "true",
+      include_tcp_closures: params.get("include_tcp_closures") === "true",
+    });
+    result.capture.status = "disabled";
     return route.fulfill({ json: result });
   });
   await connect(page); await page.clock.setFixedTime(until);
   await page.goto("/diagnostics/firewall-drops");
   const drops = page.getByRole("region", { name: "Firewall drops", exact: true });
-  const broadcast = drops.getByRole("checkbox", { name: "Hide broadcast drops", exact: true });
-  const tcp = drops.getByRole("checkbox", { name: "Hide TCP FIN/RST drops", exact: true });
-  await expect(broadcast).toBeChecked(); await expect(tcp).toBeChecked();
+  const broadcast = drops.getByRole("checkbox", { name: "Include broadcast drops", exact: true });
+  const tcp = drops.getByRole("checkbox", { name: "Include TCP FIN/RST/empty ACK drops", exact: true });
+  await expect(broadcast).not.toBeChecked(); await expect(tcp).not.toBeChecked();
   await expect(drops).not.toContainText("Retained input/forward drops only");
   await expect(drops).not.toContainText("Bytes are IP packet lengths, not flow totals");
   await expect(drops.locator(".drop-toolbar .drop-visibility-controls .v-switch")).toHaveCount(2);
@@ -99,22 +117,21 @@ test("drop hide switches preserve history, use untouched cursors and recalculate
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(drops).toContainText("Drop logging is disabled. Existing history is retained");
-  await expect(drops.locator(".drop-row")).toHaveCount(0);
-  await expect(drops).toContainText("No loaded drops are visible with these hide filters");
+  await expect(drops.locator(".drop-row")).toHaveCount(4);
+  await expect(drops.getByRole("button", { name: "Load older", exact: true })).toHaveCount(0);
   expect(queries).toHaveLength(1);
-  await drops.getByRole("button", { name: "Load older", exact: true }).click();
-  await expect(drops.locator(".drop-row")).toHaveCount(3);
-  expect(queries[1]!.get("before_id")).toBe("9");
-  await broadcast.uncheck(); await tcp.uncheck();
-  await expect(drops.locator(".drop-row")).toHaveCount(6);
-  expect(queries).toHaveLength(2);
+  await broadcast.check(); await expect(drops.locator(".drop-row")).toHaveCount(5);
+  await tcp.check(); await expect(drops.locator(".drop-row")).toHaveCount(9);
+  await broadcast.uncheck(); await expect(drops.locator(".drop-row")).toHaveCount(7);
+  await tcp.uncheck(); await expect(drops.locator(".drop-row")).toHaveCount(4);
+  expect(queries).toHaveLength(5);
   await page.goto("/diagnostics/possible-missing-rules");
   const missing = page.getByRole("region", { name: "Possible missing rules", exact: true });
   const totals = missing.locator(".missing-rules-totals .v-chip");
-  const hideBroadcast = missing.getByRole("checkbox", { name: "Hide broadcast drops", exact: true });
-  const hideTcp = missing.getByRole("checkbox", { name: "Hide TCP FIN/RST drops", exact: true });
-  await expect(totals).toHaveText(["3 packets", "180 bytes"]);
-  await expect(hideBroadcast).toBeChecked(); await expect(hideTcp).toBeChecked();
+  const includeBroadcast = missing.getByRole("checkbox", { name: "Include broadcast drops", exact: true });
+  const includeTcp = missing.getByRole("checkbox", { name: "Include TCP FIN/RST/empty ACK drops", exact: true });
+  await expect(totals).toHaveText(["4 packets", "240 bytes"]);
+  await expect(includeBroadcast).not.toBeChecked(); await expect(includeTcp).not.toBeChecked();
   await expect(missing.locator(".missing-rules-toolbar .v-switch")).toHaveCount(2);
   if (!isMobile) {
     const positions = await missing.locator(".missing-rules-toolbar").evaluate(toolbar => {
@@ -129,24 +146,25 @@ test("drop hide switches preserve history, use untouched cursors and recalculate
       expect(position.afterDropdown).toBe(true);
     }
   }
-  await hideBroadcast.uncheck(); await hideTcp.uncheck();
-  await expect(totals).toHaveText(["6 packets", "360 bytes"]);
-  await hideBroadcast.check();
-  await expect(totals).toHaveText(["4 packets", "240 bytes"]);
-  await hideTcp.check();
-  await expect(totals).toHaveText(["3 packets", "180 bytes"]);
-  await hideBroadcast.uncheck(); await hideTcp.uncheck();
-  await expect(totals).toHaveText(["6 packets", "360 bytes"]);
-  expect(queries).toHaveLength(4);
+  await includeBroadcast.check(); await expect(totals).toHaveText(["5 packets", "300 bytes"]);
+  await includeTcp.check(); await expect(totals).toHaveText(["9 packets", "540 bytes"]);
+  await includeBroadcast.uncheck(); await expect(totals).toHaveText(["7 packets", "420 bytes"]);
+  await includeTcp.uncheck(); await expect(totals).toHaveText(["4 packets", "240 bytes"]);
+  expect(queries).toHaveLength(10);
+  expect(queries.every(params => !params.has("before_id"))).toBe(true);
+  expect(queries.map(params => [params.get("include_broadcast"), params.get("include_tcp_closures")])).toEqual([
+    ["false", "false"], ["true", "false"], ["true", "true"], ["false", "true"], ["false", "false"],
+    ["false", "false"], ["true", "false"], ["true", "true"], ["false", "true"], ["false", "false"],
+  ]);
   expect(queries.every(params => !params.has("tag") && !params.has("exclude_tags"))).toBe(true);
   expect(backend.writes).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.reload();
-  await expect(hideBroadcast).toBeChecked(); await expect(hideTcp).toBeChecked();
-  await expect(totals).toHaveText(["3 packets", "180 bytes"]);
+  await expect(includeBroadcast).not.toBeChecked(); await expect(includeTcp).not.toBeChecked();
+  await expect(totals).toHaveText(["4 packets", "240 bytes"]);
   await page.goto("/diagnostics/firewall-drops");
-  await expect(broadcast).toBeChecked(); await expect(tcp).toBeChecked();
-  await expect(drops.locator(".drop-row")).toHaveCount(0);
+  await expect(broadcast).not.toBeChecked(); await expect(tcp).not.toBeChecked();
+  await expect(drops.locator(".drop-row")).toHaveCount(4);
 });
 
 test("General settings places drop logging last and preserves explicit false through reviewed SAVE and confirmation", async ({ page }) => {

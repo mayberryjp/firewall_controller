@@ -111,8 +111,29 @@ describe("paginated retained drop reads", () => {
     expect(result.records).toHaveLength(501);
     expect(getFirewallDenyLog).toHaveBeenNthCalledWith(2, {
       limit: 500, since_ms: until - 7 * 86400000, until_ms: until, before_id: first.next_before_id,
+      include_broadcast: false, include_tcp_closures: false,
     }, signal);
     expect(summarizeMissingRules(result.records, until - 3600000, until)[0]!.packets).toBe(501n);
+  });
+  it.each([[false, false], [false, true], [true, false], [true, true]])("keeps category flags (%s, %s) fixed across the whole paginated read", async (broadcast, tcp) => {
+    const first = firewallDenyPage(), last = firewallDenyPage(); last.next_before_id = null;
+    const categories = { include_broadcast: broadcast, include_tcp_closures: tcp };
+    vi.mocked(getFirewallDenyLog).mockReset().mockImplementationOnce(async () => {
+      categories.include_broadcast = !broadcast; categories.include_tcp_closures = !tcp;
+      return first;
+    }).mockResolvedValueOnce(last);
+    await readMissingRuleHistory(until, new AbortController().signal, categories);
+    expect(vi.mocked(getFirewallDenyLog).mock.calls.map(([query]) => [query?.include_broadcast, query?.include_tcp_closures]))
+      .toEqual([[broadcast, tcp], [broadcast, tcp]]);
+  });
+  it.each([true, false])("distinguishes an empty matching view from globally empty history (retained=%s)", async retained => {
+    const empty = firewallDenyPage(); empty.records = []; empty.next_before_id = null;
+    if (!retained) { empty.oldest_id = null; empty.newest_id = null; }
+    vi.mocked(getFirewallDenyLog).mockReset().mockResolvedValueOnce(empty);
+    const result = await readMissingRuleHistory(until, new AbortController().signal);
+    expect(result.records).toEqual([]);
+    expect(result.hasRetainedHistory).toBe(retained);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
   });
 
   it("retains capture and retention warnings from every page", async () => {

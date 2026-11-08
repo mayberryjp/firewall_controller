@@ -1,5 +1,5 @@
 import type { Config } from "../src/types/domain";
-import type { FirewallCounters, FirewallDenyPage } from "../src/services/firewallTelemetry";
+import type { FirewallCounters, FirewallDenyPage, FirewallDenyQuery } from "../src/services/firewallTelemetry";
 import { config, state } from "./fixtures";
 import { ruleOwnershipEntries } from "../src/services/ruleOwnership";
 
@@ -64,5 +64,24 @@ export function firewallDenyPage(): FirewallDenyPage {
       discarded_records: "0", malformed_records: "0", overflow_events: "0", sequence_gaps: "0",
       counters_scope: "daemon_session", loss_count_exact: false,
     },
+  };
+}
+
+export function filteredFirewallDenyPage(records: readonly FirewallDenyPage["records"][number][], query: FirewallDenyQuery): FirewallDenyPage {
+  const ordered = [...records].sort((left, right) => BigInt(left.id) > BigInt(right.id) ? -1 : BigInt(left.id) < BigInt(right.id) ? 1 : 0);
+  const matching = ordered.filter(row =>
+    (query.include_broadcast || !row.tags.includes("ipv4_broadcast")) &&
+    (query.include_tcp_closures || !row.tags.some(tag => ["tcp_finish", "tcp_reset", "tcp_ack_only"].includes(tag))) &&
+    (query.before_id === undefined || BigInt(row.id) < BigInt(query.before_id)) &&
+    (query.since_ms === undefined || row.timestamp_ms >= query.since_ms) &&
+    (query.until_ms === undefined || row.timestamp_ms <= query.until_ms) &&
+    (query.address === undefined || row.source === query.address || row.destination === query.address) &&
+    (query.protocol === undefined || row.protocol === query.protocol) &&
+    (query.chain === undefined || row.chain === query.chain));
+  const limit = query.limit ?? 100;
+  return {
+    ...firewallDenyPage(), records: matching.slice(0, limit),
+    next_before_id: matching.length > limit ? matching[limit - 1]!.id : null,
+    oldest_id: ordered.at(-1)?.id ?? null, newest_id: ordered[0]?.id ?? null,
   };
 }

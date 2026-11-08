@@ -1,6 +1,6 @@
 import { ApiFailure } from "@/services/api";
 import { getFirewallDenyLog } from "@/services/netcontrol";
-import type { FirewallDenyPage } from "@/services/firewallTelemetry";
+import type { FirewallDenyPage, FirewallDenyQuery } from "@/services/firewallTelemetry";
 import { compareInterfaceNames, formatInterfaceName } from "@/services/interfaceNames";
 import { formatIpProtocol } from "@/services/firewallProtocols";
 
@@ -32,6 +32,7 @@ export interface MissingRuleHistory {
   records: Drop[];
   until: number;
   warnings: string[];
+  hasRetainedHistory: boolean;
 }
 export type MissingRuleSortColumn = Exclude<keyof MissingRuleSummary, "id">;
 
@@ -88,18 +89,25 @@ export function summarizeMissingRules(records: readonly Drop[], since: number, u
     left.packets !== right.packets ? left.packets > right.packets ? -1 : 1 : left.id.localeCompare(right.id));
 }
 
-export async function readMissingRuleHistory(until: number, signal: AbortSignal): Promise<MissingRuleHistory> {
+export async function readMissingRuleHistory(
+  until: number, signal: AbortSignal,
+  categories: Pick<FirewallDenyQuery, "include_broadcast" | "include_tcp_closures"> = {},
+): Promise<MissingRuleHistory> {
   const records: Drop[] = [], warnings = new Set<string>();
+  const query = {
+    limit: 500, since_ms: Math.max(0, until - historyHours * 3600000), until_ms: until,
+    include_broadcast: categories.include_broadcast ?? false, include_tcp_closures: categories.include_tcp_closures ?? false,
+  };
+  let hasRetainedHistory = false;
   let cursor: string | undefined;
   do {
-    const page = await getFirewallDenyLog({
-      limit: 500, since_ms: Math.max(0, until - historyHours * 3600000), until_ms: until, before_id: cursor,
-    }, signal);
+    const page = await getFirewallDenyLog({ ...query, before_id: cursor }, signal);
     if (signal.aborted) throw new DOMException("The history read was aborted.", "AbortError");
     if (page.next_before_id && cursor && BigInt(page.next_before_id) >= BigInt(cursor)) {
       throw new Error("The backend returned a non-advancing history cursor.");
     }
     records.push(...page.records);
+    hasRetainedHistory ||= page.oldest_id !== null || page.newest_id !== null;
     if (page.cursor_expired) warnings.add("Retention gap: older records expired during this read. Totals are incomplete.");
     if (page.capture.status === "disabled" && !page.capture.error) {
       warnings.add("Drop logging is disabled. Existing history is retained; new drops are not recorded. Discord alerts depend on drop logging.");
@@ -111,7 +119,7 @@ export async function readMissingRuleHistory(until: number, signal: AbortSignal)
     }
     cursor = page.next_before_id ?? undefined;
   } while (cursor);
-  return { records, until, warnings: [...warnings] };
+  return { records, until, warnings: [...warnings], hasRetainedHistory };
 }
 
 export function firewallDenyReadError(failure: unknown): string {
