@@ -14,6 +14,8 @@ import { dnsResponse, linkDiagnostics, interfaceCapabilitySnapshot, rpsDiagnosti
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
 import { pathTestRequest, pathTestStatus } from "../pathTestFixtures";
+import { conntrackCatalog, conntrackSnapshot } from "../conntrackFixtures";
+import { discordStatus, webhookReference, webhookUrl } from "../discordFixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -27,6 +29,68 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("uploads a private Discord webhook and returns only its reference", async () => {
+    status = 201; body = encodeJson({ webhook_ref: webhookReference });
+    expect(await net.uploadDiscordWebhook(webhookUrl)).toEqual({ webhook_ref: webhookReference });
+    expect(captured).toMatchObject({ method: "post", url: "/services/discord/webhooks" });
+    expect(decodeJson(String(captured?.data))).toEqual({ webhook_url: webhookUrl });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it.each([400, 403, 409, 422, 503])("keeps HTTP %i upload errors credential-free without retries", async code => {
+    status = code; body = encodeJson({ error: `Invalid webhook ${webhookUrl}` });
+    try { await net.uploadDiscordWebhook(webhookUrl); expect.fail("Expected upload failure"); }
+    catch (error) {
+      expect(error).toMatchObject({ status: code });
+      expect(error instanceof Error && error.message).not.toContain(webhookUrl);
+      expect(error instanceof Error && error.message).not.toContain("abcdefghijklmnop");
+    }
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it("reads exact Discord entry totals and never returns webhook credentials in status errors", async () => {
+    body = encodeJson({ ...discordStatus(), delivered: "18446744073709551615", error: `Failure at ${webhookUrl}` });
+    const sample = await net.getDiscordStatus();
+    expect(sample.delivered).toBe("18446744073709551615");
+    expect(sample.error).toBe("Failure at [redacted webhook]");
+    expect(captured).toMatchObject({ method: "get", url: "/services/discord/status" });
+    expect(captured?.data).toBeUndefined();
+    status = 403; body = encodeJson({ error: webhookUrl });
+    await expect(net.getDiscordStatus()).rejects.toMatchObject({ status: 403, message: expect.not.stringContaining(webhookUrl) });
+  });
+  it("preserves private references in complete confirmed packages and refuses to confirm dropped Discord settings", async () => {
+    const candidate = config();
+    candidate.discord = { enabled: true, webhook_ref: webhookReference };
+    const pending = transaction(); pending.candidate = candidate;
+    status = 202; body = encodeJson(pending);
+    expect((await net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 })).candidate.discord)
+      .toEqual(candidate.discord);
+    expect(String(captured?.data)).not.toContain("discord.com");
+    body = encodeJson(transaction());
+    await expect(net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 }))
+      .rejects.toMatchObject({ uncertain: true, incompatible: true, transaction: expect.objectContaining({ id: pending.id }) });
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
+  it("reads the kernel catalog and exact runtime maps without a request body", async () => {
+    body = encodeJson(conntrackCatalog());
+    expect(await net.getKernelTunablesCatalog()).toEqual(conntrackCatalog());
+    expect(captured).toMatchObject({ method: "get", url: "/kernel/tunables/catalog" });
+    expect(captured?.data).toBeUndefined();
+    body = encodeJson(conntrackSnapshot());
+    expect(await net.getKernelTunables()).toEqual(conntrackSnapshot());
+    expect(captured).toMatchObject({ method: "get", url: "/kernel/tunables" });
+    expect(captured?.data).toBeUndefined();
+  });
+  it("preserves string conntrack values in complete transactions and treats dropped settings as uncertain", async () => {
+    const candidate = config();
+    candidate.kernel = { host: { "net.netfilter.nf_conntrack_max": "2048" }, namespace: {} };
+    const pending = transaction(); pending.candidate = candidate;
+    body = encodeJson(pending); status = 202;
+    await net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 });
+    expect(decodeJson(String(captured?.data))).toMatchObject({ config: candidate, confirm_timeout_seconds: 120 });
+    body = encodeJson(transaction());
+    await expect(net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 }))
+      .rejects.toMatchObject({ uncertain: true, incompatible: true, transaction: expect.objectContaining({ id: pending.id }) });
+    expect(adapter).toHaveBeenCalledTimes(2);
+  });
   it("reads local null-deadline transactions and takeover receipts without converting them to remote confirmation", async () => {
     const local = { ...transaction("applying_local"), confirmation_deadline: null };
     body = encodeJson({ [local.id]: local });

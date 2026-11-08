@@ -18,6 +18,7 @@ import type { z } from "zod";
 import { rememberRegistryDevice, setRegistrySessionToken } from "@/services/registry";
 import { isInitialLoad } from "@/services/datasets";
 import { pathTestRequestSchema, validatePathInterfaces, type PathTestStatus, type PathTestRequest } from "@/services/pathTests";
+import { conntrackChanged, type KernelTunable, type KernelTunables } from "@/services/conntrack";
 
 export interface Dataset<T> {
   data: T | null;
@@ -36,6 +37,8 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 export const useControllerStore = defineStore("controller", () => {
   const connected = ref(false), connecting = ref(false), authError = ref<string | null>(null);
   const state = dataset<StateView>(), runtime = dataset<RuntimeState>();
+  const kernelCatalog = dataset<KernelTunable[]>(), kernelTunables = dataset<KernelTunables>();
+  const supportedKernelCatalog = computed(() => connected.value && !kernelCatalog.stale && !kernelCatalog.error ? kernelCatalog.data ?? [] : []);
   const platform = dataset<PlatformStatus>();
   const linkDiagnostics = dataset<LinkDiagnostics>();
   const pathTests = dataset<PathTestStatus>(), pathInterfaces = dataset<DiscoveredInterface[]>();
@@ -177,7 +180,7 @@ export const useControllerStore = defineStore("controller", () => {
   const queryAborts = new WeakMap<object, AbortController>();
   const revisionCache = new Map<string, Revision>();
   const detailReads = new Map<string, Promise<Transaction | null>>();
-  const allDatasets = [state, runtime, platform, linkDiagnostics, pathTests, pathInterfaces, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, udpRelayStatus, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, vnstatReporting, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
+  const allDatasets = [state, runtime, kernelCatalog, kernelTunables, platform, linkDiagnostics, pathTests, pathInterfaces, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, udpRelayStatus, transactions, statistics, gatewayStatistics, hostHealth, mqttStatus, vnstatReporting, dynamicDnsStatus, mdnsStatus, revisions, revisionDetail, comparisonRevision, upgrade];
   const upgradeActive = computed(() => Boolean(upgrade.data?.job && !["succeeded", "failed", "rolled_back"].includes(upgrade.data.job.status)));
   const upgradeBlockedReason = computed(() => {
     if (upgradeUncertain.value) return "Upgrade submission outcome is unconfirmed. Do not resubmit; reconnect and inspect the upgrade job.";
@@ -198,7 +201,7 @@ export const useControllerStore = defineStore("controller", () => {
   const incompatible = computed(() => unknownStatus.value || state.incompatible || transactions.incompatible);
   const draftStale = computed(() => draft.value !== null && baseRevision.value !== state.data?.revision);
   const diff = computed(() => baseline.value && draft.value ? differences(baseline.value, draft.value) : []);
-  const validation = computed(() => draft.value ? validateConfig(draft.value, runtime.data?.parent_interfaces, baseline.value ?? undefined) : []);
+  const validation = computed(() => draft.value ? validateConfig(draft.value, runtime.data?.parent_interfaces, baseline.value ?? undefined, supportedKernelCatalog.value) : []);
   const freshState = computed(() => Boolean(connected.value && state.data && !state.stale && !state.error &&
     state.lastSuccess && Date.now() - state.lastSuccess < 20_000));
   const sortedTransactions = computed(() => Object.values(transactions.data ?? {}).sort((a, b) =>
@@ -336,6 +339,8 @@ export const useControllerStore = defineStore("controller", () => {
   }
   const refreshState = () => load(state, api.getState);
   const refreshRuntime = () => load(runtime, api.getRuntime);
+  const refreshKernelCatalog = () => load(kernelCatalog, api.getKernelTunablesCatalog);
+  const refreshKernelTunables = () => load(kernelTunables, api.getKernelTunables);
   const refreshLinkDiagnostics = () => load(linkDiagnostics, api.getLinkDiagnostics);
   const refreshPathInterfaces = () => load(pathInterfaces, api.getDiscoveredInterfaces);
   async function refreshPathTests(): Promise<void> {
@@ -747,7 +752,10 @@ export const useControllerStore = defineStore("controller", () => {
     const trimmed = validateWindow(seconds, description);
     if (!canApply.value || !draft.value || baseRevision.value === null) throw new Error(applyBlockedReason.value || "Draft base revision is unavailable");
     const captured = cloneConfig(draft.value), capturedBase = baseRevision.value;
-    await refreshState();
+    await Promise.all([
+      refreshState(),
+      ...(conntrackChanged(baseline.value?.kernel, captured.kernel) ? [refreshKernelCatalog()] : []),
+    ]);
     if (!canApply.value || state.data?.revision !== capturedBase || !draft.value || !equalConfig(captured, draft.value)) throw new Error("Pre-submit state changed; review again");
     const request = { base_revision: capturedBase, config: captured, confirm_timeout_seconds: seconds, description: trimmed };
     if (utf8Size(encodeJson(request)) > 1_048_576) throw new Error("Complete request exceeds 1 MiB");
@@ -850,6 +858,7 @@ export const useControllerStore = defineStore("controller", () => {
     if (comparisonRevision.data?.revision === id && !comparisonRevision.stale && !comparisonRevision.data.current) revisionCache.set(id, comparisonRevision.data);
   }
   return {
+    kernelCatalog, kernelTunables, supportedKernelCatalog, refreshKernelCatalog, refreshKernelTunables,
     adoptVlan, vlanAdoptionPending, vlanAdoptionBlockedReason,
     pathTests, pathInterfaces, pathTestsUnsupported, pathTestPending, pathTestUncertain, pathTestActionError,
     pathTestWriteBlockedReason, refreshPathTests, refreshPathInterfaces, startPathTest, cancelPathTest,

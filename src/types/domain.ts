@@ -6,6 +6,7 @@ import { sandoSchema } from "@/services/sandoState";
 import { ruleOwnershipShape, validateRuleOwnership } from "@/services/ruleOwnership";
 import { firewallProtocolSchema } from "@/services/firewallProtocols";
 import { offloadsSchema, rfsConfigSchema, type TuningSettings } from "@/services/tuning";
+import { discordConfigSchema, type DiscordConfig } from "@/services/discord";
 
 const list = <T extends z.ZodTypeAny>(schema: T) =>
   z.array(schema).nullable().transform((value) => value ?? []);
@@ -321,6 +322,7 @@ export const configSchema = z.object({
   udp_broadcast_relay: udpBroadcastRelaySchema.optional(),
   bgp: bgpSchema.optional(),
   mqtt: mqttSchema.optional(),
+  discord: discordConfigSchema.optional(),
   dynamic_dns: list(dynamicDnsSchema).optional(),
   blackhole: blackholeSchema.optional(),
   system: systemSchema.optional(),
@@ -595,7 +597,9 @@ export const statisticsSchema = z.object({
     name: z.string(), status: z.string(), groups: z.record(z.record(decimal)).nullable(), error: optionalText,
   })),
 });
-export type Config = z.infer<typeof configSchema>;
+export interface Config extends z.infer<typeof configSchema> {
+  discord?: DiscordConfig;
+}
 export type ManagedInterface = z.infer<typeof interfaceSchema>;
 export type Route = z.infer<typeof routeSchema>;
 export type FilterRule = z.infer<typeof filterSchema>;

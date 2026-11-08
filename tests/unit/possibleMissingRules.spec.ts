@@ -1,11 +1,45 @@
 import { describe, expect, it, vi } from "vitest";
-import { summarizeMissingRules, readMissingRuleHistory } from "@/services/possibleMissingRules";
+import { summarizeMissingRules, readMissingRuleHistory, sortMissingRules, type MissingRuleSummary, type MissingRuleSortColumn } from "@/services/possibleMissingRules";
 import { getFirewallDenyLog } from "@/services/netcontrol";
 import { firewallDenyPage } from "../firewallTelemetryFixtures";
 
 vi.mock("@/services/netcontrol", () => ({ getFirewallDenyLog: vi.fn() }));
 const until = Date.parse("2026-11-08T12:34:56.789Z");
 const record = (id: string, overrides = {}) => ({ ...firewallDenyPage().records[0]!, id, timestamp_ms: until, ...overrides });
+
+describe("missing rule sorting", () => {
+  const first: MissingRuleSummary = {
+    id: "first", source: "10.2.10.2", destination: "2001:db8::2", destinationPort: 2, protocol: 6,
+    packets: 9007199254740992n, bytes: 18014398509481984n, lastSeen: until - 1,
+    ingress: ["VLAN2"], egress: ["WAN2"], chains: ["forward"], reasons: ["Default policy"],
+  };
+  const second: MissingRuleSummary = {
+    id: "second", source: "10.2.10.10", destination: "2001:db8::10", destinationPort: 10, protocol: 17,
+    packets: 9007199254740993n, bytes: 18014398509481985n, lastSeen: until,
+    ingress: ["VLAN10"], egress: ["WAN10"], chains: ["input"], reasons: ["Rule drop"],
+  };
+  it.each<MissingRuleSortColumn>([
+    "source", "destination", "destinationPort", "protocol", "packets", "bytes",
+    "ingress", "egress", "chains", "reasons", "lastSeen",
+  ])("sorts %s in both directions without mutating input", column => {
+    const rows = [second, first];
+    expect(sortMissingRules(rows, column, false).map(row => row.id)).toEqual(["first", "second"]);
+    expect(sortMissingRules(rows, column, true).map(row => row.id)).toEqual(["second", "first"]);
+    expect(rows).toEqual([second, first]);
+  });
+  it("preserves zero ports and places missing ports last in both directions", () => {
+    const zero = { ...first, id: "zero", destinationPort: 0 };
+    const missing = { ...first, id: "missing", destinationPort: null };
+    expect(sortMissingRules([missing, first, zero], "destinationPort", false).map(row => row.id)).toEqual(["zero", "first", "missing"]);
+    expect(sortMissingRules([missing, first, zero], "destinationPort", true).map(row => row.id)).toEqual(["first", "zero", "missing"]);
+  });
+  it("sorts protocol labels as displayed and preserves tied row order", () => {
+    const unknown = { ...first, id: "unknown", protocol: 99 };
+    expect(sortMissingRules([first, unknown], "protocol", false).map(row => row.id)).toEqual(["unknown", "first"]);
+    expect(sortMissingRules([second, first], "reasons", false).map(row => row.id)).toEqual(["first", "second"]);
+    expect(sortMissingRules([second, { ...first, packets: second.packets }], "packets", true).map(row => row.id)).toEqual(["second", "first"]);
+  });
+});
 
 describe("possible missing rule aggregation", () => {
   it("groups across ephemeral source ports and rulesets, collects contexts and deduplicates exact IDs", () => {

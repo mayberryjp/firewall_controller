@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { formatIpProtocol, ipProtocolColor } from "@/services/firewallProtocols";
-import { firewallDenyReadError, missingRulePeriods, readMissingRuleHistory, summarizeMissingRules, type MissingRuleHistory } from "@/services/possibleMissingRules";
+import { firewallDenyReadError, missingRulePeriods, readMissingRuleHistory, sortMissingRules, summarizeMissingRules, type MissingRuleHistory, type MissingRuleSortColumn } from "@/services/possibleMissingRules";
 
 const store = useControllerStore();
 const { formatTimestamp, timeZone } = useTimestamps();
@@ -11,6 +11,20 @@ const hours = ref(1), loading = ref(false), error = ref("");
 const data = ref<MissingRuleHistory | null>(null);
 const since = computed(() => data.value ? Math.max(0, data.value.until - hours.value * 3600000) : 0);
 const rows = computed(() => data.value ? summarizeMissingRules(data.value.records, since.value, data.value.until) : []);
+const columns = computed<Array<{ key: MissingRuleSortColumn; label: string }>>(() => [
+  { key: "source", label: "Source" }, { key: "destination", label: "Destination" },
+  { key: "destinationPort", label: "Destination port" }, { key: "protocol", label: "Protocol" },
+  { key: "packets", label: "Packets" }, { key: "bytes", label: "Bytes" },
+  { key: "ingress", label: "Ingress" }, { key: "egress", label: "Egress" },
+  { key: "chains", label: "Chain" }, { key: "reasons", label: "Reason" },
+  { key: "lastSeen", label: `Last seen (${timeZone.value})` },
+]);
+const sortColumn = ref<MissingRuleSortColumn>("packets"), sortDescending = ref(true);
+const sortedRows = computed(() => sortMissingRules(rows.value, sortColumn.value, sortDescending.value));
+function sort(column: MissingRuleSortColumn): void {
+  sortDescending.value = sortColumn.value === column ? !sortDescending.value : false;
+  sortColumn.value = column;
+}
 const packets = computed(() => rows.value.reduce((total, row) => total + row.packets, 0n));
 const bytes = computed(() => rows.value.reduce((total, row) => total + row.bytes, 0n));
 let controller: AbortController | undefined, generation = 0, disposed = false;
@@ -119,6 +133,25 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
           {{ bytes.toString() }} bytes
         </v-chip>
       </p>
+      <div class="missing-rules-mobile-sort mb-3">
+        <v-select
+          :model-value="sortColumn"
+          label="Sort by"
+          :items="columns.map(column => ({ title: column.label, value: column.key }))"
+          density="compact"
+          variant="outlined"
+          hide-details
+          @update:model-value="sort"
+        />
+        <v-btn
+          :icon="sortDescending ? 'mdi-arrow-down' : 'mdi-arrow-up'"
+          variant="text"
+          size="small"
+          :aria-label="`Sort ${sortDescending ? 'ascending' : 'descending'}`"
+          :title="`Sort ${sortDescending ? 'ascending' : 'descending'}`"
+          @click="sortDescending = !sortDescending"
+        />
+      </div>
       <v-table
         class="missing-rules-table app-table"
         density="compact"
@@ -126,14 +159,31 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
       >
         <thead>
           <tr>
-            <th>Source</th><th>Destination</th><th>Destination port</th><th>Protocol</th>
-            <th>Packets</th><th>Bytes</th><th>Ingress</th><th>Egress</th><th>Chain</th><th>Reason</th>
-            <th>Last seen ({{ timeZone }})</th>
+            <th
+              v-for="column in columns"
+              :key="column.key"
+              scope="col"
+              :aria-sort="sortColumn === column.key ? (sortDescending ? 'descending' : 'ascending') : 'none'"
+            >
+              <button
+                type="button"
+                class="missing-rule-sort"
+                :title="`Sort by ${column.label.toLowerCase()} ${sortColumn === column.key && !sortDescending ? 'descending' : 'ascending'}`"
+                @click="sort(column.key)"
+              >
+                {{ column.label }}
+                <v-icon
+                  :icon="sortColumn === column.key ? (sortDescending ? 'mdi-arrow-down' : 'mdi-arrow-up') : 'mdi-unfold-more-horizontal'"
+                  size="14"
+                  aria-hidden="true"
+                />
+              </button>
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr
-            v-for="row in rows"
+            v-for="row in sortedRows"
             :key="row.id"
             class="missing-rule-row"
           >
@@ -254,8 +304,14 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
 .missing-rule-time { white-space: nowrap; color: var(--text-secondary); }
 .missing-rules-table { border: 1px solid var(--border); border-radius: 6px; }
 .missing-rules-table :deep(th) { white-space: nowrap; font-size: 12px; }
+.missing-rule-sort { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; color: inherit; font: inherit; cursor: pointer; }
+.missing-rule-sort:hover, .missing-rules-table :deep(th[aria-sort="ascending"]), .missing-rules-table :deep(th[aria-sort="descending"]) { color: var(--text-primary); }
+.missing-rule-sort:focus-visible { outline: 2px solid rgb(var(--v-theme-primary)); outline-offset: 2px; }
+.missing-rules-mobile-sort { display: none; }
 .missing-rules-table :deep(td) { font-size: 13px; overflow-wrap: anywhere; }
 @media (max-width: 900px) {
+  .missing-rules-mobile-sort { display: flex; align-items: center; gap: 8px; }
+  .missing-rules-mobile-sort :deep(.v-input) { flex: 1; min-width: 0; }
   .missing-rules-table :deep(table), .missing-rules-table :deep(tbody) { display: block; width: 100%; }
   .missing-rules-table :deep(thead) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .missing-rules-table :deep(tbody > tr) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 12px 8px; border-bottom: 1px solid var(--border); }

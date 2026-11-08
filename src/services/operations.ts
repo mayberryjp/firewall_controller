@@ -56,10 +56,11 @@ export function processRestartTarget(row: Component, config?: Config): string | 
     }
     case "dhcp_client": return `dhcp-client:${resource}`;
     case "mqtt": return "mqtt";
+    case "discord": return "discord";
     case "dynamic_dns": return "dynamic-dns";
     case "system": return "system";
-    case "daemon_tasks": return ({ mqtt: "mqtt", dynamic_dns: "dynamic-dns", system: "system" } as Record<string, string>)[resource] ?? null;
-    case "managed_processes": return ["mqtt", "dynamic-dns", "system", "dhcp-gateway-monitors", "link-diagnostics"].includes(resource) ? resource : null;
+    case "daemon_tasks": return ({ mqtt: "mqtt", discord: "discord", dynamic_dns: "dynamic-dns", system: "system" } as Record<string, string>)[resource] ?? null;
+    case "managed_processes": return ["mqtt", "discord", "dynamic-dns", "system", "dhcp-gateway-monitors", "link-diagnostics"].includes(resource) ? resource : null;
     default: return null;
   }
 }

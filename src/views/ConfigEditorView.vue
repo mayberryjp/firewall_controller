@@ -37,7 +37,7 @@ function save(): void {
     if (utf8Size(text.value) > 1_048_576) throw new Error("Configuration exceeds 1 MiB.");
     const candidate = configSchema.parse(decodeJson(text.value));
     if (candidate.software !== undefined) throw new Error("software is read-only release metadata. Remove it before saving.");
-    const issues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.baseline ?? store.state.data?.desired);
+    const issues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.baseline ?? store.state.data?.desired, store.supportedKernelCatalog);
     if (issues.length) {
       errors.value = issues.map(issue => `${issue.path}: ${issue.message}`);
       return;

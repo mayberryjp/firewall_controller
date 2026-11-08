@@ -61,6 +61,7 @@ describe("operational contracts", () => {
       ["dhcp_relay", "lab0", "dhcp-relay"], ["dhcp_client", "wan0", "dhcp-client:wan0"],
       ["gateway_monitors", "uplink", "gateway:uplink"], ["gateway_monitors", "auto", "dhcp-gateway-monitors"],
       ["managed_processes", "dynamic-dns", "dynamic-dns"], ["daemon_tasks", "dynamic_dns", "dynamic-dns"],
+      ["discord", "discord", "discord"], ["daemon_tasks", "discord", "discord"], ["managed_processes", "discord", "discord"],
       ["system", "hostname", "system"], ["future", "future", null], ["platform", "runtime", null],
     ]) expect(processRestartTarget({ ...row, component: component!, resource: resource! }, desired)).toBe(target);
   });

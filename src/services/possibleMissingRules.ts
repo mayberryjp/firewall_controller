@@ -2,6 +2,7 @@ import { ApiFailure } from "@/services/api";
 import { getFirewallDenyLog } from "@/services/netcontrol";
 import type { FirewallDenyPage } from "@/services/firewallTelemetry";
 import { compareInterfaceNames, formatInterfaceName } from "@/services/interfaceNames";
+import { formatIpProtocol } from "@/services/firewallProtocols";
 
 export const missingRulePeriods = [
   { title: "Last hour", value: 1 },
@@ -31,6 +32,24 @@ export interface MissingRuleHistory {
   records: Drop[];
   until: number;
   warnings: string[];
+}
+export type MissingRuleSortColumn = Exclude<keyof MissingRuleSummary, "id">;
+
+export function sortMissingRules(rows: readonly MissingRuleSummary[], column: MissingRuleSortColumn, descending: boolean): MissingRuleSummary[] {
+  const value = (row: MissingRuleSummary) => {
+    if (column === "protocol") return formatIpProtocol(row.protocol);
+    const result = row[column];
+    return Array.isArray(result) ? result.join(", ") : result;
+  };
+  return [...rows].sort((left, right) => {
+    const first = value(left), second = value(right);
+    if (first === null) return second === null ? 0 : 1;
+    if (second === null) return -1;
+    const comparison = typeof first === "string" && typeof second === "string"
+      ? first.localeCompare(second, undefined, { numeric: true, sensitivity: "base" })
+      : first < second ? -1 : first > second ? 1 : 0;
+    return descending ? -comparison : comparison;
+  });
 }
 
 export function summarizeMissingRules(records: readonly Drop[], since: number, until: number): MissingRuleSummary[] {

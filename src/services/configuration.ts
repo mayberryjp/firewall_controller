@@ -7,6 +7,8 @@ import { sandoSchema } from "@/services/sandoState";
 import { firewallProtocolFamily, parseFirewallPorts, supportsFirewallPorts } from "@/services/firewallProtocols";
 import { rpsMaskCpus, rpsTarget } from "@/services/rps";
 import { validateTuning } from "@/services/tuning";
+import { conntrackControls, conntrackValueError, isConntrackControl, type KernelTunable } from "@/services/conntrack";
+import { discordConfigSchema, discordDefaults } from "@/services/discord";
 
 export const cloneConfig = (config: Config): Config => {
   const editable = JSON.parse(JSON.stringify(config)) as Config;
@@ -31,6 +33,7 @@ export function normalize(config: Config): Config {
   if (result.sando && stableJson(result.sando) === stableJson(sandoSchema.parse({}))) delete result.sando;
   if (result.ipv6_enabled === false) delete result.ipv6_enabled;
   if (result.mqtt && stableJson(result.mqtt) === stableJson(mqttSchema.parse({}))) delete result.mqtt;
+  if (result.discord && stableJson(result.discord) === stableJson(discordDefaults())) delete result.discord;
   if (!result.dynamic_dns?.length) delete result.dynamic_dns;
   if (result.blackhole && stableJson(result.blackhole) === stableJson(blackholeSchema.parse({}))) delete result.blackhole;
   if (result.system && stableJson(result.system) === stableJson(systemSchema.parse({}))) delete result.system;
@@ -188,7 +191,7 @@ export function differences(before: Config, after: Config): Difference[] {
   named("softflowd", old.softflowd, next.softflowd, (item) => item.name);
   named("gateway_monitors", old.gateway_monitors, next.gateway_monitors, item => item.name);
   named("dynamic_dns", old.dynamic_dns ?? [], next.dynamic_dns ?? [], item => item.name);
-  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "bgp", "udp_broadcast_relay", "sando"] as const) {
+  for (const area of ["ntp", "syslog", "vnstat", "mdns", "mqtt", "discord", "blackhole", "system", "bgp", "udp_broadcast_relay", "sando"] as const) {
     if (stableJson(old[area]) !== stableJson(next[area])) result.push({
       area, identity: "appliance service", kind: "modified", before: old[area], after: next[area],
     });
@@ -254,7 +257,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
     if (!doc.dhcp_clients) delete doc.dhcp_clients;
     if (!doc.dns) delete doc.dns;
     if (!doc.dynamic_dns?.length) delete doc.dynamic_dns;
-  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "blackhole", "system", "kernel", "bgp", "udp_broadcast_relay", "sando"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
+  } else if (["ntp", "syslog", "vnstat", "mdns", "mqtt", "discord", "blackhole", "system", "kernel", "bgp", "udp_broadcast_relay", "sando"].includes(change.area)) Object.assign(doc, { [change.area]: change.after });
   else if (change.area === "ipv6") doc.ipv6_enabled = change.after === true;
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
@@ -384,8 +387,14 @@ export function ipv6Conflicts(config: Config): string[] {
   }
   return conflicts;
 }
-export function validateConfig(config: Config, parents: ParentInterface[] = [], baseline?: Config): ValidationIssue[] {
+export function validateConfig(config: Config, parents: ParentInterface[] = [], baseline?: Config, kernelCatalog: readonly KernelTunable[] = []): ValidationIssue[] {
   const issues: ValidationIssue[] = [...validateMDNS(config), ...validateUDPRelay(config)];
+  if (config.discord) {
+    const parsed = discordConfigSchema.safeParse(config.discord);
+    if (!parsed.success) for (const error of parsed.error.issues) issues.push({
+      path: `discord.${error.path.join(".")}`, message: error.message, page: "/settings/notifications",
+    });
+  }
   if (config.sando) {
     const parsed = sandoSchema.safeParse(config.sando);
     if (!parsed.success) for (const error of parsed.error.issues) issues.push({
@@ -782,9 +791,19 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       if (seconds !== undefined) bound(seconds, name === "general" ? 1 : 0, 604800, `${path}.timeouts.${name}`, page);
     });
   });
-  if (baseline && (["namespace", "host"] as const).some(scope =>
-    stableJson(config.kernel?.[scope] ?? {}) !== stableJson(baseline.kernel?.[scope] ?? {}))) {
-    issue("kernel", "Namespace and host kernel settings must be preserved unchanged; only RPS, RFS and NIC offloads can be edited", "/config/changes");
+  for (const scope of ["namespace", "host"] as const) {
+    const before = baseline?.kernel?.[scope] ?? {}, after = config.kernel?.[scope] ?? {};
+    for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (before[name] === after[name]) continue;
+      if (!isConntrackControl(name)) {
+        if (baseline) issue("kernel", "Unrelated namespace and host kernel settings must be preserved unchanged.", "/config/changes");
+        continue;
+      }
+      const entry = conntrackControls(kernelCatalog).find(entry => entry.name === name && entry.scope === scope);
+      const message = !entry ? "This conntrack key and scope require a successfully loaded supporting backend catalog."
+        : after[name] === undefined ? "" : conntrackValueError(after[name], entry);
+      if (message) issue(`kernel.${scope}.${name}`, message, "/settings/conntrack-tuning");
+    }
   }
   const rps = Object.entries(config.kernel?.rps ?? {}), rpsPage = "/diagnostics/rps";
   if (rps.length > 64) issue("kernel.rps", "At most 64 RPS queue settings", rpsPage);
@@ -882,7 +901,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write", mdns: "mdns.write",
-    mqtt: "mqtt.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write", udp_broadcast_relay: "udp_broadcast_relay.write", sando: "sando.write",
+    mqtt: "mqtt.write", discord: "discord.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write", udp_broadcast_relay: "udp_broadcast_relay.write", sando: "sando.write",
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);

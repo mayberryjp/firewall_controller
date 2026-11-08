@@ -7,6 +7,8 @@ import { interfaceCapabilitySnapshotSchema } from "@/services/interfaceCapabilit
 import { rpsDiagnosticsSchema } from "@/services/rps";
 import { pathTestRequestSchema, pathTestStatusSchema, type PathTestRequest } from "@/services/pathTests";
 import { tuningSettings } from "@/services/tuning";
+import { kernelTunablesCatalogSchema, kernelTunablesSchema, conntrackPreserved } from "@/services/conntrack";
+import { discordConfigSchema, discordDefaults, discordStatusSchema, discordWebhookSchema, discordWebhookReferenceSchema } from "@/services/discord";
 import { dateVersionSchema } from "@/services/versions";
 import { ruleOwnershipPreserved } from "@/services/ruleOwnership";
 import { firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, type FirewallDenyQuery } from "@/services/firewallTelemetry";
@@ -55,6 +57,10 @@ export function cancelPathTest(value: string, signal?: AbortSignal) {
 }
 export const getRpsDiagnostics = (signal?: AbortSignal) =>
   request("GET", "/statistics/performance", rpsDiagnosticsSchema, undefined, signal);
+export const getKernelTunablesCatalog = (signal?: AbortSignal) =>
+  request("GET", "/kernel/tunables/catalog", kernelTunablesCatalogSchema, undefined, signal);
+export const getKernelTunables = (signal?: AbortSignal) =>
+  request("GET", "/kernel/tunables", kernelTunablesSchema, undefined, signal);
 export const getInterfaceCapabilities = (signal?: AbortSignal) =>
   request("GET", "/interface-capabilities", interfaceCapabilitySnapshotSchema.nullable(), undefined, signal);
 export const refreshInterfaceCapabilities = (signal?: AbortSignal) =>
@@ -84,6 +90,24 @@ const submittedTransactionSchema = transactionSchema.extend({ ignored_fields: z.
   .refine(value => value.confirmation_deadline !== null && value.status !== "applying_local", "Remote transactions require timed confirmation");
 export const getHostHealth = (signal?: AbortSignal) => request("GET", "/statistics/host", hostHealthSchema, undefined, signal);
 export const getMqttStatus = (signal?: AbortSignal) => request("GET", "/services/mqtt/status", mqttStatusSchema, undefined, signal);
+export async function getDiscordStatus(signal?: AbortSignal) {
+  try { return await request("GET", "/services/discord/status", discordStatusSchema, undefined, signal); }
+  catch (failure) {
+    const status = failure instanceof ApiFailure ? failure.status : undefined;
+    throw new ApiFailure(`Discord status unavailable${status ? ` (HTTP ${status})` : ""}. Check backend support and state.read permission.`,
+      status, undefined, false, failure instanceof ApiFailure && failure.incompatible);
+  }
+}
+export async function uploadDiscordWebhook(webhookUrl: string, signal?: AbortSignal) {
+  const input = discordWebhookSchema.parse({ webhook_url: webhookUrl });
+  try { return await request("POST", "/services/discord/webhooks", discordWebhookReferenceSchema, input, signal); }
+  catch (failure) {
+    const status = failure instanceof ApiFailure ? failure.status : undefined;
+    throw new ApiFailure(status ? `Webhook upload failed (HTTP ${status}). Check discord.write permission and backend availability.` :
+      "Webhook upload outcome is unknown. No configuration was staged and no automatic retry was made.",
+    status, undefined, !(failure instanceof ApiFailure) || failure.uncertain, failure instanceof ApiFailure && failure.incompatible);
+  }
+}
 export const getDynamicDnsStatus = (signal?: AbortSignal) => request("GET", "/services/dynamic-dns/status", dynamicDnsStatusSchema, undefined, signal);
 export const getMDNSConfig = (signal?: AbortSignal) => request("GET", "/services/mdns", mdnsSchema, undefined, signal);
 export const getMDNSStatus = (signal?: AbortSignal) => request("GET", "/services/mdns/status", mdnsStatusPageSchema, undefined, signal);
@@ -161,6 +185,13 @@ export const getLatestRevision = () => request("GET", "/revisions/latest", revis
 export async function submitPackage(body: PackageRequest) {
   const payload = { ...body, base_revision: revisionSchema.parse(body.base_revision), config: cloneConfig(body.config) };
   const result = await request("POST", "/transactions", submittedTransactionSchema, payload);
+  if (stableJson(discordConfigSchema.parse(payload.config.discord ?? discordDefaults())) !==
+      stableJson(discordConfigSchema.parse(result.candidate.discord ?? discordDefaults()))) {
+    throw new ApiFailure("The backend did not preserve Discord notification settings. A provisional transaction may be active; inspect it and roll back rather than confirming. Deploy a Discord-capable backend before retrying.", 202, result, true, true);
+  }
+  if (!conntrackPreserved(payload.config.kernel, result.candidate.kernel)) {
+    throw new ApiFailure("The backend did not preserve the requested conntrack settings. A provisional transaction may be active; inspect it and roll back rather than confirming. Deploy a conntrack-capable backend before retrying.", 202, result, true, true);
+  }
   if (stableJson(tuningSettings(payload.config.kernel)) !== stableJson(tuningSettings(result.candidate.kernel))) {
     throw new ApiFailure("The backend did not preserve the requested RPS, RFS or NIC offload settings. A provisional transaction may be active; review it and roll back rather than confirming. Deploy a tuning-capable backend before retrying.", 202, result, true, true);
   }

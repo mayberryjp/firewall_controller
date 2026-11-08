@@ -69,6 +69,8 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "settings-section": [
     { path: "/settings/general", name: "settings-general", component: () => import("@/views/SettingsView.vue") },
+    { path: "/settings/notifications", name: "settings-notifications", component: () => import("@/views/NotificationsView.vue") },
+    { path: "/settings/conntrack-tuning", name: "settings-conntrack-tuning", component: () => import("@/views/ConntrackTuningView.vue") },
     { path: "/settings/remote-dns", name: "remote-dns", component: () => import("@/views/RemoteDnsView.vue") },
     { path: "/services/remote-dns", redirect: { name: "remote-dns" } },
     { path: "/settings/sando", name: "settings-sando", component: () => import("@/views/SandoView.vue") },

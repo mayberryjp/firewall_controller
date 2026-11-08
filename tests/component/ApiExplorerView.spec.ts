@@ -5,6 +5,10 @@ import ApiExplorerView from "@/views/ApiExplorerView.vue";
 import { useControllerStore } from "@/stores/controller";
 import * as api from "@/services/api";
 import { config, state } from "../fixtures";
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("vue-router", async importOriginal => ({
+  ...await importOriginal<typeof import("vue-router")>(), useRouter: () => ({ push }),
+}));
 
 const stubs = {
   VCombobox: { name: "VCombobox", props: ["modelValue", "items", "disabled"], emits: ["update:modelValue"],
@@ -16,6 +20,7 @@ const stubs = {
   RouterLink: { template: "<a><slot /></a>" },
 };
 beforeEach(() => {
+  push.mockReset();
   setActivePinia(createPinia());
   useControllerStore().connected = true;
   vi.spyOn(api, "inspectApiPath").mockResolvedValue({ status: 200, body: '{"counter":18446744073709551615}' });
@@ -27,6 +32,20 @@ async function render(send = true) {
   if (send) { await wrapper.get("form").trigger("submit"); await flushPromises(); }
   return wrapper;
 }
+describe("API Explorer private Discord routes", () => {
+  it("registers status and directs private upload to Notifications rather than issuing GET or echoing credentials", async () => {
+    const wrapper = await render(false);
+    const items = wrapper.getComponent({ name: "VCombobox" }).props("items");
+    expect(items).toContainEqual({ value: "/api/v1/services/discord/status", title: "/api/v1/services/discord/status" });
+    expect(items).toContainEqual({ value: "/api/v1/services/discord/webhooks", title: "/api/v1/services/discord/webhooks (POST: use Notifications)" });
+    await wrapper.get("input").setValue("/api/v1/services/discord/webhooks");
+    expect(api.inspectApiPath).not.toHaveBeenCalled();
+    await wrapper.get("form").trigger("submit"); await flushPromises();
+    expect(push).toHaveBeenCalledExactlyOnceWith("/settings/notifications");
+    expect(api.inspectApiPath).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});
 describe("API Explorer VLAN adoption", () => {
   const path = "/api/v1/interfaces/adopt-vlan";
   const input = { name: "vlan30", parent: "eth0", id: 30 };

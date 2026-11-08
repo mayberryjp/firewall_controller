@@ -284,7 +284,7 @@ const candidateError = computed(() => {
   if (!dirty.value || !editing.value) return "";
   if (props.mode === "rps" && rpsBlockedReason.value) return rpsBlockedReason.value;
   try {
-    return validateConfig(buildCandidate(), undefined, store.baseline ?? store.state.data?.desired)
+    return validateConfig(buildCandidate(), undefined, store.baseline ?? store.state.data?.desired, store.supportedKernelCatalog)
       .filter(issue => issue.path.startsWith("kernel")).map(issue => `${issue.path}: ${issue.message}`).join("; ");
   } catch (failure) { return failure instanceof Error ? failure.message : String(failure); }
 });

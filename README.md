@@ -315,9 +315,62 @@ ephemeral source ports. They show captured packet counts, summed IP packet lengt
 in bytes, and all observed ingress/egress interfaces, chains and drop reasons with
 colored chips. Last seen is the latest matching drop timestamp, displayed in the
 saved system timezone with seconds precision. A week of retention is not guaranteed.
-Rows are ordered by packet count. These are review candidates, not automatic
+Rows default to descending packet count. Click any column heading to sort ascending
+or descending; compact screens provide a Sort by selector and direction button.
+Sorting covers all grouped rows in the selected period, preserves exact counts,
+and remains selected across period changes and refreshes. These are review candidates, not automatic
 allow-rule recommendations or complete traffic accounting. Capture loss and
 retention gaps remain visible; a failed paginated read does not publish partial totals.
+
+### Notifications
+
+Settings > **Notifications** provides Discord first-seen drop alerts in the
+General Settings row layout. Save privately uploads a new/replacement webhook,
+clears the raw password-style input, and stages only its device-local reference.
+Review the complete candidate in SAVE and explicitly confirm it; only committed
+settings send. Configuration, revisions and exports never contain the URL.
+`discord.write` is required for upload and configuration changes, alongside
+`transactions.write` for apply/confirm/rollback. A successful supported status
+read is required before editing; failures and stale data remain explicit.
+
+The permanent tuple is source IP, destination IP, destination port and numeric
+protocol (null port differs from zero). Source ports and other context do not
+trigger repeats. There is no history backfill, including traffic observed while
+disabled, and restarting does not reset deduplication. Delivery is best-effort;
+failed/interrupted tuples are not replayed automatically, and accepted Discord
+messages cannot be rolled back. Enabling approves metadata sharing with Discord.
+Delivery status and exact daemon-session entry counters are read-only.
+The simulator never sends. Backend deployment and authorized native testing are
+separate; protect/back up private webhook and first-seen index storage.
+
+### Conntrack tuning
+
+Settings > **CONNTRACK TUNING** edits capacity and timeouts through the existing
+`kernel.host` and `kernel.namespace` string maps. Controls, scopes and inclusive
+bounds come from `GET /api/v1/kernel/tunables/catalog`; an older backend, failed
+read or stale catalog cannot enable submissions. The accepting backend must be
+deployed first. Maximum connections are host-global (1024..16777216 entries);
+the six TCP and two UDP timeouts affect the daemon's network namespace
+(1..604800 seconds). Values remain canonical decimal strings, not JSON numbers.
+Other host/namespace sysctls remain protected against edits.
+
+The page uses General Settings' divided label/control rows, compact fields,
+responsive layout and right-aligned **Save** action. Save only stages changes.
+It distinguishes applied configured, effective, observed and captured
+original values from the editable draft. Missing values are not zero defaults;
+simulator values are synthetic. Blank fields remove ownership: applying removal
+restores the backend's captured original, never an assumed default. Stage changes
+and review the full candidate in **SAVE**, with `transactions.write` and the
+changed scopes' `kernel.host.write`/`kernel.namespace.write` permissions.
+Host-global tuning also requires the backend's exclusive ownership/opt-in.
+
+Higher limits can increase memory use; lower limits can reject new connections.
+Short timeouts can expire idle flows or leave late teardown packets untracked.
+Bounds are not RAM-sizing advice. The existing apply and confirmation flow shows
+these warnings; independently check connectivity before confirming. Failed or
+uncertain writes retain drafts and require transaction inspection. No automatic
+tuning, connection flush, hash-bucket resizing or TCP validation relaxation is
+added, and restoring sysctls cannot recover expired connections.
 
 ### Process Restart, DNS Testing And Link Diagnostics
 

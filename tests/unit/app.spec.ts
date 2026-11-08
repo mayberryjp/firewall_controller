@@ -17,7 +17,22 @@ const PollingHost = defineComponent({ setup() { usePolling(); return () => null;
 describe("routed navigation sections", () => {
   it("places SANDO IMPORT and ADVANCED at the end of Settings", () => {
     const settings = navigationSections.find(section => section.name === "settings-section");
-    expect(settings?.pages.map(page => page.name)).toEqual(["settings-general", "remote-dns", "settings-mqtt-streaming", "settings-dynamic-dns", "settings-sando", "settings-advanced"]);
+    expect(settings?.pages.map(page => page.name)).toEqual(["settings-general", "settings-notifications", "remote-dns", "settings-mqtt-streaming", "settings-dynamic-dns", "settings-conntrack-tuning", "settings-sando", "settings-advanced"]);
+  });
+  it("routes CONNTRACK TUNING under Settings", () => {
+    const settings = navigationSections.find(section => section.name === "settings-section");
+    expect(settings?.pages.find(page => page.name === "settings-conntrack-tuning"))
+      .toMatchObject({ title: "CONNTRACK TUNING", path: "/settings/conntrack-tuning" });
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    expect(router.resolve("/settings/conntrack-tuning").name).toBe("settings-conntrack-tuning");
+    expect(router.resolve("/settings/conntrack-tuning").meta.authenticated).toBe(true);
+  });
+  it("routes Notifications directly after General under Settings", () => {
+    const settings = navigationSections.find(section => section.name === "settings-section");
+    expect(settings?.pages[1]).toMatchObject({ title: "Notifications", path: "/settings/notifications", name: "settings-notifications" });
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    expect(router.resolve("/settings/notifications").name).toBe("settings-notifications");
+    expect(router.resolve("/settings/notifications").meta.authenticated).toBe(true);
   });
   it("places Remote DNS in Settings and redirects the old Services URL", async () => {
     const settings = navigationSections.find(section => section.name === "settings-section")!;

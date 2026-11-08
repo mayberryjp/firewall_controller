@@ -120,7 +120,7 @@ function stageImport(result: SandoImport, base: string, kind: "hosts" | "rules")
       });
       reported = true;
     }
-    const issues = validateConfig(result.config, store.runtime.data?.parent_interfaces, store.baseline ?? store.state.data?.desired);
+    const issues = validateConfig(result.config, store.runtime.data?.parent_interfaces, store.baseline ?? store.state.data?.desired, store.supportedKernelCatalog);
     if (issues.length) throw new Error(issues.map(issue => `${issue.path}: ${issue.message}`).join("\n"));
     if (result.hostsAdded || result.rulesAdded || reported) {
       store.stage(result.config); endpoint.value = base; savedEndpoint.value = base; store.editorDirty = false;

@@ -5,6 +5,7 @@ import * as api from "@/services/netcontrol";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
 import { config, state, transaction, runtime, statistics, software, vnstatReporting, mqttStatus } from "../fixtures";
+import { conntrackCatalog } from "../conntrackFixtures";
 vi.mock("@/services/netcontrol", () => ({
   getState: vi.fn(), getRuntime: vi.fn(), getTransactions: vi.fn(), getTransaction: vi.fn(),
   getStatistics: vi.fn(), getGatewayStatistics: vi.fn(), getRevisions: vi.fn(), getRevision: vi.fn(),
@@ -13,6 +14,7 @@ vi.mock("@/services/netcontrol", () => ({
   getSystemUpgrade: vi.fn(), startSystemUpgrade: vi.fn(), checkSoftwareRelease: vi.fn(),
   getPlatformStatus: vi.fn(), getVnStatReporting: vi.fn(),
   adoptVlan: vi.fn(),
+  getKernelTunablesCatalog: vi.fn(), getKernelTunables: vi.fn(),
 }));
 beforeEach(() => {
   setActivePinia(createPinia()); vi.resetAllMocks();
@@ -30,6 +32,23 @@ async function connected() {
   await store.refresh();
   return store;
 }
+describe("conntrack submission gating", () => {
+  it("rechecks backend support before submission and retains a staged draft if support disappears", async () => {
+    const store = await connected();
+    vi.mocked(api.getKernelTunablesCatalog).mockResolvedValue(conntrackCatalog());
+    await store.refreshKernelCatalog();
+    const candidate = config();
+    candidate.kernel!.host["net.netfilter.nf_conntrack_max"] = "2048";
+    store.stage(candidate);
+    expect(store.canApply).toBe(true);
+    vi.mocked(api.getKernelTunablesCatalog).mockResolvedValue([]);
+    await expect(store.apply(120, "Reviewed conntrack capacity")).rejects.toThrow("Pre-submit state changed");
+    expect(api.submitPackage).not.toHaveBeenCalled();
+    expect(store.draft).toEqual(candidate);
+    expect(store.canApply).toBe(false);
+    store.$dispose();
+  });
+});
 describe("console provisioning transactions", () => {
   it.each(["applying_local", "recovery_failed"])("recognizes %s and preserves drafts while blocking conflicting operations", async status => {
     const store = await connected(), draft = config();

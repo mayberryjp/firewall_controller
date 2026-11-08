@@ -70,9 +70,11 @@ export const navigationSections: NavigationSection[] = [
   ] },
   { title: "Settings", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
     { title: "General", name: "settings-general", path: "/settings/general", icon: "mdi-cog-outline" },
+    { title: "Notifications", name: "settings-notifications", path: "/settings/notifications", icon: "mdi-bell-outline" },
     { title: "Remote DNS", name: "remote-dns", path: "/settings/remote-dns", icon: "mdi-dns-outline" },
     { title: "MQTT STREAMING", name: "settings-mqtt-streaming", path: "/settings/mqtt-streaming", icon: "mdi-home-assistant" },
     { title: "Dynamic DNS", name: "settings-dynamic-dns", path: "/settings/dynamic-dns", icon: "mdi-dns-outline" },
+    { title: "CONNTRACK TUNING", name: "settings-conntrack-tuning", path: "/settings/conntrack-tuning", icon: "mdi-tune" },
     { title: "SANDO IMPORT", name: "settings-sando", path: "/settings/sando", icon: "mdi-import" },
     { title: "ADVANCED", name: "settings-advanced", path: "/settings/advanced", icon: "mdi-cog-alert-outline" },
   ] },

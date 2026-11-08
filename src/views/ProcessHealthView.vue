@@ -44,14 +44,14 @@ function stateLabel(value: string): string {
 const componentLabels: Record<string, string> = {
   daemon: "Daemon", appliance_services: "Appliance service", dhcp_relay: "DHCP relay",
   softflowd: "NetFlow/IPFIX", gateway_monitors: "Gateway monitor", dhcp_client: "DHCP client",
-  mqtt: "MQTT", dynamic_dns: "Dynamic DNS", managed_processes: "Managed process", system: "System settings",
+  mqtt: "MQTT", discord: "Discord", dynamic_dns: "Dynamic DNS", managed_processes: "Managed process", system: "System settings",
 };
 const restartSelection = ref<{ id: string; target: string } | null>(null);
 function restartUnavailable(row: ComponentHealth): string {
   const target = processRestartTarget(row, store.state.data?.desired);
   if (!target || !restartTargetSchema.safeParse(target).success) return "This observation has no supported restart target.";
   if (target === "netcontrold" && !health.value?.process_health.daemon?.watchdog_enabled) return "Daemon restart requires native host-mode systemd/watchdog supervision.";
-  if (["disabled", "simulated"].includes(row.state) && !["mqtt", "dynamic-dns", "system", "netcontrold"].includes(target)) return "This native worker is disabled or simulated.";
+  if (["disabled", "simulated"].includes(row.state) && !["mqtt", "discord", "dynamic-dns", "system", "netcontrold"].includes(target)) return "This native worker is disabled or simulated.";
   return store.operationBlockedReason;
 }
 function reviewRestart(row: ComponentHealth): void {

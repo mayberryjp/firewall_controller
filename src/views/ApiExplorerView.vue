@@ -6,8 +6,10 @@ import { useControllerStore } from "@/stores/controller";
 import { adoptVlanRequestSchema } from "@/types/domain";
 import { decodeJson, encodeJson } from "@/services/json";
 import { isInitialLoad } from "@/services/datasets";
+import { useRouter } from "vue-router";
 
 const store = useControllerStore();
+const router = useRouter();
 const path = ref("/api/v1/services/vnstat/status");
 const loading = ref(false), error = ref("");
 const response = ref<{ path: string; status: number; body: string } | null>(null);
@@ -15,6 +17,7 @@ const copying = ref(false), copied = ref(false), copyError = ref("");
 const capabilitiesPath = "/api/v1/interface-capabilities";
 const refreshPath = `${capabilitiesPath}/refresh`;
 const adoptionPath = "/api/v1/interfaces/adopt-vlan";
+const discordWebhookPath = "/api/v1/services/discord/webhooks";
 const adoptionBody = ref('{"name":"","parent":"","id":1}');
 const savedCapabilities = ref<typeof response.value>(null);
 const capabilitiesStale = ref(false), refreshDenied = ref(false);
@@ -22,6 +25,7 @@ const selectedPath = computed(() => path.value.trim().split("?")[0]);
 const refreshingCapabilities = computed(() => selectedPath.value === refreshPath);
 const readingCapabilities = computed(() => selectedPath.value === capabilitiesPath);
 const adoptingVlan = computed(() => selectedPath.value === adoptionPath);
+const configuringDiscord = computed(() => selectedPath.value === discordWebhookPath);
 const adoptionInitializing = computed(() => store.connected && !store.state.error && !store.transactions.error &&
   (isInitialLoad(store.state) || isInitialLoad(store.transactions)));
 const staleResponse = computed(() => capabilitiesStale.value && response.value !== null && response.value === savedCapabilities.value);
@@ -29,10 +33,12 @@ let controller: AbortController | undefined;
 const endpoints = [
   "/state", "/runtime", "/platform/status", "/interfaces/discovered", "/interfaces/adopt-vlan", "/gateway-monitors",
   "/interface-capabilities", "/interface-capabilities/refresh",
+  "/kernel/tunables/catalog", "/kernel/tunables",
   "/diagnostics/path-tests",
   "/statistics", "/statistics/host", "/statistics/link-diagnostics", "/statistics/connections", "/statistics/performance",
   "/statistics/gateways", "/statistics/vnstat", "/routes/bgp", "/routes/bgp/advertised",
   "/services/gateway-monitoring/status", "/services/mqtt/status", "/services/dynamic-dns/status",
+  "/services/discord/status", "/services/discord/webhooks",
   ...["ntp", "syslog", "vnstat", "mdns", "bgp", "udp-broadcast-relay"].flatMap(service => [
     `/services/${service}`, `/services/${service}/status`,
   ]),
@@ -40,6 +46,7 @@ const endpoints = [
 ].map(endpoint => `/api/v1${endpoint}`).sort().map(value => ({
   value,
   title: value === adoptionPath ? `${value} (POST: Adopt existing VLAN)` :
+    value === discordWebhookPath ? `${value} (POST: use Notifications)` :
     value === capabilitiesPath ? `${value} (Read saved interface capabilities)` :
     value === refreshPath ? `${value} (Scans hardware and saves)` : value,
 }));
@@ -90,6 +97,7 @@ onBeforeUnmount(reset);
 
 async function send(): Promise<void> {
   if (!store.connected || loading.value) return;
+  if (configuringDiscord.value) { await router.push("/settings/notifications"); return; }
   const requestPath = path.value.trim();
   const isRefresh = refreshingCapabilities.value;
   const isAdoption = adoptingVlan.value;
@@ -170,7 +178,7 @@ async function send(): Promise<void> {
         :loading="loading"
         :disabled="!store.connected || loading || !path || (adoptingVlan && Boolean(store.vlanAdoptionBlockedReason)) || (refreshingCapabilities && (refreshDenied || Boolean(store.pathTestWriteBlockedReason)))"
       >
-        {{ adoptingVlan ? "POST: Adopt VLAN" : refreshingCapabilities ? "GET: Scan & save" : "GET" }}
+        {{ configuringDiscord ? "Open Notifications" : adoptingVlan ? "POST: Adopt VLAN" : refreshingCapabilities ? "GET: Scan & save" : "GET" }}
       </v-btn>
       <v-btn
         v-if="loading && !refreshingCapabilities && !adoptingVlan"

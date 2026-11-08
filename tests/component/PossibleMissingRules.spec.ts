@@ -15,11 +15,12 @@ vi.mock("@/services/netcontrol", () => ({ getFirewallDenyLog: vi.fn() }));
 const stubs = {
   VTable: { template: "<table><slot /></table>" },
   VBtn: { props: ["disabled"], template: '<button :disabled="disabled"><slot /></button>' },
+  VIcon: true,
   VAlert: { template: "<div><slot /></div>" }, VProgressLinear: true,
   VChip: { props: ["color", "size"], template: '<span :data-color="color" :data-size="size"><slot /></span>' },
   VSelect: {
     props: ["modelValue", "label", "items"], emits: ["update:modelValue"],
-    template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', Number($event.target.value))"><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
+    template: '<select :aria-label="label" :value="modelValue" @change="$emit(\'update:modelValue\', label === \'Time period\' ? Number($event.target.value) : $event.target.value)"><option v-for="item in items" :key="item.value" :value="item.value">{{ item.title }}</option></select>',
   },
 };
 const until = Date.parse("2026-11-08T12:34:56.789Z");
@@ -47,9 +48,9 @@ describe("possible missing rules page", () => {
 
   it("switches all five periods without extra reads or configuration writes", async () => {
     wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
-    expect(wrapper.get("select").findAll("option").map(option => option.text())).toEqual(["Last hour", "Last 4 hours", "Last 8 hours", "Last day", "Last week"]);
+    expect(wrapper.get('[aria-label="Time period"]').findAll("option").map(option => option.text())).toEqual(["Last hour", "Last 4 hours", "Last 8 hours", "Last day", "Last week"]);
     for (const [hours, count] of [[1, 1], [4, 2], [8, 3], [24, 4], [168, 5]]) {
-      await wrapper.get("select").setValue(String(hours));
+      await wrapper.get('[aria-label="Time period"]').setValue(String(hours));
       expect(wrapper.findAll(".missing-rule-row")).toHaveLength(1);
       expect(wrapper.get('[data-label="Packets"]').text()).toBe(String(count));
       expect(wrapper.get('[data-label="Bytes"]').text()).toBe(String(count! * 60));
@@ -63,6 +64,44 @@ describe("possible missing rules page", () => {
     expect(wrapper.get("thead").text()).toContain("Last seen (UTC)");
     expect(getFirewallDenyLog).toHaveBeenCalledWith(expect.objectContaining({ since_ms: until - 7 * 86400000 }), expect.any(AbortSignal));
     expect(wrapper.text()).not.toContain("50000");
+    expect(useControllerStore().draft).toBeNull();
+  });
+
+  it("sorts through accessible headers and compact controls and retains sorting across periods and refreshes", async () => {
+    const result = page(), base = result.records[0]!;
+    result.records = [
+      { ...base, id: "6", source: "10.2.10.2", packet_length: 60 },
+      { ...base, id: "5", source: "10.2.10.10", packet_length: 120 },
+      { ...base, id: "4", source: "10.2.10.10", packet_length: 120 },
+      { ...base, id: "3", source: "10.2.10.20", timestamp_ms: until - 2 * 3600000 },
+    ];
+    vi.mocked(getFirewallDenyLog).mockResolvedValue(result);
+    wrapper = mount(PossibleMissingRulesView, { global: { stubs } }); await flushPromises();
+    const sources = () => wrapper!.findAll('.missing-rule-row [data-label="Source"]').map(cell => cell.text());
+    const header = (label: string) => wrapper!.findAll("th").find(cell => cell.text() === label)!;
+    expect(wrapper.findAll("thead button")).toHaveLength(11);
+    expect(header("Packets").attributes("aria-sort")).toBe("descending");
+    expect(sources()).toEqual(["10.2.10.10", "10.2.10.2"]);
+    await header("Source").get("button").trigger("click");
+    expect(sources()).toEqual(["10.2.10.2", "10.2.10.10"]);
+    expect(header("Source").attributes("aria-sort")).toBe("ascending");
+    expect(header("Packets").attributes("aria-sort")).toBe("none");
+    await header("Source").get("button").trigger("click");
+    expect(sources()).toEqual(["10.2.10.10", "10.2.10.2"]);
+    expect(header("Source").attributes("aria-sort")).toBe("descending");
+    await wrapper.get('[aria-label="Time period"]').setValue("4");
+    expect(sources()).toEqual(["10.2.10.20", "10.2.10.10", "10.2.10.2"]);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(1);
+    await wrapper.get('[aria-label="Refresh"]').trigger("click"); await flushPromises();
+    expect(sources()).toEqual(["10.2.10.20", "10.2.10.10", "10.2.10.2"]);
+    expect(header("Source").attributes("aria-sort")).toBe("descending");
+    await wrapper.get('[aria-label="Sort by"]').setValue("bytes");
+    expect(header("Bytes").attributes("aria-sort")).toBe("ascending");
+    expect(sources()).toEqual(["10.2.10.2", "10.2.10.20", "10.2.10.10"]);
+    await wrapper.get('[aria-label="Sort descending"]').trigger("click");
+    expect(header("Bytes").attributes("aria-sort")).toBe("descending");
+    expect(sources()).toEqual(["10.2.10.10", "10.2.10.2", "10.2.10.20"]);
+    expect(getFirewallDenyLog).toHaveBeenCalledTimes(2);
     expect(useControllerStore().draft).toBeNull();
   });
 
