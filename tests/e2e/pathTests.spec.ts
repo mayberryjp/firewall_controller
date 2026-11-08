@@ -93,6 +93,7 @@ test("paired diagnostics require explicit approval, preserve cleanup ownership a
   expect(scans).toBe(0);
   await navigation.getByRole("tab", { name: "Path MTU/MSS", exact: true }).click();
   await view.getByRole("button", { name: "Cancel and restore", exact: true }).click();
+  await expect(view.getByRole("heading", { name: "restoring", exact: true })).toBeVisible();
   await expect(view).toContainText("Restoration: pending");
   expect(cancels).toBe(1); await expect(start).toBeDisabled();
   current = { ...current, active: false, state: "cancelled", restoration: "restored", error: null,
