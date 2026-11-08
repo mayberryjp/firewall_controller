@@ -4,7 +4,7 @@ import { connections, hostPolicyConfig } from "../fixtures";
 import { firewallDenyPage } from "../firewallTelemetryFixtures";
 
 for (const useInventory of [false, true]) {
-test(`firewall telemetry truncates ${useInventory ? "local descriptions" : "saved host labels"} without changing connection identities`, async ({ page }) => {
+test(`firewall telemetry truncates ${useInventory ? "local descriptions" : "saved host labels"} without changing connection identities`, async ({ page, isMobile }) => {
   const config = hostPolicyConfig();
   const sourceName = `Tablet ${"unbroken".repeat(useInventory ? 30 : 15)}`;
   config.firewall.policies!.hosts[0]!.metadata = { display_name: sourceName, description: "Not displayed" };
@@ -90,6 +90,17 @@ test(`firewall telemetry truncates ${useInventory ? "local descriptions" : "save
         expect(measurement, `${name} at ${width}px`).toMatchObject({ nowrap: true, ellipsis: true, title: true, singleLine: true, contained: true, portContained: true });
       }
       expect(measurements.filter(measurement => measurement.truncated).length).toBeGreaterThanOrEqual(4);
+      if (name === "Connections" && width === initialViewport.width && !isMobile) {
+        const cells = await view.locator(".connection-row").first().locator("td").evaluateAll(elements =>
+          elements.map(element => {
+            const bounds = element.getBoundingClientRect();
+            return { left: bounds.left, right: bounds.right };
+          }));
+        for (const cell of cells) {
+          expect(cell.left).toBeGreaterThanOrEqual(0);
+          expect(cell.right).toBeLessThanOrEqual(width);
+        }
+      }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
     await page.setViewportSize(initialViewport);

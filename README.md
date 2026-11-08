@@ -271,7 +271,8 @@ inline; unsaved Sando settings do not affect labels. Labels do not change API
 filters, numeric-address sorting, connection identities, or drop aggregation.
 Source and destination values stay on one line with ellipsis rather than wrapping
 or overflowing their columns; hover to see the full label and address. Port chips
-remain visible.
+remain visible. Connections endpoint widths adapt to available table space so
+desktop counters and actions remain visible alongside long host labels.
 Firewall drops has sortable column headers, including horizontally scrollable
 headers on mobile. Click a header to sort loaded records ascending, then descending;
 sorting is retained across refreshes, filter changes and loading older records.
