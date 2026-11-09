@@ -365,12 +365,27 @@ retention gaps remain visible; a failed paginated read does not publish partial 
 Generic explanatory and period captions are omitted; actual capture, retention and
 read problems remain explicit.
 
-The final General Settings row, **Log firewall drops**, stages
+The General Settings row **Log firewall drops** stages
 `firewall.drop_logging_enabled` through the normal SAVE review/confirmation flow
 with `transactions.write` and `firewall.write`. It defaults on. Turning it off
 stops new history capture and Discord alerts, not firewall protection or rule
 counters; retained history remains readable with capture status `disabled`.
 Missed traffic is not backfilled, and already in-flight Discord deliveries may finish.
+
+The final General Settings row, **Spoof Block**, stages `firewall.spoof_block`
+through the same SAVE review and confirmed transaction flow with
+`transactions.write` and `firewall.write`. Omitted values default on; explicit
+off is preserved in drafts, exports, saved revisions and restores. Enabled
+protection blocks IPv4/IPv6 sources outside each managed LAN's own configured
+subnets before normal input/forward rules, ICMP and established/related bypasses.
+Valid sources and narrow DHCP/IPv6 control exceptions still follow normal policy.
+Missing-family subnets block ordinary traffic; `/0` subnets do not restrict
+sources. WAN and local output are unchanged. Enabling may interrupt active
+off-subnet sessions: deliberately disable it for intended routed downstream,
+VPN or relay sources outside the ingress LAN's subnets. Routes and WireGuard
+Allowed IPs do not extend those subnets. Use a backend supporting this field;
+review topology and retain independent access before deploying its default-on
+enforcement.
 
 ### Notifications
 

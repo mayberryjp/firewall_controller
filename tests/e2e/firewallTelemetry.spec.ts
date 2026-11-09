@@ -167,13 +167,16 @@ test("drop inclusion switches request server categories and replace missing-rule
   await expect(drops.locator(".drop-row")).toHaveCount(4);
 });
 
-test("General settings places drop logging last and preserves explicit false through reviewed SAVE and confirmation", async ({ page }) => {
+test("General settings places Spoof Block last and preserves explicit false through reviewed SAVE and confirmation", async ({ page }) => {
   const backend = await mockBackend(page), dialogs: string[] = [];
   page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
   await page.route("**/*timezones*", route => route.fulfill({ json: { timezones: ["UTC"] } }));
   await connect(page); await page.goto("/settings/general");
   const settings = page.getByRole("region", { name: "General settings", exact: true });
-  await expect(settings.locator(".setting-row").last().locator(".setting-name")).toHaveText("Log firewall drops");
+  await expect(settings.locator(".setting-row").last().locator(".setting-name")).toHaveText("Spoof Block");
+  const spoof = settings.getByRole("checkbox", { name: "Spoof Block", exact: true });
+  await expect(spoof).toBeChecked();
+  await spoof.uncheck();
   const logging = settings.getByRole("checkbox", { name: "Log firewall drops", exact: true });
   await expect(logging).toBeChecked();
   await logging.uncheck();
@@ -181,18 +184,22 @@ test("General settings places drop logging last and preserves explicit false thr
   expect(backend.writes).toEqual([]); expect(dialogs).toEqual([]);
   await page.getByRole("link", { name: "Save configuration", exact: true }).click();
   await expect(page.getByRole("region", { name: "SAVE", exact: true })).toContainText("Log firewall drops");
+  await expect(page.getByRole("region", { name: "SAVE", exact: true })).toContainText("Spoof Block");
   await page.getByRole("button", { name: "Commit & push", exact: true }).click();
   const push = page.getByRole("dialog");
   await expect(push).toContainText("firewall.write");
   await push.getByRole("button", { name: "Push changes", exact: true }).click();
   await expect(push.getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   expect(backend.writes.find(write => write.path === "/transactions")?.body).toMatchObject({
-    config: { firewall: { drop_logging_enabled: false } },
+    config: { firewall: { drop_logging_enabled: false, spoof_block: false } },
   });
   await push.getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(push).not.toBeVisible();
   await page.goto("/settings/general");
   await expect(logging).not.toBeChecked();
+  await expect(spoof).not.toBeChecked();
+  await page.reload();
+  await expect(spoof).not.toBeChecked();
   expect(dialogs).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

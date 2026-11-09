@@ -15,7 +15,7 @@ const relayChanged = computed(() => changes.value.some(item => item.area === "in
 const mdnsAddedLinks = computed(() => props.after.mdns?.interface_mode === "deny"
   ? mdnsInterfaces(props.after).filter(name => !mdnsInterfaces(props.before).includes(name)) : []);
 const hasWarnings = computed(() => changedServices.value.length || relayChanged.value || changes.value.some(item =>
-  ["gateway_monitors", "firewall-icmp", "firewall-input", "mdns", "bgp", "udp_broadcast_relay"].includes(item.area)) || mdnsAddedLinks.value.length);
+  ["gateway_monitors", "firewall-icmp", "firewall-input", "firewall-spoof-block", "mdns", "bgp", "udp_broadcast_relay"].includes(item.area)) || mdnsAddedLinks.value.length);
 function source(value: unknown): string {
   return value === undefined ? "" : `${JSON.stringify(JSON.parse(stableJson(value)), null, 2)}\n`;
 }
@@ -116,7 +116,21 @@ const totals = computed(() => files.value.reduce((total, file) => ({
       variant="tonal"
       class="mb-4"
     >
-      The IPv4 ICMP exception precedes legacy/host/interface drops across input, output and forwarding on all namespace interfaces. ICMPv6 is unchanged; disabling removes exceptions, not a blanket block. An omitted flag means enabled; null is invalid.
+      The IPv4 ICMP exception precedes legacy/host/interface drops across input, output and forwarding on all namespace interfaces, but enabled Spoof Block checks LAN sources first. ICMPv6 is unchanged; disabling removes exceptions, not a blanket block. An omitted flag means enabled; null is invalid.
+    </v-alert>
+    <v-alert
+      v-if="changes.some(item => item.area === 'firewall-spoof-block')"
+      type="warning"
+      variant="tonal"
+      class="mb-4"
+    >
+      <template v-if="after.firewall.spoof_block">
+        Spoof Block can interrupt active off-subnet LAN sessions, including routed downstream, VPN and relay traffic. Each LAN permits only sources in its own configured subnets; routes and WireGuard Allowed IPs do not extend them. Missing-family subnets block ordinary traffic, and /0 subnets do not restrict sources. Checks precede ICMP and established/related exceptions; valid and bootstrap/control traffic still follows normal policy.
+      </template>
+      <template v-else>
+        Disabling Spoof Block removes LAN source-subnet protection, not normal firewall policy. Use this deliberately for routed downstream, VPN or relay sources outside the ingress LAN's own subnets.
+      </template>
+      WAN and local output are unchanged. Verify management reachability before confirming.
     </v-alert>
     <v-alert
       v-if="changes.some(item => item.area === 'firewall-input')"

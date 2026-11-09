@@ -5,7 +5,7 @@ import { useControllerStore } from "@/stores/controller";
 import { getFirewallDenyLog } from "@/services/netcontrol";
 import { firewallDenyReadError } from "@/services/possibleMissingRules";
 import { formatIpProtocol, ipProtocolColor } from "@/services/firewallProtocols";
-import { firewallDenyQuerySchema, sortFirewallDrops, type FirewallDenyPage, type FirewallDenyQuery, type FirewallDropSortColumn } from "@/services/firewallTelemetry";
+import { firewallDenyQuerySchema, firewallDropReasonLabel, sortFirewallDrops, type FirewallDenyPage, type FirewallDenyQuery, type FirewallDropSortColumn } from "@/services/firewallTelemetry";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { useHostnames } from "@/composables/useHostnames";
 import FirewallDropVisibility from "@/components/feature/FirewallDropVisibility.vue";
@@ -405,7 +405,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
                     variant="tonal"
                     :color="row.reason === 'policy' ? 'warning' : 'error'"
                   >
-                    {{ row.reason === 'policy' ? 'Default policy' : 'Rule drop' }}
+                    {{ firewallDropReasonLabel(row.reason) }}
                   </v-chip>
                 </div>
               </td>

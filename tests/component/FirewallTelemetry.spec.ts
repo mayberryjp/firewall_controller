@@ -327,6 +327,15 @@ describe("firewall drop history", () => {
     expect(wrapper.text()).not.toContain("c".repeat(64));
     expect(useControllerStore().draft).toBeNull();
   });
+  it("renders Spoof Block drops without a user-rule label or editable rule", async () => {
+    const page = firewallDenyPage();
+    page.records[0]!.reason = "spoof_block"; page.records[0]!.compiled_rule_index = null;
+    vi.mocked(getFirewallDenyLog).mockResolvedValue(page);
+    wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.get('[data-label="Reason"] [data-color="error"]').text()).toBe("Spoof Block");
+    expect(wrapper.get(".drop-row").text()).not.toContain("Rule drop");
+    expect(useControllerStore().draft).toBeNull();
+  });
   it("uses compact colored chips and keeps UTC filters behind an accessible toggle without clearing values", async () => {
     wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
     expect(wrapper.get(".drop-table").classes()).toContain("app-table");

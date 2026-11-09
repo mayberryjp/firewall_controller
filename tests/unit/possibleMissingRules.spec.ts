@@ -42,6 +42,12 @@ describe("missing rule sorting", () => {
 });
 
 describe("possible missing rule aggregation", () => {
+  it("labels source-guard drops as Spoof Block rather than a user rule", () => {
+    const rows = summarizeMissingRules([
+      record("1", { reason: "spoof_block", compiled_rule_index: null }),
+    ], until - 3600000, until);
+    expect(rows[0]!.reasons).toEqual(["Spoof Block"]);
+  });
   it("groups across ephemeral source ports and rulesets, collects contexts and deduplicates exact IDs", () => {
     const rows = summarizeMissingRules([
       record("9", { source_port: 50001, ingress: "lab0", packet_length: 60, destination_port: 443 }),

@@ -4,6 +4,30 @@ import { decodeJson, encodeJson, utf8Size } from "@/services/json";
 import { differenceContext, differences, endpoint, equalConfig, importConfig, normalize, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, statistics, transaction } from "../fixtures";
 
+describe("global Spoof Block", () => {
+  it("defaults omitted input on and preserves explicit false through import, review and transactions", () => {
+    const before = config();
+    const omitted = { ...before, firewall: { ...before.firewall, spoof_block: undefined } };
+    expect(configSchema.parse(omitted).firewall.spoof_block).toBe(true);
+    expect(equalConfig(before, configSchema.parse(omitted))).toBe(true);
+    const after = config(); after.firewall.spoof_block = false;
+    expect(importConfig(encodeJson(after)).firewall.spoof_block).toBe(false);
+    expect(normalize(after).firewall.spoof_block).toBe(false);
+    expect(transactionSchema.parse({ ...transaction(), candidate: after, previous: before }).candidate.firewall.spoof_block).toBe(false);
+    const diff = differences(before, after);
+    expect(diff).toEqual([{
+      area: "firewall-spoof-block", identity: "Spoof Block", kind: "modified", before: true, after: false,
+    }]);
+    expect(requiredPermissions(diff)).toEqual(["transactions.write", "firewall.write"]);
+    expect(differenceContext(before, after, diff[0]!).after).toEqual(after);
+    const reverse = differences(after, before);
+    expect(differenceContext(after, before, reverse[0]!).after).toEqual(before);
+  });
+  it.each([null, 0, "false"])("rejects invalid Spoof Block value %j", value => {
+    expect(configSchema.safeParse({ ...config(), firewall: { ...config().firewall, spoof_block: value } }).success).toBe(false);
+  });
+});
+
 describe("global firewall drop logging", () => {
   it("defaults omitted input to enabled and preserves explicit false through import, normalization and review", () => {
     const before = config();
@@ -302,7 +326,7 @@ describe("semantic configuration comparison", () => {
   it("ignores backend-normalized ordering and JSON key order", () => {
     const before = config(), after = config();
     after.interfaces[0]!.addresses.reverse();
-    after.firewall = { nat: after.firewall.nat, rules: after.firewall.rules, policy: after.firewall.policy, allow_all_icmp: after.firewall.allow_all_icmp, drop_logging_enabled: after.firewall.drop_logging_enabled };
+    after.firewall = { nat: after.firewall.nat, rules: after.firewall.rules, policy: after.firewall.policy, allow_all_icmp: after.firewall.allow_all_icmp, drop_logging_enabled: after.firewall.drop_logging_enabled, spoof_block: after.firewall.spoof_block };
     expect(equalConfig(before, after)).toBe(true);
   });
   it("preserves ordered firewall/NAT moves and counts default policy separately", () => {

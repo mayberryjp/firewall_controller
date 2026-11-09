@@ -5,6 +5,13 @@ import { hostPolicyConfig, state, transaction } from "../fixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
 
 describe("firewall telemetry contracts", () => {
+  it("accepts Spoof Block drops without attributing them to a user rule", () => {
+    const page = firewallDenyPage();
+    page.records[0]!.reason = "spoof_block"; page.records[0]!.compiled_rule_index = null;
+    expect(firewallDenyPageSchema.parse(page)).toEqual(page);
+    page.records[0]!.compiled_rule_index = 0;
+    expect(firewallDenyPageSchema.safeParse(page).success).toBe(false);
+  });
   it("preserves nullable TCP metadata, real zeros and disabled capture while rejecting unsupported tag queries", () => {
     const page = firewallDenyPage();
     page.capture.status = "disabled";

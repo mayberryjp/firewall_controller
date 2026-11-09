@@ -8,6 +8,7 @@ const store = useControllerStore();
 const selectedConfig = computed(() => store.draft ?? store.state.data?.desired);
 const allowICMP = ref(true);
 const logDrops = ref(true);
+const spoofBlock = ref(true);
 const enableIPv6 = ref(false);
 const overrideDhcpDns = ref(true);
 const dnsOverrideChanged = ref(false);
@@ -27,6 +28,7 @@ watch(() => selectedConfig.value?.firewall.allow_all_icmp, value => {
   if (value !== undefined) allowICMP.value = value;
 }, { immediate: true });
 watch(() => selectedConfig.value?.firewall.drop_logging_enabled, value => { logDrops.value = value !== false; }, { immediate: true });
+watch(() => selectedConfig.value?.firewall.spoof_block, value => { spoofBlock.value = value !== false; }, { immediate: true });
 watch(() => selectedConfig.value?.ipv6_enabled, value => { enableIPv6.value = value === true; }, { immediate: true });
 watch(selectedConfig, value => {
   overrideDhcpDns.value = value?.interfaces.every(link => value.dns?.[link.name]?.override_dhcp_dns !== false) ?? true;
@@ -59,6 +61,7 @@ function stage(): void {
     }
     candidate.firewall.allow_all_icmp = allowICMP.value;
     candidate.firewall.drop_logging_enabled = logDrops.value;
+    candidate.firewall.spoof_block = spoofBlock.value;
     if (dnsOverrideChanged.value) {
       candidate.dns ??= {};
       for (const link of candidate.interfaces) {
@@ -241,6 +244,7 @@ function stage(): void {
           >
             Allow IPv4 ICMP across all namespace interfaces before input, output and forwarding
             drop rules.
+            Enabled Spoof Block checks LAN sources first.
             <template v-if="store.ipv6Enabled">
               ICMPv6 is unchanged.
             </template>
@@ -308,6 +312,40 @@ function stage(): void {
             Record dropped packets for drop history and Discord alerts. Turning this off keeps
             existing history, firewall protection and rule counters, but new drops are not recorded.
             Turning it back on resumes future capture without backfilling missed drops.
+          </p>
+        </div>
+      </div>
+      <v-divider />
+      <div class="setting-row">
+        <label
+          for="general-spoof-block"
+          class="setting-name"
+        >
+          Spoof Block
+        </label>
+        <div class="setting-control">
+          <v-switch
+            id="general-spoof-block"
+            v-model="spoofBlock"
+            aria-label="Spoof Block"
+            aria-describedby="general-spoof-block-description"
+            :disabled="blocked"
+            density="compact"
+            hide-details
+            color="primary"
+          />
+          <p
+            id="general-spoof-block-description"
+            class="setting-desc"
+          >
+            Block IPv4 and IPv6 sources outside each LAN interface's own configured subnets,
+            before normal input/forward rules, ICMP exceptions and established connections.
+            LANs without a subnet for a family block ordinary traffic of that family;
+            a /0 subnet does not restrict sources. Narrow DHCP and IPv6 control exceptions
+            still follow normal firewall policy. WAN and local output are unchanged.
+            Enabling can interrupt active off-subnet sessions. Turn this off when intentionally
+            routing downstream, VPN or relay sources outside the ingress LAN's subnets;
+            routes and WireGuard Allowed IPs do not extend the permitted subnets.
           </p>
         </div>
       </div>

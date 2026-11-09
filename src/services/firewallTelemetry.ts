@@ -35,11 +35,11 @@ export const firewallDenyRecordSchema = z.object({
   source_port: port, destination_port: port,
   ingress_index: interfaceIndex, egress_index: interfaceIndex,
   ingress: z.string().nullable(), egress: z.string().nullable(),
-  packet_length: integer, chain: z.enum(["input", "forward"]), reason: z.enum(["rule", "policy"]),
+  packet_length: integer, chain: z.enum(["input", "forward"]), reason: z.enum(["rule", "policy", "spoof_block"]),
   compiled_rule_index: integer.nullable(), ruleset_id: hash,
   tcp_flags: integer.max(255).nullable(), tcp_payload_length: integer.nullable(),
   tags: z.array(firewallDropTagSchema),
-}).strict().refine(value => value.reason !== "policy" || value.compiled_rule_index === null, "Default-policy records cannot have a rule index");
+}).strict().refine(value => value.reason === "rule" || value.compiled_rule_index === null, "Default-policy and Spoof Block records cannot have a rule index");
 export const firewallDenyPageSchema = z.object({
   records: z.array(firewallDenyRecordSchema).max(500),
   next_before_id: recordID.nullable(), oldest_id: recordID.nullable(), newest_id: recordID.nullable(),
@@ -60,6 +60,9 @@ export const firewallDenyPageSchema = z.object({
   }
 });
 export type FirewallDenyPage = z.infer<typeof firewallDenyPageSchema>;
+export function firewallDropReasonLabel(reason: FirewallDenyPage["records"][number]["reason"]): string {
+  return { rule: "Rule drop", policy: "Default policy", spoof_block: "Spoof Block" }[reason];
+}
 export type FirewallDropSortColumn = "timestamp_ms" | "source" | "destination" | "protocol" | "ingress" | "egress" | "packet_length" | "reason";
 
 export function sortFirewallDrops(rows: readonly FirewallDenyPage["records"][number][], column: FirewallDropSortColumn, descending: boolean): FirewallDenyPage["records"] {

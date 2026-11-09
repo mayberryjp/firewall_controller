@@ -1,6 +1,6 @@
 import { ApiFailure } from "@/services/api";
 import { getFirewallDenyLog } from "@/services/netcontrol";
-import type { FirewallDenyPage, FirewallDenyQuery } from "@/services/firewallTelemetry";
+import { firewallDropReasonLabel, type FirewallDenyPage, type FirewallDenyQuery } from "@/services/firewallTelemetry";
 import { compareInterfaceNames, formatInterfaceName } from "@/services/interfaceNames";
 import { formatIpProtocol } from "@/services/firewallProtocols";
 
@@ -76,7 +76,7 @@ export function summarizeMissingRules(records: readonly Drop[], since: number, u
       [group.ingress, row.ingress !== null ? formatInterfaceName(row.ingress) : row.ingress_index !== null ? `Index ${row.ingress_index}` : "Unavailable"],
       [group.egress, row.egress !== null ? formatInterfaceName(row.egress) : row.egress_index !== null ? `Index ${row.egress_index}` : "Unavailable"],
       [group.chains, row.chain],
-      [group.reasons, row.reason === "policy" ? "Default policy" : "Rule drop"],
+      [group.reasons, firewallDropReasonLabel(row.reason)],
     ] as const) {
       if (!values.includes(value)) values.push(value);
     }
