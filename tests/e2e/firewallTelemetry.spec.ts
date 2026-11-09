@@ -289,6 +289,15 @@ test("firewall drops sorts loaded rows with keyboard-accessible headers on deskt
   const sources = view.locator('.drop-row [data-label="Source / port"] .mono');
   const values = view.locator('.drop-row [data-label="Bytes"]');
   await expect(sources).toHaveText(["192.0.2.10", "192.0.2.2", "192.0.2.20"]);
+  const headerBounds = await view.getByRole("columnheader").evaluateAll(headers => headers.map(header => {
+    const cell = header.getBoundingClientRect();
+    const button = header.querySelector("button")!.getBoundingClientRect();
+    return { label: header.textContent?.trim(), left: button.left - cell.left, right: cell.right - button.right };
+  }));
+  for (const bounds of headerBounds) {
+    expect(bounds.left, `${bounds.label} button starts inside its header`).toBeGreaterThanOrEqual(0);
+    expect(bounds.right, `${bounds.label} button ends inside its header`).toBeGreaterThanOrEqual(0);
+  }
   const sourceHeader = view.getByRole("columnheader", { name: "Source / port", exact: true });
   await sourceHeader.getByRole("button").press("Enter");
   await expect(sourceHeader).toHaveAttribute("aria-sort", "ascending");

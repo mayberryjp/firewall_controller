@@ -478,6 +478,7 @@ onUnmounted(() => { disposed = true; generation++; controller?.abort(); });
   .drop-table :deep(thead) { display: block; overflow-x: auto; }
   .drop-table :deep(thead tr) { display: flex; }
   .drop-table :deep(th) { flex-shrink: 0; }
+  .drop-table :deep(.drop-bytes-heading) { width: auto; }
   .drop-table :deep(tbody > tr) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 12px 8px; border-bottom: 1px solid var(--border); }
   .drop-table :deep(.v-table__wrapper > table > tbody > tr > td) { min-width: 0; max-width: none; height: auto; padding: 0; border: 0; overflow-wrap: anywhere; }
   .drop-table :deep(td[data-label])::before { content: attr(data-label); display: block; font-size: 11px; color: var(--text-muted); }
