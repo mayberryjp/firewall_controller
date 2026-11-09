@@ -46,7 +46,7 @@ describe("possible missing rule aggregation", () => {
     const rows = summarizeMissingRules([
       record("1", { reason: "spoof_block", compiled_rule_index: null }),
     ], until - 3600000, until);
-    expect(rows[0]!.reasons).toEqual(["Spoof Block"]);
+    expect(rows[0]!.reasons).toEqual(["Historical Spoof Block"]);
   });
   it("groups across ephemeral source ports and rulesets, collects contexts and deduplicates exact IDs", () => {
     const rows = summarizeMissingRules([

@@ -57,6 +57,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
     const stored = Object.values(transactions).find(item => item.status === "pending_confirmation")?.candidate ?? committed;
     return {
       ...runtime(), bgp: routingStatus(), capabilities: options.runtimeCapabilities,
+      rpf: { mode: stored.firewall.rpf_mode, family: "ipv4", status: "simulated", rp_filter: null, drift: null },
       dhcp_relay: stored.interfaces.map(link => ({ interface: link.name, state: link.dhcp_relay.enabled ? "simulated" : "disabled" })),
       gateway_monitors: gatewayRows(),
       appliance_services: [...runtime().appliance_services.map(item => ({

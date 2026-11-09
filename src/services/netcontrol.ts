@@ -20,7 +20,7 @@ import {
   revisionSchema, revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
   applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, vnstatReportingSchema, mdnsSchema, mdnsStatusPageSchema,
-  gatewayMonitorSchema, type ApplianceService, type RepairService, type PackageRequest,
+  gatewayMonitorSchema, rpfModeSchema, type ApplianceService, type RepairService, type PackageRequest,
   connectionDeletionSchema, upgradeVersionSchema, upgradeJobSchema, upgradeStatusSchema, type Connection,
   platformStatusSchema, bgpSchema, bgpStatusSchema, bgpRoutesSchema, bgpAdvertisedRoutesSchema, udpBroadcastRelaySchema, udpRelayStatusPageSchema,
 } from "@/types/domain";
@@ -183,8 +183,12 @@ export const getRevisions = (before?: string) => request("GET",
 export const getRevision = (revision: string) => request("GET", `/revisions/${id(revisionSchema.parse(revision))}`, revisionDetailSchema);
 export const getLatestRevision = () => request("GET", "/revisions/latest", revisionDetailSchema);
 export async function submitPackage(body: PackageRequest) {
+  const rpfMode = rpfModeSchema.default("disabled").parse(body.config.firewall.rpf_mode);
   const payload = { ...body, base_revision: revisionSchema.parse(body.base_revision), config: cloneConfig(body.config) };
   const result = await request("POST", "/transactions", submittedTransactionSchema, payload);
+  if (rpfMode !== result.candidate.firewall.rpf_mode) {
+    throw new ApiFailure("The backend did not preserve the requested IPv4 RPF mode. A provisional transaction may be active; inspect it and roll back rather than confirming. Deploy an RPF-capable backend before retrying.", 202, result, true, true);
+  }
   if (stableJson(discordConfigSchema.parse(payload.config.discord ?? discordDefaults())) !==
       stableJson(discordConfigSchema.parse(result.candidate.discord ?? discordDefaults()))) {
     throw new ApiFailure("The backend did not preserve Discord notification settings. A provisional transaction may be active; inspect it and roll back rather than confirming. Deploy a Discord-capable backend before retrying.", 202, result, true, true);

@@ -50,6 +50,7 @@ test("conntrack tuning stages exact scoped strings and uses the existing reviewe
   expect(backend.writes).toEqual([]);
   await capacity.fill("2048");
   await settings.getByRole("textbox", { name: "UDP unreplied timeout (seconds)", exact: true }).fill("30");
+  await expect(settings.locator(".v-alert--type-warning")).toHaveCount(0);
   await settings.getByRole("button", { name: "Save", exact: true }).click();
   await expect(settings).toContainText("Conntrack changes staged");
   expect(backend.writes).toEqual([]);
@@ -61,10 +62,12 @@ test("conntrack tuning stages exact scoped strings and uses the existing reviewe
   const push = page.getByRole("dialog");
   await expect(push).toContainText("kernel.host.write");
   await expect(push).toContainText("kernel.namespace.write");
-  await expect(push).toContainText("independently verify connectivity");
+  await expect(push.locator(".v-alert--type-warning")).toHaveCount(0);
+  await expect(push).not.toContainText("Higher limits permit greater memory use");
   await push.getByRole("button", { name: "Push changes", exact: true }).click();
   await expect(push.getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
-  await expect(push).toContainText("cannot recover expired flows");
+  await expect(push.locator(".v-alert--type-warning")).toHaveCount(0);
+  await expect(push).not.toContainText("cannot recover expired flows");
   expect(backend.writes.find(write => write.path === "/transactions")!.body).toMatchObject({
     config: { kernel: {
       host: { "net.netfilter.nf_conntrack_max": "2048" },

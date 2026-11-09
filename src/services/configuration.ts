@@ -1,5 +1,5 @@
 import ipaddr from "ipaddr.js";
-import { configSchema, mqttSchema, blackholeSchema, systemSchema, bgpSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService, type Route } from "@/types/domain";
+import { configSchema, mqttSchema, blackholeSchema, systemSchema, bgpSchema, rpfModeSchema, type Config, type ManagedInterface, type ParentInterface, type RepairService, type Route } from "@/types/domain";
 import { decodeJson, utf8Size } from "@/services/json";
 import { normalizeMDNS, validateMDNS } from "@/services/mdns";
 import { validateUDPRelay } from "@/services/udpBroadcastRelay";
@@ -208,9 +208,9 @@ export function differences(before: Config, after: Config): Difference[] {
     area: "firewall-logging", identity: "Log firewall drops", kind: "modified",
     before: old.firewall.drop_logging_enabled, after: next.firewall.drop_logging_enabled,
   });
-  if (old.firewall.spoof_block !== next.firewall.spoof_block) result.push({
-    area: "firewall-spoof-block", identity: "Spoof Block", kind: "modified",
-    before: old.firewall.spoof_block, after: next.firewall.spoof_block,
+  if (old.firewall.rpf_mode !== next.firewall.rpf_mode) result.push({
+    area: "firewall-rpf", identity: "IPv4 reverse-path filtering", kind: "modified",
+    before: old.firewall.rpf_mode, after: next.firewall.rpf_mode,
   });
   if (stableJson(old.firewall.policies) !== stableJson(next.firewall.policies)) result.push({
     area: "firewall-policies", identity: "host / ingress policies", kind: "modified",
@@ -270,7 +270,7 @@ export function differenceContext(old: Config, next: Config, change: Difference)
   else if (change.area === "firewall-policy") doc.firewall.policy = change.after as Config["firewall"]["policy"];
   else if (change.area === "firewall-icmp") doc.firewall.allow_all_icmp = change.after as boolean;
   else if (change.area === "firewall-logging") doc.firewall.drop_logging_enabled = change.after === true;
-  else if (change.area === "firewall-spoof-block") doc.firewall.spoof_block = change.after === true;
+  else if (change.area === "firewall-rpf") doc.firewall.rpf_mode = rpfModeSchema.parse(change.after);
   else if (change.area === "firewall-policies") doc.firewall.policies = change.after as Config["firewall"]["policies"];
   else if (change.area === "firewall-input") doc.firewall.input = change.after as Config["firewall"]["input"];
   else return unchanged;
@@ -412,6 +412,12 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     });
   }
   const issue = (path: string, message: string, page: string) => issues.push({ path, message, page });
+  if (!rpfModeSchema.default("disabled").safeParse(config.firewall.rpf_mode).success) {
+    issue("firewall.rpf_mode", "Choose disabled, loose or strict IPv4 reverse-path filtering.", "/settings/general");
+  }
+  for (const key of ["spoof_block", "system_policies"] as const) {
+    if (key in config.firewall) issue(`firewall.${key}`, "This removed firewall field is not supported. Use the current RPF configuration schema.", "/settings/general");
+  }
   if (config.ipv6_enabled !== true) {
     for (const path of ipv6Conflicts(config)) issue(path, "IPv6 is disabled globally. Enable IPv6 in General settings or remove this setting.", "/settings/general");
   }
@@ -909,7 +915,7 @@ export function requiredPermissions(diff: Difference[]): string[] {
     interfaces: "interfaces.write", routes: "routes.write",
     dhcp_clients: "interfaces.write", dns: "interfaces.write",
     firewall: "firewall.write", "firewall-policy": "firewall.write", "firewall-icmp": "firewall.write", "firewall-logging": "firewall.write",
-    "firewall-spoof-block": "firewall.write",
+    "firewall-rpf": "firewall.write",
     "firewall-policies": "firewall.write", "firewall-input": "firewall.write", nat: "nat.write", softflowd: "softflowd.write",
     gateway_monitors: "gateway_monitors.write", ntp: "ntp.write", syslog: "syslog.write", vnstat: "vnstat.write", mdns: "mdns.write",
     mqtt: "mqtt.write", discord: "discord.write", dynamic_dns: "dynamic_dns.write", blackhole: "routes.write", system: "system.write", bgp: "bgp.write", dnat: "nat.write", udp_broadcast_relay: "udp_broadcast_relay.write", sando: "sando.write",

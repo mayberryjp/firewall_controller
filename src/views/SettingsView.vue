@@ -3,12 +3,18 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, ipv6Conflicts, validateConfig } from "@/services/configuration";
 import { getTimezones } from "@/services/netcontrol";
+import { rpfModeSchema, type RpfMode } from "@/types/domain";
 
 const store = useControllerStore();
 const selectedConfig = computed(() => store.draft ?? store.state.data?.desired);
 const allowICMP = ref(true);
 const logDrops = ref(true);
-const spoofBlock = ref(true);
+const rpfMode = ref<RpfMode>("disabled");
+const rpfModes = [
+  { title: "Disabled", value: "disabled" },
+  { title: "Loose", value: "loose" },
+  { title: "Strict", value: "strict" },
+];
 const enableIPv6 = ref(false);
 const overrideDhcpDns = ref(true);
 const dnsOverrideChanged = ref(false);
@@ -28,7 +34,7 @@ watch(() => selectedConfig.value?.firewall.allow_all_icmp, value => {
   if (value !== undefined) allowICMP.value = value;
 }, { immediate: true });
 watch(() => selectedConfig.value?.firewall.drop_logging_enabled, value => { logDrops.value = value !== false; }, { immediate: true });
-watch(() => selectedConfig.value?.firewall.spoof_block, value => { spoofBlock.value = value !== false; }, { immediate: true });
+watch(() => selectedConfig.value?.firewall.rpf_mode, value => { rpfMode.value = value ?? "disabled"; }, { immediate: true });
 watch(() => selectedConfig.value?.ipv6_enabled, value => { enableIPv6.value = value === true; }, { immediate: true });
 watch(selectedConfig, value => {
   overrideDhcpDns.value = value?.interfaces.every(link => value.dns?.[link.name]?.override_dhcp_dns !== false) ?? true;
@@ -61,7 +67,7 @@ function stage(): void {
     }
     candidate.firewall.allow_all_icmp = allowICMP.value;
     candidate.firewall.drop_logging_enabled = logDrops.value;
-    candidate.firewall.spoof_block = spoofBlock.value;
+    candidate.firewall.rpf_mode = rpfModeSchema.parse(rpfMode.value);
     if (dnsOverrideChanged.value) {
       candidate.dns ??= {};
       for (const link of candidate.interfaces) {
@@ -244,7 +250,6 @@ function stage(): void {
           >
             Allow IPv4 ICMP across all namespace interfaces before input, output and forwarding
             drop rules.
-            Enabled Spoof Block checks LAN sources first.
             <template v-if="store.ipv6Enabled">
               ICMPv6 is unchanged.
             </template>
@@ -318,34 +323,27 @@ function stage(): void {
       <v-divider />
       <div class="setting-row">
         <label
-          for="general-spoof-block"
+          for="general-rpf-mode"
           class="setting-name"
         >
-          Spoof Block
+          IPv4 reverse-path filtering
         </label>
         <div class="setting-control">
-          <v-switch
-            id="general-spoof-block"
-            v-model="spoofBlock"
-            aria-label="Spoof Block"
-            aria-describedby="general-spoof-block-description"
+          <v-select
+            id="general-rpf-mode"
+            v-model="rpfMode"
+            :items="rpfModes"
+            aria-label="IPv4 reverse-path filtering"
+            aria-describedby="general-rpf-mode-description"
             :disabled="blocked"
             density="compact"
             hide-details
-            color="primary"
           />
           <p
-            id="general-spoof-block-description"
+            id="general-rpf-mode-description"
             class="setting-desc"
           >
-            Block IPv4 and IPv6 sources outside each LAN interface's own configured subnets,
-            before normal input/forward rules, ICMP exceptions and established connections.
-            LANs without a subnet for a family block ordinary traffic of that family;
-            a /0 subnet does not restrict sources. Narrow DHCP and IPv6 control exceptions
-            still follow normal firewall policy. WAN and local output are unchanged.
-            Enabling can interrupt active off-subnet sessions. Turn this off when intentionally
-            routing downstream, VPN or relay sources outside the ingress LAN's subnets;
-            routes and WireGuard Allowed IPs do not extend the permitted subnets.
+            Applies to all IPv4 interfaces in the firewall namespace, including WAN.
           </p>
         </div>
       </div>

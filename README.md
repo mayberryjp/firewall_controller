@@ -371,20 +371,25 @@ stops new history capture and Discord alerts, not firewall protection or rule
 counters; retained history remains readable with capture status `disabled`.
 Missed traffic is not backfilled, and already in-flight Discord deliveries may finish.
 
-The final General Settings row, **Spoof Block**, stages `firewall.spoof_block`
-with
-`transactions.write` and `firewall.write`. Omitted values default on; explicit
-off is preserved in drafts, exports, saved revisions and restores. Enabled
-protection blocks IPv4/IPv6 sources outside each managed LAN's own configured
-subnets before normal input/forward rules, ICMP and established/related bypasses.
-Valid sources and narrow DHCP/IPv6 control exceptions still follow normal policy.
-Missing-family subnets block ordinary traffic; `/0` subnets do not restrict
-sources. WAN and local output are unchanged. Enabling may interrupt active
-off-subnet sessions: deliberately disable it for intended routed downstream,
-VPN or relay sources outside the ingress LAN's subnets. Routes and WireGuard
-Allowed IPs do not extend those subnets. Use a backend supporting this field;
-review topology and retain independent access before deploying its default-on
-enforcement.
+The final General Settings row, **IPv4 reverse-path filtering**, stages
+`firewall.rpf_mode`: **Disabled**, **Loose** or **Strict**, through the existing
+confirmed SAVE flow with `transactions.write` and `firewall.write`.
+Omitted input, fresh installs and factory resets default to disabled. Explicit
+modes are preserved in drafts, exports, saved revisions and restores.
+Disabled/strict/loose map to kernel `rp_filter` values 0/1/2. Strict requires the
+reverse route through ingress; loose requires a route through any interface,
+including an applicable default route. The backend owns all/default and every
+IPv4 interface in its namespace, including WAN, LAN, unmanaged/down links and
+loopback. This is not a subnet allowlist and provides no IPv6 protection.
+Strict can interrupt asymmetric multi-WAN/VPN traffic, including management;
+keep independent console access and check connectivity before confirming.
+Runtime `rpf` preserves measured values/drift separately from configuration;
+simulator values are unmeasured. No generated firewall rules, rule counters,
+deny-log events or Discord/MQTT drop evidence are produced by RPF. Retained
+old guard events are labelled **Historical Spoof Block**.
+Coordinate deployment with the backend's November 9 RPF contract. The removed
+`spoof_block` and `system_policies` fields are rejected, not silently migrated;
+no automatic reset or deletion of saved configurations is performed.
 
 ### Notifications
 
@@ -453,8 +458,9 @@ Host-global tuning remains subject to the backend's ownership safeguards.
 
 Higher limits can increase memory use; lower limits can reject new connections.
 Short timeouts can expire idle flows or leave late teardown packets untracked.
-Bounds are not RAM-sizing advice. The existing apply and confirmation flow shows
-these warnings; independently check connectivity before confirming. Failed or
+Bounds are not RAM-sizing advice. The existing apply and confirmation flow is
+unchanged, without conntrack-specific warning banners; independently check
+connectivity before confirming. Failed or
 uncertain writes retain drafts and require transaction inspection. No automatic
 tuning, connection flush, hash-bucket resizing or TCP validation relaxation is
 added, and restoring sysctls cannot recover expired connections.

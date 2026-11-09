@@ -2648,7 +2648,7 @@ describe("October 17 frontend workflows", () => {
     await wrapper.findAll("button").find(button => button.text() === "Reconcile all managed services")!.trigger("click");
     for (const permission of ["gateway_monitors.write", "ntp.write", "syslog.write", "vnstat.write"]) expect(wrapper.text()).toContain(permission);
   });
-  it("keeps global drop logging before Spoof Block and stages explicit false through the shared SAVE flow", async () => {
+  it("keeps global drop logging before RPF and stages explicit false through the shared SAVE flow", async () => {
     const store = useControllerStore(), desired = structuredClone(store.state.data!.desired);
     const draft = structuredClone(desired); draft.routes[0]!.metric = 42; store.stage(draft);
     const apply = vi.spyOn(store, "apply");
@@ -2666,36 +2666,43 @@ describe("October 17 frontend workflows", () => {
       expect(apply).not.toHaveBeenCalled();
     } finally { wrapper.unmount(); }
   });
-  it.each([false, true])("places Spoof Block last and stages %s without applying or changing other drafts", async enabled => {
+  it.each(["disabled", "loose", "strict"] as const)("places RPF last and stages %s without applying or changing other drafts", async mode => {
     const store = useControllerStore();
-    store.state.data!.desired.firewall.spoof_block = !enabled;
+    store.state.data!.desired.firewall.rpf_mode = mode === "disabled" ? "strict" : "disabled";
     const desired = structuredClone(store.state.data!.desired);
     const draft = structuredClone(desired); draft.routes[0]!.metric = 42; store.stage(draft);
     const apply = vi.spyOn(store, "apply");
     const wrapper = await render(SettingsView, "/settings/general");
     try {
-      expect(wrapper.findAll(".setting-row").at(-1)!.get(".setting-name").text()).toBe("Spoof Block");
-      const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-spoof-block")!;
-      expect(toggle.props("modelValue")).toBe(!enabled);
-      toggle.vm.$emit("update:modelValue", enabled); await flushPromises();
-      expect(store.draft!.firewall.spoof_block).toBe(!enabled);
+      expect(wrapper.findAll(".setting-row").at(-1)!.get(".setting-name").text()).toBe("IPv4 reverse-path filtering");
+      const selector = wrapper.findAllComponents(stubs.VSelect).find(item => item.attributes("id") === "general-rpf-mode")!;
+      expect(selector.props("modelValue")).toBe(desired.firewall.rpf_mode);
+      expect(selector.props("items")).toEqual([
+        { title: "Disabled", value: "disabled" }, { title: "Loose", value: "loose" }, { title: "Strict", value: "strict" },
+      ]);
+      selector.vm.$emit("update:modelValue", mode); await flushPromises();
+      expect(store.draft!.firewall.rpf_mode).toBe(desired.firewall.rpf_mode);
       await wrapper.get("form").trigger("submit");
-      expect(store.draft!.firewall.spoof_block).toBe(enabled);
+      expect(store.draft!.firewall.rpf_mode).toBe(mode);
+      expect(store.draft!.firewall).not.toHaveProperty("spoof_block");
+      expect(store.draft!.firewall).not.toHaveProperty("system_policies");
       expect(store.draft!.routes[0]!.metric).toBe(42);
       expect(store.state.data!.desired).toEqual(desired);
       expect(requiredPermissions(store.diff)).toContain("firewall.write");
       const review = mount(ConfigDiff, { props: { before: desired, after: store.draft! }, global: { stubs } });
-      expect(review.text()).toContain("Spoof Block");
-      expect(review.text()).toContain('"spoof_block"');
-      expect(review.text()).toContain(enabled ? "interrupt active off-subnet LAN sessions" : "removes LAN source-subnet protection");
+      expect(review.text()).toContain("IPv4 reverse-path filtering");
+      expect(review.text()).toContain('"rpf_mode"');
+      expect(review.text().includes("Strict IPv4 RPF can interrupt asymmetric")).toBe(mode === "strict");
+      expect(wrapper.text()).not.toContain("rp_filter");
+      expect(wrapper.text()).not.toContain("measured");
       review.unmount();
       expect(apply).not.toHaveBeenCalled();
       expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
       store.busy = true; await flushPromises();
       expect(store.readOnlyReason).toContain("frozen");
-      expect(wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-spoof-block")!.props("disabled")).toBe(true);
+      expect(wrapper.findAllComponents(stubs.VSelect).find(item => item.attributes("id") === "general-rpf-mode")!.props("disabled")).toBe(true);
       store.busy = false; store.draft = null; store.state.data = null; await flushPromises();
-      expect(wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("id") === "general-spoof-block")!.props("disabled")).toBe(true);
+      expect(wrapper.findAllComponents(stubs.VSelect).find(item => item.attributes("id") === "general-rpf-mode")!.props("disabled")).toBe(true);
     } finally { wrapper.unmount(); }
   });
   it("stages global ICMP from General settings in both firewall modes without adding implicit rows", async () => {
@@ -2780,7 +2787,7 @@ describe("October 17 frontend workflows", () => {
     const submit = vi.spyOn(api, "submitPackage");
     const wrapper = await render(SettingsView, "/settings/general");
     const toggles = wrapper.findAllComponents(stubs.VSwitch);
-    expect(toggles.map(toggle => toggle.attributes("id"))).toEqual(["general-ipv6", "general-icmp", "general-dhcp-dns", "general-drop-logging", "general-spoof-block"]);
+    expect(toggles.map(toggle => toggle.attributes("id"))).toEqual(["general-ipv6", "general-icmp", "general-dhcp-dns", "general-drop-logging"]);
     expect(wrapper.get('label[for="general-ipv6"]').text()).toBe("Enable IPv6");
     expect(wrapper.get('label[for="general-icmp"]').text()).toBe("Allow all IPv4 ICMP");
     expect(store.ipv6Enabled).toBe(true);
@@ -2838,7 +2845,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).not.toContain("Observed IPv6 controls");
     expect(wrapper.find('[aria-label="Refresh IPv6 runtime"]').exists()).toBe(false);
     expect(wrapper.find("details").exists()).toBe(false);
-    expect(wrapper.findAllComponents(stubs.VSwitch)).toHaveLength(5);
+    expect(wrapper.findAllComponents(stubs.VSwitch)).toHaveLength(4);
     wrapper.unmount();
   });
   it("keeps IPv6 enabled when disabling would invalidate saved IPv6 settings", async () => {

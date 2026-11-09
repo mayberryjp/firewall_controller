@@ -303,6 +303,18 @@ export const dynamicDnsStatusSchema = z.object({
     last_updated_at_unix: integer.nonnegative().nullable(), error: z.string().nullable(),
   }).strict()),
 }).strict();
+export const rpfModeSchema = z.enum(["disabled", "loose", "strict"]);
+export type RpfMode = z.infer<typeof rpfModeSchema>;
+const rpfRuntimeFields = { mode: rpfModeSchema, family: z.literal("ipv4") };
+export const rpfRuntimeSchema = z.discriminatedUnion("status", [
+  z.object({
+    ...rpfRuntimeFields, status: z.literal("measured"),
+    rp_filter: z.record(z.enum(["0", "1", "2"])), drift: z.boolean(),
+  }).strict(),
+  z.object({
+    ...rpfRuntimeFields, status: z.literal("simulated"), rp_filter: z.null(), drift: z.null(),
+  }).strict(),
+]);
 export const configSchema = z.object({
   sando: sandoSchema.optional(),
   software: softwareMetadataSchema.optional(),
@@ -311,7 +323,10 @@ export const configSchema = z.object({
   firewall: z.object({
     allow_all_icmp: z.boolean().default(true),
     drop_logging_enabled: z.boolean().default(true),
-    spoof_block: z.boolean().default(true),
+    rpf_mode: rpfModeSchema.default("disabled"),
+    // Retired fields must fail instead of being pruned as unknown response keys.
+    spoof_block: z.never().optional(),
+    system_policies: z.never().optional(),
     policy: z.enum(["accept", "drop"]), rules: list(filterSchema),
     nat: z.object({ masquerade: list(masqueradeSchema), destination_rewrite: z.array(destinationRewriteSchema).optional() }).strict(),
     policies: firewallPoliciesSchema.nullable().optional(),
@@ -523,6 +538,7 @@ export const runtimeSchema = z.preprocess(value => {
   }
   return value;
 }, z.object({
+  rpf: rpfRuntimeSchema.optional(),
   host_takeover: z.object({
     mode: z.literal("console"), phase: z.enum(["captured", "applying", "owned", "failed", "complete"]),
     error: z.string(), connectivity_confirmation_required: z.boolean(),

@@ -332,7 +332,7 @@ describe("firewall drop history", () => {
     page.records[0]!.reason = "spoof_block"; page.records[0]!.compiled_rule_index = null;
     vi.mocked(getFirewallDenyLog).mockResolvedValue(page);
     wrapper = mount(FirewallDropsView, { global: { stubs } }); await flushPromises();
-    expect(wrapper.get('[data-label="Reason"] [data-color="error"]').text()).toBe("Spoof Block");
+    expect(wrapper.get('[data-label="Reason"] [data-color="error"]').text()).toBe("Historical Spoof Block");
     expect(wrapper.get(".drop-row").text()).not.toContain("Rule drop");
     expect(useControllerStore().draft).toBeNull();
   });

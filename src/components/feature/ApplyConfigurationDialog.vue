@@ -5,7 +5,6 @@ import { useControllerStore } from "@/stores/controller";
 import { requiredPermissions } from "@/services/configuration";
 import type { Transaction } from "@/types/domain";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
-import { conntrackChanged, conntrackSafetyNotice } from "@/services/conntrack";
 
 const open = defineModel<boolean>({ required: true });
 const props = withDefaults(defineProps<{ seconds?: number | string; description?: string; editOptions?: boolean }>(), {
@@ -122,14 +121,6 @@ async function close(): Promise<void> {
           Pushing changes...
         </p>
         <template v-else>
-          <v-alert
-            v-if="conntrackChanged(store.baseline?.kernel, store.draft?.kernel)"
-            type="warning"
-            variant="tonal"
-            class="mb-4"
-          >
-            {{ conntrackSafetyNotice }}
-          </v-alert>
           <p class="mb-4">
             Push all changes, including deletions, to the firewall. This can interrupt network access.
             Test connectivity, then confirm the push before the deadline or the firewall will restore its previous configuration.

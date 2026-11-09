@@ -64,7 +64,7 @@ export function config(): Config {
     ipv6_enabled: true,
     interfaces: [{ name: "lab0", kind: "dummy", role: "lan", mtu: 1500, up: true, addresses: ["192.0.2.10/24", "2001:db8::10/64"], dhcp_relay: { enabled: false, servers: [] } }],
     routes: [{ enabled: true, destination: "198.51.100.0/24", interface: "lab0", table: 10000, metric: 1 }],
-    firewall: { allow_all_icmp: true, drop_logging_enabled: true, spoof_block: true, policy: "accept", rules: [{ source: "192.0.2.0/24", action: "accept" }], nat: { masquerade: [{ family: "ipv4", out_interface: "lab0" }] } },
+    firewall: { allow_all_icmp: true, drop_logging_enabled: true, rpf_mode: "disabled", policy: "accept", rules: [{ source: "192.0.2.0/24", action: "accept" }], nat: { masquerade: [{ family: "ipv4", out_interface: "lab0" }] } },
     softflowd: [{ name: "capture", enabled: false, interface: "lab0", collector: "127.0.0.1:2055", export_version: 9, sampling_rate: 1, max_flows: 8192, snaplen: 128, promiscuous: false, timeouts: {} }],
     kernel: { namespace: { "net.ipv4.tcp_syncookies": "1" }, host: {} },
     gateway_monitors: [], ntp: { enabled: false, servers: [] }, syslog: { enabled: false, servers: [] }, vnstat: { enabled: false },
@@ -124,6 +124,7 @@ export function udpRelayStatus() {
   };
 }
 export function runtime(): RuntimeState { return {
+  rpf: { mode: "disabled", family: "ipv4", status: "simulated", rp_filter: null, drift: null },
   parent_interfaces: [], softflowd: [{ name: "capture", state: "simulated" }], dhcp_relay: [{ interface: "lab0", state: "disabled" }],
   gateway_monitors: [], appliance_services: [
     { name: "ntp", scope: "host", state: "disabled" }, { name: "syslog", scope: "host", state: "disabled" },

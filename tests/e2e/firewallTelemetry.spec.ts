@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
-import { hostPolicyConfig } from "../fixtures";
+import { config, hostPolicyConfig } from "../fixtures";
 import { dnatRule } from "../bgpFixtures";
 import { firewallCounters, firewallDenyPage, filteredFirewallDenyPage } from "../firewallTelemetryFixtures";
 
@@ -167,16 +167,23 @@ test("drop inclusion switches request server categories and replace missing-rule
   await expect(drops.locator(".drop-row")).toHaveCount(4);
 });
 
-test("General settings places Spoof Block last and preserves explicit false through reviewed SAVE and confirmation", async ({ page }) => {
-  const backend = await mockBackend(page), dialogs: string[] = [];
+for (const mode of ["disabled", "loose", "strict"] as const) {
+test(`General settings stages and preserves ${mode} IPv4 RPF through SAVE and confirmation`, async ({ page }) => {
+  const initialConfig = config();
+  initialConfig.firewall.rpf_mode = mode === "disabled" ? "strict" : "disabled";
+  const backend = await mockBackend(page, { initialConfig }), dialogs: string[] = [];
   page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
   await page.route("**/*timezones*", route => route.fulfill({ json: { timezones: ["UTC"] } }));
   await connect(page); await page.goto("/settings/general");
   const settings = page.getByRole("region", { name: "General settings", exact: true });
-  await expect(settings.locator(".setting-row").last().locator(".setting-name")).toHaveText("Spoof Block");
-  const spoof = settings.getByRole("checkbox", { name: "Spoof Block", exact: true });
-  await expect(spoof).toBeChecked();
-  await spoof.uncheck();
+  const row = settings.locator(".setting-row").last();
+  await expect(row.locator(".setting-name")).toHaveText("IPv4 reverse-path filtering");
+  await expect(row.locator(".v-select__selection-text")).toHaveText(mode === "disabled" ? "Strict" : "Disabled");
+  await row.locator(".v-select").click();
+  const title = { disabled: "Disabled", loose: "Loose", strict: "Strict" }[mode];
+  await page.getByRole("option", { name: title, exact: true }).click();
+  await expect(settings).not.toContainText("rp_filter");
+  await expect(settings).not.toContainText("measured");
   const logging = settings.getByRole("checkbox", { name: "Log firewall drops", exact: true });
   await expect(logging).toBeChecked();
   await logging.uncheck();
@@ -184,25 +191,29 @@ test("General settings places Spoof Block last and preserves explicit false thro
   expect(backend.writes).toEqual([]); expect(dialogs).toEqual([]);
   await page.getByRole("link", { name: "Save configuration", exact: true }).click();
   await expect(page.getByRole("region", { name: "SAVE", exact: true })).toContainText("Log firewall drops");
-  await expect(page.getByRole("region", { name: "SAVE", exact: true })).toContainText("Spoof Block");
+  await expect(page.getByRole("region", { name: "SAVE", exact: true })).toContainText("IPv4 reverse-path filtering");
   await page.getByRole("button", { name: "Commit & push", exact: true }).click();
   const push = page.getByRole("dialog");
   await expect(push).toContainText("firewall.write");
   await push.getByRole("button", { name: "Push changes", exact: true }).click();
   await expect(push.getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
   expect(backend.writes.find(write => write.path === "/transactions")?.body).toMatchObject({
-    config: { firewall: { drop_logging_enabled: false, spoof_block: false } },
+    config: { firewall: { drop_logging_enabled: false, rpf_mode: mode } },
   });
+  const submitted = backend.writes.find(write => write.path === "/transactions")!.body as { config: { firewall: unknown } };
+  expect(submitted.config.firewall).not.toHaveProperty("spoof_block");
+  expect(submitted.config.firewall).not.toHaveProperty("system_policies");
   await push.getByRole("button", { name: "Confirm changes", exact: true }).click();
   await expect(push).not.toBeVisible();
   await page.goto("/settings/general");
   await expect(logging).not.toBeChecked();
-  await expect(spoof).not.toBeChecked();
+  await expect(row.locator(".v-select__selection-text")).toHaveText(title);
   await page.reload();
-  await expect(spoof).not.toBeChecked();
+  await expect(row.locator(".v-select__selection-text")).toHaveText(title);
   expect(dialogs).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+}
 
 test("possible missing rules summarizes all drop pages across time periods and fits compact screens", async ({ page, isMobile }) => {
   const backend = await mockBackend(page);

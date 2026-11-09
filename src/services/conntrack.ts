@@ -49,4 +49,3 @@ export function conntrackChanged(before: KernelConfig | undefined, after: Kernel
 export function conntrackPreserved(before: KernelConfig | undefined, after: KernelConfig | undefined): boolean {
   return !conntrackChanged(before, after);
 }
-export const conntrackSafetyNotice = "Higher limits permit greater memory use; lower limits can reject new connections. Short timeouts can expire idle flows or leave late teardown packets untracked. Bounds are not RAM-sizing advice. Changes do not flush connections or necessarily rewrite existing timers; restoring settings cannot recover expired flows. Review these changes and independently verify connectivity before confirming.";

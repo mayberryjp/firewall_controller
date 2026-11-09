@@ -3,7 +3,6 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import type { Transaction } from "@/types/domain";
 import { useTimestamps } from "@/composables/useTimestamps";
-import { conntrackChanged, conntrackSafetyNotice } from "@/services/conntrack";
 const { formatTimestamp, timeZone } = useTimestamps();
 const props = withDefaults(defineProps<{ transaction: Transaction; showDetails?: boolean }>(), { showDetails: true });
 const emit = defineEmits<{ updated: [transaction: Transaction] }>();
@@ -34,14 +33,6 @@ async function execute(action: "confirm" | "rollback"): Promise<void> {
 </script>
 <template>
   <div class="transaction-actions">
-    <v-alert
-      v-if="transaction.status === 'pending_confirmation' && conntrackChanged(transaction.previous.kernel, transaction.candidate.kernel)"
-      type="warning"
-      variant="tonal"
-      class="mb-3"
-    >
-      {{ conntrackSafetyNotice }}
-    </v-alert>
     <v-alert
       v-if="error"
       type="error"

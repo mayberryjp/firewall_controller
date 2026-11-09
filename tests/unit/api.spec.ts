@@ -30,6 +30,61 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it.each(["disabled", "loose", "strict"] as const)("preserves %s RPF through state, submission, confirmation and rollback", async mode => {
+    const candidate = config(); candidate.firewall.rpf_mode = mode;
+    body = encodeJson({ ...state(), desired: candidate, observed: candidate });
+    expect((await net.getState()).desired.firewall.rpf_mode).toBe(mode);
+    const pending = transaction(); pending.candidate = candidate;
+    pending.previous.firewall.rpf_mode = mode === "disabled" ? "strict" : "disabled";
+    body = encodeJson(pending); status = 202;
+    expect((await net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 })).candidate.firewall.rpf_mode).toBe(mode);
+    expect(decodeJson(String(captured?.data))).toMatchObject({ config: { firewall: { rpf_mode: mode } } });
+    expect(String(captured?.data)).not.toContain("spoof_block");
+    expect(String(captured?.data)).not.toContain("system_policies");
+    body = encodeJson({ ...pending, status: "committed" }); status = 200;
+    expect((await net.confirmTransaction(pending.id)).candidate.firewall.rpf_mode).toBe(mode);
+    body = encodeJson({ ...pending, status: "rolled_back" });
+    expect((await net.rollbackTransaction(pending.id)).previous.firewall.rpf_mode).toBe(pending.previous.firewall.rpf_mode);
+    body = encodeJson({ revision: state().revision, current: true, submitted_at: null, committed_at: null, config: candidate });
+    expect((await net.getRevision(state().revision)).config.firewall.rpf_mode).toBe(mode);
+  });
+  it.each(["loose", "strict"] as const)("rejects an accepted response that drops the requested %s RPF mode", async mode => {
+    const candidate = config(); candidate.firewall.rpf_mode = mode;
+    const pending = transaction();
+    body = encodeJson(pending); status = 202;
+    await expect(net.submitPackage({ base_revision: state().revision, config: candidate, confirm_timeout_seconds: 120 }))
+      .rejects.toMatchObject({ uncertain: true, incompatible: true, transaction: { id: pending.id }, message: expect.stringContaining("RPF mode") });
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it.each(["spoof_block", "system_policies"] as const)("does not silently prune removed %s from backend configuration", async field => {
+    const current = state();
+    body = encodeJson({ ...current, desired: { ...current.desired, firewall: {
+      ...current.desired.firewall, [field]: field === "spoof_block" ? false : [],
+    } } });
+    await expect(net.getState()).rejects.toMatchObject({ incompatible: true, message: expect.stringContaining(field) });
+  });
+  it("preserves measured RPF observations separately from configuration, including zero and drift", async () => {
+    const rpf = { mode: "strict", family: "ipv4", status: "measured", rp_filter: { all: "1", default: "1", wan0: "0", lo: "1" }, drift: true };
+    body = encodeJson({ ...runtime(), rpf });
+    expect((await net.getRuntime()).rpf).toEqual(rpf);
+    expect(captured).toMatchObject({ method: "get", url: "/runtime" });
+    expect(captured?.data).toBeUndefined();
+    expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it.each(["disabled", "loose", "strict"] as const)("keeps simulated %s RPF unmeasured", async mode => {
+    const rpf = { mode, family: "ipv4", status: "simulated", rp_filter: null, drift: null };
+    body = encodeJson({ ...runtime(), rpf });
+    expect((await net.getRuntime()).rpf).toEqual(rpf);
+  });
+  it.each([
+    { status: "measured", rp_filter: null, drift: false },
+    { status: "measured", rp_filter: { wan0: "3" }, drift: false },
+    { status: "simulated", rp_filter: { wan0: "1" }, drift: null },
+    { status: "simulated", rp_filter: null, drift: false },
+  ])("rejects malformed or fabricated RPF observations %j", fields => {
+    body = encodeJson({ ...runtime(), rpf: { mode: "disabled", family: "ipv4", ...fields } });
+    return expect(net.getRuntime()).rejects.toMatchObject({ incompatible: true });
+  });
   it("uploads a private Discord webhook and returns only its reference", async () => {
     status = 201; body = encodeJson({ webhook_ref: webhookReference });
     expect(await net.uploadDiscordWebhook(webhookUrl)).toEqual({ webhook_ref: webhookReference });

@@ -61,7 +61,7 @@ export const firewallDenyPageSchema = z.object({
 });
 export type FirewallDenyPage = z.infer<typeof firewallDenyPageSchema>;
 export function firewallDropReasonLabel(reason: FirewallDenyPage["records"][number]["reason"]): string {
-  return { rule: "Rule drop", policy: "Default policy", spoof_block: "Spoof Block" }[reason];
+  return { rule: "Rule drop", policy: "Default policy", spoof_block: "Historical Spoof Block" }[reason];
 }
 export type FirewallDropSortColumn = "timestamp_ms" | "source" | "destination" | "protocol" | "ingress" | "egress" | "packet_length" | "reason";
 
