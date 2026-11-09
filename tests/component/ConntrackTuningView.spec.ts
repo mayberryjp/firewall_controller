@@ -109,6 +109,7 @@ describe("conntrack settings page", () => {
     expect(store.draft?.kernel).toEqual({
       host: { [maxName]: "3072" }, namespace: { "net.netfilter.nf_conntrack_udp_timeout": "30" },
     });
+    expect(wrapper!.get('[role="status"]').text()).toBe("Conntrack changes staged.");
   });
   it("does not guess defaults from captured originals or clamp out-of-range system values", async () => {
     const sample = conntrackSnapshot();

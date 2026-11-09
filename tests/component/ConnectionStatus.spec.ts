@@ -7,7 +7,7 @@ import ApplyConfigurationDialog from "@/components/feature/ApplyConfigurationDia
 import SafetyBanner from "@/components/layout/SafetyBanner.vue";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import { useControllerStore } from "@/stores/controller";
-import { config, state, transaction, monitor, runtime } from "../fixtures";
+import { config, state, transaction, monitor, runtime, processHealthSnapshot } from "../fixtures";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
@@ -44,6 +44,28 @@ function saveDialog() {
   return mount(ApplyConfigurationDialog, { props: { modelValue: true }, global: { stubs } });
 }
 describe("navbar firewall status", () => {
+  it("labels degraded health without hiding failures or blocking the configuration control", async () => {
+    const store = useControllerStore(), snapshot = processHealthSnapshot();
+    snapshot.process_health.status = "degraded"; snapshot.process_health.healthy = null;
+    store.platform.data = snapshot; store.platform.stale = false; store.platform.lastSuccess = Date.now();
+    stageDraft();
+    const wrapper = mount(ConnectionBubble, { global: { stubs, directives: { tooltip: () => {} } } });
+    const configuration = status();
+    try {
+      expect(wrapper.text()).toContain("Process health: Degraded");
+      expect(wrapper.text()).not.toContain("Unknown (degraded)");
+      expect(wrapper.get(".connection-bubble").attributes("aria-label")).toBe("Issues");
+      expect(wrapper.get('[aria-label="Active alerts"]').text()).toContain("NTP worker is unavailable");
+      expect(wrapper.text()).toContain("Recovering");
+      expect(configuration.get('[aria-label="Save configuration"]').attributes("disabled")).toBeUndefined();
+      expect(store.readOnlyReason).toBe("");
+      expect(store.canApply).toBe(true);
+      store.platform.stale = true; await flushPromises();
+      expect(wrapper.text()).toContain("Process health: Unknown");
+      expect(wrapper.get('[aria-label="Active alerts"]').text()).toContain("NTP worker is unavailable");
+      expect(store.canApply).toBe(true);
+    } finally { wrapper.unmount(); configuration.unmount(); }
+  });
   it("consolidates backend health alerts in the fixed-size issue panel without health write locks", async () => {
     const store = useControllerStore();
     const alert = { id: "ntp:warning", component: "appliance_services", resource: "ntp", severity: "warning", code: "future_code", message: "Upstream unavailable", retrying: true, first_seen_at: "2026-10-27T01:02:03.987Z", last_seen_at: null };

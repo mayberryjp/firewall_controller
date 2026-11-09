@@ -12,14 +12,15 @@ type ComponentHealth = PlatformStatus["process_health"]["components"][number];
 const store = useControllerStore();
 const health = computed(() => store.healthStatus);
 const takeover = computed(() => store.runtime.data?.host_takeover);
-const overallLabels: Record<string, string> = { healthy: "Healthy", unhealthy: "Unhealthy", unknown: "Unknown" };
+const overallLabels: Record<string, string> = { healthy: "Healthy", degraded: "Degraded", unhealthy: "Unhealthy", unknown: "Unknown" };
 const overallLabel = computed(() => {
   if (!health.value || health.value.stale) return "Unknown";
   const status = health.value.process_health.status;
   return overallLabels[status] ?? `Unknown (${status})`;
 });
 const overallColor = computed(() => !health.value || health.value.stale ? "default" :
-  health.value.process_health.status === "healthy" ? "success" : health.value.process_health.status === "unhealthy" ? "error" : "default");
+  health.value.process_health.status === "healthy" ? "success" : health.value.process_health.status === "unhealthy" ? "error" :
+    health.value.process_health.status === "degraded" ? "warning" : "default");
 const components = computed<ComponentHealth[]>(() => {
   const snapshot = health.value?.process_health;
   if (!snapshot) return [];

@@ -84,6 +84,8 @@ describe("API Explorer VLAN adoption", () => {
     expect(wrapper.get('button[type="submit"]').text()).toBe("POST: Adopt VLAN");
     expect(wrapper.text()).toContain("without a confirmation timer");
     expect(wrapper.text()).toContain("interfaces.write and transactions.write");
+    expect(wrapper.text()).not.toContain("SAVE");
+    expect(wrapper.text()).not.toContain("confirmed configuration workflow");
     expect(adoption).not.toHaveBeenCalled(); expect(api.inspectApiPath).not.toHaveBeenCalled();
     await wrapper.get("textarea").setValue(JSON.stringify(input));
     await wrapper.get("form").trigger("submit"); await flushPromises();

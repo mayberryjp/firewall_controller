@@ -44,7 +44,9 @@ describe("reviewed and staged RPS controls", () => {
     const wrapper = render(mode);
     await flushPromises();
     expect(wrapper.findAll("button").some(button => button.text() === "Refresh performance state")).toBe(mode === "offloads");
-    expect(wrapper.text().includes("Changes apply only through SAVE. RSS, XPS and XDP remain read-only.")).toBe(mode === "offloads");
+    expect(wrapper.text().includes("RSS, XPS and XDP remain read-only.")).toBe(mode === "offloads");
+    expect(wrapper.text()).not.toContain("SAVE");
+    expect(wrapper.text()).not.toContain("Changes apply only through");
     expect(api.getRpsDiagnostics).toHaveBeenCalledTimes(1);
   });
 
@@ -77,6 +79,8 @@ describe("reviewed and staged RPS controls", () => {
     expect(JSON.stringify(store.state.data!.desired)).toBe(original);
     expect(store.editorDirty).toBe(false);
     expect(wrapper.text()).toContain("Performance changes staged");
+    expect(wrapper.get('[role="status"]').text()).toBe("Performance changes staged.");
+    expect(wrapper.text()).not.toContain("SAVE");
     expect(window.confirm).not.toHaveBeenCalled();
     expect(api.submitPackage).not.toHaveBeenCalled();
     expect(api.getInterfaceCapabilities).not.toHaveBeenCalled();

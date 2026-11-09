@@ -403,7 +403,8 @@ test("a new WireGuard tunnel and an explicitly unverified RPS queue share the re
   await expect(page.locator(".v-select__content:visible")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("wireguard-rps-creation.png"), fullPage: true, animations: "disabled" });
-  await controls.getByRole("link", { name: "Review in SAVE", exact: true }).click();
+  await expect(controls).not.toContainText("SAVE");
+  await page.getByRole("link", { name: "Save configuration", exact: true }).click();
   await page.getByRole("button", { name: "Commit & push", exact: true }).click();
   const push = page.getByRole("dialog");
   await expect(push).toContainText("wireguard.write");

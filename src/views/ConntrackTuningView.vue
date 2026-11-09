@@ -20,7 +20,7 @@ const blockedReason = computed(() => {
   if (loading.value || readError.value) return "";
   if (store.kernelCatalog.stale || store.kernelTunables.stale || store.state.stale) return "Conntrack or configuration data is stale. Reload settings before staging.";
   if (!controls.value.length) return "This backend does not support conntrack tuning. Deploy a supporting backend before staging changes.";
-  if (store.draftStale) return "The draft base revision changed. Review the stale draft in SAVE before editing.";
+  if (store.draftStale) return "The draft base revision changed. Resolve the stale draft before editing.";
   if (store.incompatible) return "Resolve incompatible configuration or transaction state before editing.";
   return store.readOnlyReason || store.operationBlockedReason;
 });
@@ -80,7 +80,7 @@ function stage(): void {
     const issues = validateConfig(candidate, store.runtime.data?.parent_interfaces, store.baseline ?? store.state.data?.desired, store.supportedKernelCatalog)
       .filter(issue => issue.path.startsWith("kernel"));
     if (issues.length) throw new Error(issues.map(issue => issue.message).join("; "));
-    store.stage(candidate); reset(); notice.value = "Conntrack changes staged. Review and apply them in SAVE.";
+    store.stage(candidate); reset(); notice.value = "Conntrack changes staged.";
   } catch (failure) { error.value = failure instanceof Error ? failure.message : "Unable to stage conntrack changes."; }
 }
 </script>

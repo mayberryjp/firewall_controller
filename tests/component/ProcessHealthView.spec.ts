@@ -111,6 +111,32 @@ describe("Process health diagnostics", () => {
     expect(wrapper.find('[aria-label="Process alerts"]').exists()).toBe(false);
     expect(wrapper.text()).toContain("No active alerts.");
   });
+  it("distinguishes degraded health while retaining retrying failures and alerts through staleness and recovery", async () => {
+    const store = useControllerStore(), snapshot = processHealthSnapshot();
+    snapshot.process_health.status = "degraded"; snapshot.process_health.healthy = null;
+    store.platform.data = snapshot; render();
+    const overall = () => wrapper.get(".health-summary .health-chip");
+    expect(overall().text()).toBe("Degraded");
+    expect(overall().attributes("data-color")).toBe("warning");
+    expect(row("ntp").text()).toContain("Error · Recovering");
+    expect(row("ntp").findAll(".health-chip").at(-1)!.text()).toBe("Unhealthy");
+    expect(wrapper.get('[aria-label="Process alerts"]').text()).toContain("NTP worker is unavailable");
+    store.platform.stale = true; await flushPromises();
+    expect(overall().text()).toBe("Unknown");
+    expect(overall().attributes("data-color")).toBe("default");
+    expect(wrapper.text()).toContain("Last-known alerts");
+    expect(wrapper.get('[aria-label="Process alerts"]').text()).toContain("NTP worker is unavailable");
+    store.platform.stale = false; await flushPromises();
+    expect(overall().text()).toBe("Degraded");
+    snapshot.process_health.status = "healthy"; snapshot.process_health.healthy = true;
+    snapshot.process_health.components[0]!.state = "running";
+    snapshot.process_health.components[0]!.healthy = true; snapshot.process_health.components[0]!.retrying = false;
+    snapshot.active_alerts = [];
+    store.platform.data = structuredClone(snapshot); await flushPromises();
+    expect(overall().text()).toBe("Healthy");
+    expect(overall().attributes("data-color")).toBe("success");
+    expect(wrapper.find('[aria-label="Process alerts"]').exists()).toBe(false);
+  });
   it("formats all collection and alert times to UTC seconds without changing API precision", () => {
     const store = useControllerStore(), snapshot = processHealthSnapshot();
     snapshot.process_health.components[0]!.collected_at = "2026-01-02T03:04:05.987+02:00";

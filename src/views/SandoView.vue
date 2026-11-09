@@ -49,7 +49,7 @@ function setSync(enabled: boolean | null): void {
   try {
     if (typeof enabled !== "boolean") throw new Error("Choose enabled or disabled for automatic sync.");
     stageSettings({ sync_enabled: enabled });
-    notice.value = `Automatic sync ${enabled ? "enabled" : "disabled"} staged. Review in SAVE.`;
+    notice.value = `Automatic sync ${enabled ? "enabled" : "disabled"} staged.`;
   } catch (cause) {
     syncToggleVersion.value++;
     error.value = `Unable to change automatic Sando sync: ${cause instanceof Error ? cause.message : "configuration unavailable"}`;
@@ -61,7 +61,7 @@ function saveEndpoint(): void {
     const normalized = endpoint.value.trim() ? sandoBaseUrl(endpoint.value) : "";
     stageSettings({ api_url: normalized });
     endpoint.value = normalized; savedEndpoint.value = normalized; store.editorDirty = false;
-    notice.value = "Endpoint staged. Review in SAVE.";
+    notice.value = "Endpoint staged.";
   } catch (cause) {
     error.value = `Unable to save Sando endpoint: ${cause instanceof Error ? cause.message : "storage unavailable"}`;
   }
@@ -126,7 +126,7 @@ function stageImport(result: SandoImport, base: string, kind: "hosts" | "rules")
       store.stage(result.config); endpoint.value = base; savedEndpoint.value = base; store.editorDirty = false;
     }
     skipped.value = result.skipped;
-    notice.value = `${result.hostsAdded} hosts and ${result.rulesAdded} rules staged; ${result.duplicates} duplicates skipped.${result.hostsAdded || result.rulesAdded || reported ? " Review in SAVE." : ""}`;
+    notice.value = `${result.hostsAdded} hosts and ${result.rulesAdded} rules staged; ${result.duplicates} duplicates skipped.`;
 }
 watch(() => store.sessionVersion, () => {
   request?.abort();

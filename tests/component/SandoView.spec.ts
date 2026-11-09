@@ -116,6 +116,8 @@ describe("one-time Sando imports", () => {
     expect(sando.getSandoConnections).not.toHaveBeenCalled();
     expect(apply).not.toHaveBeenCalled();
     expect(store.editorDirty).toBe(false);
+    expect(wrapper.text()).toContain(`Automatic sync ${enabled ? "enabled" : "disabled"} staged.`);
+    expect(wrapper.text()).not.toContain("SAVE");
     store.discardDraft(); await flushPromises();
     expect(wrapper.get('[role="switch"]').element).toHaveProperty("checked", !enabled);
   });

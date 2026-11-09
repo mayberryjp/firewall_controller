@@ -29,7 +29,9 @@ test("raw configuration editor validates, stages and persists through SAVE", asy
   await expect(view.getByRole("status")).toContainText("Configuration staged.");
   expect(backend.writes).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await view.getByRole("link", { name: "Review and push in SAVE", exact: true }).click();
+  await expect(view).not.toContainText("SAVE");
+  await page.getByRole("navigation", { name: "Config pages", exact: true })
+    .getByRole("tab", { name: "SAVE", exact: true }).click();
   await page.getByRole("button", { name: "Commit & push", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "Push changes", exact: true }).click();

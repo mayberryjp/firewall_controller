@@ -4,7 +4,7 @@ import { ApiFailure } from "@/services/api";
 import * as api from "@/services/netcontrol";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
-import { config, state, transaction, runtime, statistics, software, vnstatReporting, mqttStatus } from "../fixtures";
+import { config, state, transaction, runtime, statistics, software, vnstatReporting, mqttStatus, processHealthSnapshot } from "../fixtures";
 import { conntrackCatalog } from "../conntrackFixtures";
 vi.mock("@/services/netcontrol", () => ({
   getState: vi.fn(), getRuntime: vi.fn(), getTransactions: vi.fn(), getTransaction: vi.fn(),
@@ -256,9 +256,11 @@ describe("independent reads and complete shared draft", () => {
     expect(store.draft!.ntp.servers).toEqual(["clock.example"]); expect(store.readOnlyReason).toBe("");
     store.disconnect(); expect(store.vnstatReporting.data).toBeNull(); store.$dispose();
   });
-  it("keeps configuration writable while MQTT is reconnecting", async () => {
+  it.each([
+    ["healthy", true], ["degraded", null], ["unhealthy", false], ["unknown", null], ["future_status", null],
+  ] as const)("keeps configuration writable under %s health while MQTT is reconnecting", async (status, healthy) => {
     const processHealth = {
-      status: "unhealthy", healthy: false, collected_at: "2026-10-29T00:00:00Z", stale: false,
+      status, healthy, collected_at: "2026-10-29T00:00:00Z", stale: false,
       components: [{ id: "mqtt", component: "mqtt", resource: null, state: "reconnecting", healthy: false, retrying: true, collected_at: "2026-10-29T00:00:00Z" }],
     };
     const alert = { id: "mqtt:reconnecting", component: "mqtt", resource: null, severity: "warning", code: "reconnecting", message: "MQTT reconnecting", retrying: true, first_seen_at: "2026-10-29T00:00:00Z", last_seen_at: null };
@@ -280,6 +282,25 @@ describe("independent reads and complete shared draft", () => {
     vi.mocked(api.submitPackage).mockResolvedValue(pending);
     await store.apply(120, "Update configuration while MQTT reconnects");
     expect(api.submitPackage).toHaveBeenCalledWith(expect.objectContaining({ config: candidate }));
+    store.$dispose();
+  });
+  it.each(["confirm", "rollback"] as const)("allows %s under degraded health with retained error alerts", async action => {
+    const snapshot = processHealthSnapshot();
+    snapshot.process_health.status = "degraded"; snapshot.process_health.healthy = null;
+    vi.mocked(api.getState).mockResolvedValue({ ...state(), ...snapshot });
+    vi.mocked(api.getPlatformStatus).mockResolvedValue(snapshot);
+    const store = await connected();
+    await store.refreshPlatformStatus();
+    const pending = transaction();
+    vi.mocked(api.getTransaction).mockResolvedValue(pending);
+    const completed = transaction(action === "confirm" ? "committed" : "rolled_back");
+    vi.mocked(api.confirmTransaction).mockResolvedValue(completed);
+    vi.mocked(api.rollbackTransaction).mockResolvedValue(completed);
+    expect(store.healthStatus?.active_alerts).toEqual(snapshot.active_alerts);
+    expect(await store.lifecycle(pending.id, action)).toEqual(completed);
+    expect(action === "confirm" ? api.confirmTransaction : api.rollbackTransaction).toHaveBeenCalledExactlyOnceWith(pending.id);
+    expect(store.actionError).toBeNull();
+    store.$dispose();
   });
   it("expires cached health even when an older successful state read masks failed health polling", async () => {
     const store = await connected();

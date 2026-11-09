@@ -35,7 +35,9 @@ describe("raw configuration editor", () => {
   it("loads editable desired JSON without read-only software metadata", () => {
     expect(JSON.parse(editor().element.value)).toEqual(config());
     expect(saveButton().attributes("disabled")).toBeDefined();
-    expect(wrapper.text()).toContain("Save stages your edits");
+    expect(wrapper.text()).not.toContain("Save stages your edits");
+    expect(wrapper.text()).not.toContain("SAVE");
+    expect(wrapper.findAll("a")).toHaveLength(0);
     expect(useControllerStore().editorDirty).toBe(false);
   });
 
@@ -60,6 +62,8 @@ describe("raw configuration editor", () => {
     expect(store.state.data?.desired.firewall.allow_all_icmp).toBe(true);
     expect(store.editorDirty).toBe(false);
     expect(wrapper.text()).toContain("Configuration staged.");
+    expect(wrapper.get('[role="status"]').text()).toBe("Configuration staged.");
+    expect(wrapper.findAll("a")).toHaveLength(0);
     expect(JSON.parse(editor().element.value)).toEqual(candidate);
     expect(apply).not.toHaveBeenCalled();
     expect(saveButton().attributes("disabled")).toBeDefined();

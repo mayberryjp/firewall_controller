@@ -62,10 +62,6 @@ function save(): void {
       class="mb-4"
     >
       Edit the desired configuration as JSON, including any staged changes.
-      Save stages your edits; review and push them in
-      <router-link :to="{ name: 'changes' }">
-        SAVE
-      </router-link>.
       Read-only software release metadata is excluded.
     </p>
     <p
@@ -153,9 +149,6 @@ function save(): void {
         class="mt-4"
       >
         Configuration staged.
-        <router-link :to="{ name: 'changes' }">
-          Review and push in SAVE
-        </router-link>.
       </p>
     </form>
   </section>

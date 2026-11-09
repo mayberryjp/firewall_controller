@@ -39,7 +39,7 @@ const readError = computed(() => statusError.value || store.state.error);
 const blockedReason = computed(() => {
   if (loading.value || readError.value) return "";
   if (statusStale.value || store.state.stale) return "Notification or configuration data is stale.";
-  if (store.draftStale) return "Review the stale draft in SAVE before editing notifications.";
+  if (store.draftStale) return "Resolve the stale draft before editing notifications.";
   if (store.incompatible) return "Resolve incompatible configuration or transaction state first.";
   return store.readOnlyReason || store.operationBlockedReason;
 });
@@ -121,7 +121,7 @@ async function stage(): Promise<void> {
     const issues = validateConfig(candidate).filter(issue => issue.path.startsWith("discord"));
     if (issues.length) throw new Error(issues.map(issue => issue.message).join(". "));
     store.stage(candidate); reset();
-    notice.value = uploaded ? "Webhook stored; notification changes staged in SAVE." : "Notification changes staged in SAVE.";
+    notice.value = uploaded ? "Webhook stored; notification changes staged." : "Notification changes staged.";
   } catch (failure) {
     if (alive && !controller.signal.aborted && session === store.sessionVersion) {
       error.value = failure instanceof Error ? failure.message : "Unable to save notification settings.";

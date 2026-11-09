@@ -82,7 +82,7 @@ Services > **UDP BROADCAST RELAY** (`/services/udp-broadcast-relay`) follows the
 [October 28 relay handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-28.md#2026-10-28-06-native-udp-broadcast-relay).
 The compact instance editor stages global/instance enable, ID, UDP port,
 explicit interface selection, optional IPv4 multicast group, source mode and
-service/instance metadata through the existing SAVE, confirmation and rollback flow.
+service/instance metadata.
 Govee and ECHONET Lite presets populate an unsent, disabled instance with an
 unused ID; they never enable the service, push changes or create firewall rules.
 Only configured up Ethernet/VLAN links with IPv4 prefix <=30 or DHCP qualify.
@@ -109,22 +109,21 @@ egress MTU. Local browser mocks do not establish native or appliance acceptance.
 Services > mDNS / Discovery (`/services/mdns`) follows the
 [October 25 mDNS handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-25.md#2026-10-25-17-native-mdns-implementation).
 It stages allow/deny LAN membership, IPv4/IPv6 preferences, reflection filters,
-explicit appliance publishing choices and metadata in the shared draft. Apply,
-confirm, rollback and revision restore use the existing SAVE workflow; mDNS
+explicit appliance publishing choices and metadata in the shared draft. mDNS
 changes, including metadata, require `mdns.write`. Config/import/export/history
 retain disabled preferences. Older backends may omit the section; the controller
 does not synthesize it until mDNS settings are staged.
 
 Only configured, up Ethernet/VLAN LAN links participate. Allow mode selects only
 listed links; deny mode includes all eligible links except those listed, including
-newly eligible links. SAVE highlights membership expansion. Reflection requires
+newly eligible links. Membership expansion is highlighted. Reflection requires
 2..32 effective links; publishing alone requires 1..32. Filters are unique absolute
 local service/subtype/provider names (up to 64), with trailing dots and no patterns.
 The mDNS Presets menu adds Google Cast, Home Assistant, HomeKit, Govee, ESPHome,
 HTTP, AirPlay, RAOP, Bambu Lab, HTTPS, IPP, Printer and Philips Hue entries to the
 unsent service list in absolute `.local.` format. Existing entries, including
 case-insensitive shorthand equivalents, cannot be added again through the menu.
-Custom services remain editable; Stage changes and SAVE use the existing review flow.
+Custom services remain editable.
 Publishing is separate and opt-in; HINFO exposes Linux/architecture and workstation
 publishing uses port 9. Empty publishing hostname uses configured `system.hostname`,
 not ambient host state. Global IPv6 off suppresses IPv6 and all local AAAA publishing
@@ -140,7 +139,7 @@ Changed draft entries/links do not inherit applied usage. Missing, stale (over
 15 seconds), disabled, simulated and failed observations are not displayed as
 measured zeroes. Counts reset per worker/socket run, not lifetime history; query
 matches are not discovered devices, and successful sends do not prove delivery.
-Users can remove entries through the existing delete / Stage / SAVE flow.
+Users can remove entries with the inline delete action.
 Deploy a backend with mandatory `MDNSStatus.filter_counters`; older status shapes
 are reported as incompatible, not silently replaced with zero counts.
 Status failures retain local edits and do not globally lock configuration.
@@ -205,7 +204,7 @@ by the frontend.
 Routing > **BGP PROCESS** (`/routing/bgp`) stages the local ASN/router ID, enable
 switch, timers, and global prefix limit, with all options visible. Routing >
 **BGP PEERS** (`/routing/bgp/peers`) owns inline peer add/edit/delete controls.
-Both use the shared SAVE/apply flow. For initial setup, save the process identity
+For initial setup, save the process identity
 while disabled, add a peer, then enable BGP. Peer rows show colored applied session
 states and sent/received route counts; uncommitted changes show Not applied, and
 unavailable or expired observations are neutral with unknown counts. Neighbor
@@ -239,7 +238,7 @@ Both use non-overlapping three-second reads with bounded failure backoff and
 neutralize measurements after 15 seconds. Process health supports the existing
 confirmed, icon-only `bgp` restart, warning that routes are withdrawn/relearned.
 BGP changes require `bgp.write`; enabled BGP also requires that permission for
-aggregate service repair. Default-route import opt-ins appear in SAVE review.
+aggregate service repair. Default-route import opt-ins are highlighted.
 
 Firewall/NAT > **DNAT** (`/firewall/nat/dnat`) is an ordered destination rewrite
 table with inline add/edit/delete and drag-to-reorder controls. WAN, TCP/UDP, exact port, LAN
@@ -247,7 +246,7 @@ and target address are the only required fields; optional Labels retain metadata
 Rules preserve existing masquerade and all unrelated settings and require
 `nat.write`. Validation checks interface roles/up state, target subnet/family,
 firewall-owned/network/broadcast addresses, duplicates and collection limits.
-SAVE review explains source-preserving return routing, target upstream loops,
+Warnings explain source-preserving return routing, target upstream loops,
 normal forwarding filters and new-connections-only changes; no implicit accepts,
 routes, source NAT or connection flushes are added.
 
@@ -366,14 +365,14 @@ Generic explanatory and period captions are omitted; actual capture, retention a
 read problems remain explicit.
 
 The General Settings row **Log firewall drops** stages
-`firewall.drop_logging_enabled` through the normal SAVE review/confirmation flow
+`firewall.drop_logging_enabled`
 with `transactions.write` and `firewall.write`. It defaults on. Turning it off
 stops new history capture and Discord alerts, not firewall protection or rule
 counters; retained history remains readable with capture status `disabled`.
 Missed traffic is not backfilled, and already in-flight Discord deliveries may finish.
 
 The final General Settings row, **Spoof Block**, stages `firewall.spoof_block`
-through the same SAVE review and confirmed transaction flow with
+with
 `transactions.write` and `firewall.write`. Omitted values default on; explicit
 off is preserved in drafts, exports, saved revisions and restores. Enabled
 protection blocks IPv4/IPv6 sources outside each managed LAN's own configured
@@ -392,8 +391,7 @@ enforcement.
 Settings > **Notifications** opens **Firewall drop notifications**, providing Discord first-seen firewall-drop alerts in the
 General Settings row layout. Save privately uploads a new/replacement webhook,
 clears the full-width password-style webhook input, and stages only its device-local reference.
-Review the complete candidate in SAVE and explicitly confirm it; only committed
-settings send. Configuration, revisions and exports never contain the URL.
+Only committed settings send. Configuration, revisions and exports never contain the URL.
 `discord.write` is required for upload and configuration changes, alongside
 `transactions.write` for apply/confirm/rollback. A successful supported status
 read is required before editing; failures and stale data remain explicit.
@@ -449,8 +447,7 @@ conntrack settings, preserving saved values and capturing only missing live valu
 Blanking a populated field is an inline validation error, not an unmanaged opt-out.
 Automatic captures appear as **Automatic conntrack settings** transactions from
 `system-conntrack-ownership`, without a confirmation deadline. Simulator/lab
-namespaces do not perform automatic captures. Stage changes
-and review the full candidate in **SAVE**, with `transactions.write` and the
+namespaces do not perform automatic captures. Changes require `transactions.write` and the
 changed scopes' `kernel.host.write`/`kernel.namespace.write` permissions.
 Host-global tuning remains subject to the backend's ownership safeguards.
 
@@ -573,8 +570,7 @@ unsupported endpoints and backend authorization/conflict errors remain visible.
 
 **Config → Config editor** edits the desired configuration as JSON, including the
 shared draft. **Save** validates JSON, schema and configuration references, then
-stages changes without writing to the firewall. Use **SAVE → Commit & push** for
-the existing review, confirmation and rollback flow. Read-only software release
+stages changes without writing to the firewall. Read-only software release
 metadata is excluded; unknown top-level configuration sections are preserved.
 The editor accepts up to 1 MiB of UTF-8 JSON.
 
@@ -645,7 +641,7 @@ or appliance acceptance.
 | `/firewall/input` | Host-input policy and ordered managed-ingress rules, separate from forwarding |
 | `/services/netflow`, `/services/netflow/:name` | NetFlow/IPFIX: staged flow-export instances (**Add export**, inline Status enable/disable toggle) and independent runtime; instance names are plain text, with editing through the row action |
 | `/services/dhcp-relay` | Sole editor for per-interface relay enablement/upstream servers, with stored/observed configuration and runtime |
-| `/settings/remote-dns` | Inline Add DNS server, edit and delete actions stage the server list to `dns[interface].servers` for every current LAN/WAN interface; existing per-interface servers are combined into one list. Preserves domains, DHCP settings and unassigned interfaces. Not a DNS server for LAN clients. Review through SAVE and Commit & push; future interfaces require staging again. The old `/services/remote-dns` URL redirects here. |
+| `/settings/remote-dns` | Inline Add DNS server, edit and delete actions stage the server list to `dns[interface].servers` for every current LAN/WAN interface; existing per-interface servers are combined into one list. Preserves domains, DHCP settings and unassigned interfaces. Not a DNS server for LAN clients. Future interfaces require staging again. The old `/services/remote-dns` URL redirects here. |
 | `/gateway-monitors` | Explicit dual-stack path/timing/health settings and independent cached gateway measurements |
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
 | `/services/maintenance` | Explicit all-managed-services repair and a link to Config / Upgrade |
@@ -654,7 +650,7 @@ or appliance acceptance.
 | `/diagnostics/process-health` | Read-only daemon/component health, recovery states, collection freshness and active alerts |
 | `/diagnostics/interface-capabilities` | Saved per-interface performance capabilities shown as color-coded chips: green Enabled, amber Disabled, blue Supported (activation unknown), red Unsupported, and neutral Unknown or N/A. Hover a chip for its separate support and enabled states. No Details controls or collection-error lists. **Refresh capabilities** explicitly scans hardware and saves observations; opening the page only reads the saved snapshot. No automatic scans, tuning, retries or configuration edits. Unknown and simulated results are not treated as measured support; partial results replace older evidence and failed requests retain the previous snapshot marked stale with an inline request error. Collection time uses the saved system timezone. |
 | `/diagnostics/api` | API explorer defaults to `/api/v1/platform/status`, without automatically sending a request. Supports GET inspection, explicit interface-capability scan/save, and explicit POST adoption of an existing unmanaged VLAN. Focus the response box and use Ctrl+A (Cmd+A on macOS) to select only its body, or use its copy icon to copy the displayed response with full numeric precision. Clipboard access requires browser support and HTTPS or localhost; errors appear inline. |
-| `/diagnostics/rps` | RPS Configuration: CPU steering for managed Ethernet and kernel WireGuard RX queues, staged through the shared SAVE flow. No NIC inventory snapshot is required. |
+| `/diagnostics/rps` | RPS Configuration: CPU steering for managed Ethernet and kernel WireGuard RX queues. No NIC inventory snapshot is required. |
 | `/diagnostics/nic-offloads` | NIC Offloads: all settings for one interface in the General settings layout, with Enabled/Disabled dropdowns initialized from reported state. Settings have detailed descriptions and Linux names on hover. |
 | `/diagnostics/path-tests` | Path MTU/MSS: explicitly approved two-firewall packet-size and TCP MSS tests, temporary MTU/permission changes, live progress, directional measurements, cancellation and restoration. Requires a native backend with the path-test API; unsupported older backends stay disabled. |
 | `/config/changes` | Staged changes, unified diff, Commit & push |
@@ -689,7 +685,7 @@ This immediately imports ownership without a confirmation timer, preserving
 supported live settings with role **unassigned**. Finish/discard local edits and
 active transactions first. The client validates the response and refreshes saved
 state before allowing further editing; the next draft uses the refreshed revision.
-Assign role/address/firewall/NAT separately through **SAVE** and confirmed apply.
+Assign role/address/firewall/NAT separately.
 Rollback retains the adopted baseline. Selection never sends a request; failures
 show backend detail and are never automatically retried. After interrupted,
 uncertain or unverifiable adoption, reconnect and inspect backend recovery before
@@ -712,7 +708,7 @@ CPU selection. Existing masks are preserved until edited, including custom
 selections that are not a lowest-ID prefix. Enabling a previously unmanaged
 queue does not select a count automatically. Switching off stages `0` (explicitly
 disabled). To restore the backend-captured original mask, remove the queue's
-`kernel.rps` entry in the configuration editor and review it in SAVE. Other queue
+`kernel.rps` entry in the configuration editor. Other queue
 settings and namespace/host kernel maps are preserved.
 For a newly configured WireGuard tunnel already staged in the shared draft, select
 its interface and enter an explicit canonical `rx-N` queue (0..4095) using
@@ -761,15 +757,14 @@ bits and coherent dependencies during push. Dependent features are never edited
 automatically. **LRO can only be disabled.** Its Enabled option is disabled but can
 display an already enabled state. **Disabled** owns an explicit false setting.
 To release an existing override and restore backend-captured settings, remove
-that feature's `kernel.offloads` entry in the configuration editor and review in SAVE.
+that feature's `kernel.offloads` entry in the configuration editor.
 Offloads can alter
 packet capture/accounting granularity. Backend errors retain the ordinary review/
 recovery flow; a response that drops or changes requested tuning is not confirmed.
 Offload controls require the updated diagnostic fields; older backends
 retain RPS support without inventing evidence for the newer controls.
 The backend remains the authority for `transactions.write`, `interfaces.write`
-and `kernel.host.write`. Use the existing **SAVE**, push, explicit confirmation
-and rollback flow; verify management/VLAN/WireGuard connectivity and performance
+and `kernel.host.write`. Verify management/VLAN/WireGuard connectivity and performance
 before confirming. RSS, XPS, XDP and AF_XDP remain read-only; traffic shaping is
 not implemented by the backend. Capability
 support alone does not demonstrate a bottleneck or a performance improvement.
@@ -840,7 +835,6 @@ transfer rate, congestion/CPU load, ECMP and route changes limit conclusions.
 Timeouts are not proof a size is too large; inner delivery does not prove no
 outer fragmentation. These endpoint tests do not establish an ideal MTU or
 forwarded-LAN throughput, and never apply persistent MSS clamping or MTU edits.
-Any later saved configuration change still uses SAVE and explicit confirmation.
 
 Services labels the flow exporter **NetFlow/IPFIX**, under `/services/netflow`.
 Its Status enable/disable toggle is immediately to the left of Actions.
@@ -1008,7 +1002,7 @@ screens retain their labeled, stacked layouts with tighter spacing.
 
 NAT masquerading uses inline table rows for Add rule and editing, with Save/Cancel
 and validation in place rather than popup forms or discard confirmations.
-Save stages into the shared draft for the normal SAVE/apply review flow; it does
+Save stages into the shared draft; it does
 not write to the backend. Rule order and settings not changed in the editor are
 preserved. The editor omits Labels (display name and description), retaining any
 existing saved labels. Cancel or switching rows discards the current unstaged input.
@@ -1044,8 +1038,7 @@ This is a frontend-wide control, not a backend global policy: DHCP DNS is still 
 on interfaces without configured DNS servers, even when the control is on. When off,
 the backend merges configured and DHCP servers. An omitted field defaults to on.
 After adding interfaces, set the control again and save to include them; interfaces
-added outside the UI are not automatically covered. Changes use the normal shared
-draft and SAVE/apply flow and require `interfaces.write`.
+added outside the UI are not automatically covered. Changes require `interfaces.write`.
 The inventory table shows only active addresses; configured static addresses remain in
 the interface editor. DHCP/IPv6 assignments stay visible even with an empty static list,
 and live addresses never enter configuration drafts. Interface type, management state,
@@ -1140,10 +1133,10 @@ Settings > SANDO IMPORT accepts an HTTP(S) server URL or `/api` base URL. The br
 calls Sando directly, with no registry/firewall credentials. Sando must be reachable
 from the browser, allow its origin through CORS, and use HTTPS when required by
 the frontend's HTTPS origin. The base URL is staged as `config.sando.api_url`
-through the normal SAVE flow (`sando.write`). Complete `/api/localhosts` device
+and requires `sando.write`. Complete `/api/localhosts` device
 records remain only in page memory, never in the appliance configuration.
 **Automatic host and threat-score sync** stages `config.sando.sync_enabled`
-(default false) through SAVE, independently of manual imports. Enabling requires
+(default false), independently of manual imports. Enabling requires
 a saved endpoint. Only committed settings drive the daemon's hourly metadata
 worker; pending or rolled-back changes do not start or stop it. Disabling cancels
 automatic acquisition without removing imported hosts or rules. Automatic
@@ -1210,8 +1203,7 @@ their saved ownership rather than persisting inherited duplicates on hosts.
 Ownership-only edits do not invalidate otherwise matching packet/byte totals.
 
 Rule imports automatically stage their results in the shared draft, with no
-separate replacement review or staging acknowledgement. Review and apply the
-changes through **SAVE**. Only host-forwarding rules with both `origin: "import"` and
+separate replacement review or staging acknowledgement. Only host-forwarding rules with both `origin: "import"` and
 `import_source: "sando"` are replaced, including old targets absent from the new
 source. Manual rules retain their relative order first, other retained rules keep
 their relative order, and new Sando rules follow in source order. Host inventory,
@@ -1219,10 +1211,9 @@ defaults, interface policy, input and NAT are not deleted or recreated.
 Successful empty or partial replacements are staged automatically, with skipped
 entries reported inline; all-invalid sources and failed acquisition retain prior
 rules and reports. Imports merge into the latest shared draft after acquisition.
-Nothing is applied until the normal **SAVE** flow completes.
 
 Deploy the October 30 label-capable backend before using ownership-bearing writes.
-SAVE verifies that the accepted candidate retains requested labels, matching host
+The controller verifies that the accepted candidate retains requested labels, matching host
 groups by host ID and interface groups by interface name rather than their array
 positions. Backend normalization may reorder these groups; rule order within each
 group remains significant. If an older
@@ -1234,8 +1225,7 @@ rule labels.
 Legacy forwarding rules cannot coexist with host policies; imports never delete
 or translate legacy rules. Remove them deliberately in the shared draft first.
 Entering host/interface policy mode requires an inline acknowledgement because it
-introduces stateful return traffic. Review the full difference in **SAVE** before
-applying. Backend host-policy limits, address uniqueness, references, family
+introduces stateful return traffic. Backend host-policy limits, address uniqueness, references, family
 compatibility, port limits, expansion limits and metadata size are validated.
 Nothing is applied automatically.
 
@@ -1253,7 +1243,7 @@ action (initially **drop**) and click **Add** to stage it in the shared draft, o
 **Cancel** to leave configuration unchanged. New hosts use their IP address as their
 name, start without rules, and are selected automatically. Canonical unicast IPv4
 and enabled IPv6 addresses are supported; invalid or duplicate addresses show inline
-errors. Use **SAVE** to review and apply the staged host.
+errors.
 Rule actions use labeled green accept/red drop chips with matching row accents; protocols, ports and egress
 interfaces use compact chips. Wildcards remain muted text, and the final default
 rule is visually separated and its action can be edited. PROTECTED HOSTS, INTERFACE
@@ -1263,8 +1253,7 @@ stacked cards. They support inline add/edit/delete and drag-to-reorder.
 Drag the handle to move a rule using a mouse or touch screen; there are no up/down
 reordering buttons. Legacy forwarding, masquerade and DNAT tables also use drag
 handles. Ordering is scoped to the selected host or ingress
-interface; the host default stays last. Changes stage into the shared draft for
-the existing **SAVE** review/apply flow, never apply automatically, and show
+interface; the host default stays last. Changes stage into the shared draft, never apply automatically, and show
 validation errors inline. Host-input policy settings also expand inline.
 Desktop rule rows stay single-line with bounded horizontal scrolling; long values
 wrap in mobile cards. Browsing alone never
@@ -1300,7 +1289,7 @@ the table shows their ordered rules; empty policies show an explicit empty state
 Firewall destined uses the same interface selector and compact rule table, with
 inline Add/Edit/Delete and drag ordering. **Edit input policy** changes only
 filtering and its global default; it does not contain a separate nested rule editor
-or replace interface rules. All edits stage through the existing SAVE review.
+or replace interface rules. All edits stage into the shared draft.
 Neither selector stages changes. Selection
 does not stage changes, and shared draft/pending rules take precedence over
 committed rules. The legacy forwarding editor remains available when host
@@ -1322,7 +1311,7 @@ Host, interface, Firewall destined and legacy forwarding filters support **Any**
 **TCP**, **UDP**, **ICMP** and **ICMPv6**. Any covers every IP protocol.
 When adding a rule, **TCP & UDP** stages two consecutive, separately editable
 rules (TCP first, then UDP) with the same settings and destination ports.
-Both rules are validated together and use the existing SAVE/apply review flow.
+Both rules are validated together.
 ICMP matches all IPv4 types/codes; ICMPv6 matches all IPv6 types/codes and requires
 global IPv6 enabled. Explicit networks and host address pairs must match the
 protocol family; dual-stack hosts expand only compatible pairs.
@@ -1358,6 +1347,11 @@ decides whether to accept a write. Polling failures never automatically stop,
 restart, reconcile, roll back, or upgrade services. Authentication, configuration
 validation, revision conflicts, and an outstanding submitted or uncertain write
 still protect configuration operations from accidental loss or duplicate writes.
+
+Process health distinguishes **Healthy**, **Degraded**, **Unhealthy** and
+**Unknown**. Degraded means retrying component failures with null aggregate
+health; component errors and alerts remain visible. Stale observations remain
+Unknown. These labels do not block editing, submission, confirmation or rollback.
 
 Firewall > Connections reads `GET /api/v1/statistics/connections` with `state.read`.
 Opening Connections collapses the desktop section navigation to a hamburger-only
@@ -1416,8 +1410,7 @@ disposable appliance, not a production management session.
 
 ### Home Assistant And System Stats
 
-Home Assistant settings use the normal shared draft, SAVE review and confirmed
-transaction flow. MQTT changes require `mqtt.write` and `transactions.write`;
+MQTT changes require `mqtt.write` and `transactions.write`;
 status and host-health reads require `state.read`. Deploy a backend with the MQTT
 and `netcontrol-host-health/v1` APIs. Only confirmed settings publish. A broker
 acknowledgment is not proof of Home Assistant ingestion. The publisher also sends
@@ -1484,8 +1477,8 @@ Connection measurements distinguish the cached DNS selection, actual roaming
 endpoint and last DNS success (UTC). Worker errors remain separate from
 handshake/traffic; absent native measurements are Unavailable, not success.
 Existing state/runtime reads supply these details without browser DNS, new
-refresh controls, configuration flags or interval settings. Drafts, full-package
-SAVE, exports, history and restores retain the configured hostname. Endpoint
+refresh controls, configuration flags or interval settings. Drafts, full configuration
+packages, exports, history and restores retain the configured hostname. Endpoint
 refresh does not change revisions, keys, keepalive or static/BGP AllowedIPs.
 
 ### WireGuard Allowed IP routes
@@ -1496,7 +1489,7 @@ main table 254, metric 1, and no gateway. IPv4 and IPv6 networks are supported.
 Generated routes follow peer enable/disable changes (a shared network on the same
 tunnel remains enabled while any peer using it is enabled). Removing an Allowed IP,
 peer, or tunnel removes its generated routes. These changes remain in the shared
-draft for the normal SAVE/apply review; opening a page does not change configuration.
+draft; opening a page does not change configuration.
 
 Generated routes carry the metadata description
 `Automatically managed from WireGuard Allowed IPs.`; retain that description for
@@ -1533,8 +1526,7 @@ even when a lease exists; lease presence alone does not establish route installa
 Deploy the backend implementing the
 [November 4 DHCP route contract](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-04.md#2026-11-04-01-dhcp-following-route-gateways)
 before submitting this mode; older backends do not support it. Imports, history,
-exports and disabled-route edits retain the token. Use the existing SAVE/apply
-and explicit confirmation flow, verifying WAN/WireGuard underlay reachability from
+exports and disabled-route edits retain the token. Verify WAN/WireGuard underlay reachability from
 a local console or independent OS SSH connection. No route, policy rule, table or
 WireGuard AllowedIPs is automatically removed or changed for endpoint-loop prevention.
 
@@ -1609,6 +1601,16 @@ Build-only does not configure services, and CI artifacts are not published
 releases. The browser never supplies repository, token, signing, force or
 unsigned-request overrides. See the backend
 [upgrade handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-10-29.md#2026-10-29-05-automatic-github-https-upgrades).
+
+The revised Ubuntu installer and full source-upgrade scripts also disable and
+persistently mask standard MOTD services, remove active `pam_motd.so` entries,
+and delete standard MOTD content, generators and caches, including custom content
+in those locations. Save any wanted banners separately before deployment.
+Other PAM authentication/session modules, `/etc/issue`, SSH `Banner` settings and
+the embedded SSH greeting are unchanged. This cleanup does not run during
+`upgrade.sh --build-only`, HTTP/automatic HTTPS binary self-upgrades, signed-package
+installs or standalone hardening/reset. See the backend
+[MOTD cleanup guide](https://github.com/mayberryjp/firewall_backend/blob/main/docs/BUILD_AND_INSTALL.md#motd-cleanup).
 
 The shared store retains accepted job identity across transient failures and polls
 without overlap, with backoff. Only `succeeded`, `failed` and `rolled_back` are terminal;
@@ -1768,8 +1770,7 @@ tests do not establish production installation, reboot or management continuity.
 - Routes and monitors accept main table 254 or 10000..19999 at the API boundary;
   the inline editors use main table 254. Public policy rules are no longer supported.
   Static routes default to enabled when omitted. Their Status toggle stages only
-  the enabled flag, preserving the route path and metadata; SAVE applies the full
-  configuration through the normal confirmed transaction. Disabled routes remain
+  the enabled flag, preserving the route path and metadata. Disabled routes remain
   configurable and validated but are not installed. Route toggles stage directly
   without warning popups; enabled explicit monitors still need an enabled
   matching route, so disable or repoint dependent monitors in the same draft.
@@ -2020,6 +2021,11 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
 - NTP uses host networking and changes the **whole appliance clock**, slew-only,
   client-only and without NTS. Running is not proof of synchronization; no
   offset/sync metrics exist. Rollback restores settings, not past clock state.
+  Explicitly configure the desired servers and enable NTP to maintain appliance
+  time; there is no implicit public-server fallback. With the revised Ubuntu
+  install/full-source-upgrade policy, disabled NTP means no managed time
+  synchronization, and clock drift can affect TLS and other time-sensitive operations.
+  Disabling Netcontrol NTP does not restore OS time clients.
 - Syslog owns whole-appliance system/kernel/internal/backend-file logging.
   Disabling/rolling back the managed logger can stop **local system logging**,
   not only remote forwarding; an alternative logger is an operator responsibility.
@@ -2033,8 +2039,7 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   The nullable collector is one literal `IP:port` or `[IPv6]:port` destination;
   null keeps accounting without reporting. Destinations are validated even
   when disabled, and IPv6 destinations require global IPv6 enabled. Existing
-  metadata is preserved without adding label controls. Configuration uses the
-  existing SAVE review, transaction confirmation and rollback flow.
+  metadata is preserved without adding label controls.
 - Daily UDP reports use committed `system.hostname` and `system.domain` as
   `hostname.domain`, or hostname alone when the domain is empty, with vnStat-compatible
   oneline format in the host's local 23:59 minute. Pending or rolled-back identity
@@ -2069,11 +2074,21 @@ for every enabled service (gateway monitoring, appliance services, softflowd,
 DHCP relay). Confirmation/rollback/restore require the relevant change permissions.
 Hints do not imply credential capabilities; 403 stays visible without replay.
 
-Install trusted operator-provided chronyd/syslog-ng and configure
+Install trusted operator-provided syslog-ng where required and configure
 binary paths, explicit `-allow-host-services`, exclusive host ownership,
 namespace/clock/kernel-log privileges, backend log source, trust bundle and host
 DNS/routes. Stop competing clock/logging daemons first. The frontend exposes no
 host commands, package installation or OpenRC management.
+The revised Ubuntu installer and full source upgrade stop, disable and persistently
+mask competing standard OS NTP clients and one-shot units/timers, including
+timesyncd, chrony and ntpd variants. Masks remain after binary rollback; independently
+disable custom unmanaged time clients or cron launchers. Existing appliances need
+the revised full source upgrade to establish this policy. Build-only, HTTP/automatic
+HTTPS binary self-upgrades, signed packages, manual/OpenRC deployments and standalone
+hardening/reset do not establish it; binary updates retain masks already installed.
+The policy requires root/sudo, running Ubuntu/systemd and `procps`, and does not
+change outbound or forwarded UDP/123 rules. See the backend
+[NTP ownership handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-09.md#2026-11-09-06-exclusive-os-ntp-ownership).
 See the backend [operator guide](https://github.com/mayberryjp/firewall_backend#appliance-time-remote-logging-and-vnstat)
 and [Alpine build/install guide](https://github.com/mayberryjp/firewall_backend/blob/main/docs/BUILD_AND_INSTALL.md).
 Package installation defaults to loopback simulator mode; it does not establish

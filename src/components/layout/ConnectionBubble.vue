@@ -12,7 +12,7 @@ const readProblem = computed(() => [store.state, store.transactions].some(query 
   Boolean(query.error) || (query.stale && query.lastSuccess !== null && !query.loading)));
 const health = computed(() => store.healthStatus);
 const healthLabel = computed(() => !health.value || health.value.stale ? "Unknown" :
-  ({ healthy: "Healthy", unhealthy: "Unhealthy", unknown: "Unknown" }[health.value.process_health.status] ?? `Unknown (${health.value.process_health.status})`));
+  ({ healthy: "Healthy", degraded: "Degraded", unhealthy: "Unhealthy", unknown: "Unknown" }[health.value.process_health.status] ?? `Unknown (${health.value.process_health.status})`));
 const healthProblem = computed(() => Boolean((store.platform.error && !store.platformUnsupported) ||
   (health.value && (health.value.stale || health.value.process_health.status !== "healthy" || health.value.active_alerts.length))));
 const configurationProblem = computed(() => Boolean(store.uncertain || store.actionError || store.draftStale || store.state.data?.drift ||

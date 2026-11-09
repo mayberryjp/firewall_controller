@@ -299,7 +299,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
           .replace(/^editor\.timeouts\./, section === "softflowd" ? "editor.timeout_" : "editor.timeouts.");
         errors.value[key] = [...(errors.value[key] ?? []), issue.message];
       }
-      if (ownIssues.length) throw new Error("Correct the highlighted local validation errors. Cross-resource errors remain visible in SAVE.");
+      if (ownIssues.length) throw new Error("Correct the highlighted local validation errors.");
       store.stage(candidate); dialog.value = false; store.editorDirty = false;
     } catch (error) {
       if (error instanceof ZodError) for (const issue of error.issues) {

@@ -69,6 +69,7 @@ describe("Notification settings", () => {
     expect(requiredPermissions(store.diff)).toEqual(["transactions.write", "discord.write"]);
     expect(uploadDiscordWebhook).not.toHaveBeenCalled();
     expect(apply).not.toHaveBeenCalled();
+    expect(wrapper!.get('[role="status"]').text()).toBe("Notification changes staged.");
   });
   it("matches General Settings rows, password field and Save action without extra panels", async () => {
     await start();
@@ -109,6 +110,7 @@ describe("Notification settings", () => {
     expect(JSON.stringify(store.draft)).not.toContain(webhookUrl);
     expect(wrapper!.text()).not.toContain(webhookUrl);
     expect(wrapper!.text()).toContain("Webhook stored; notification changes staged");
+    expect(wrapper!.get('[role="status"]').text()).toBe("Webhook stored; notification changes staged.");
     expect(wrapper!.findAllComponents({ name: "VChip" }).map(chip => chip.text())).toEqual(["Delivered: 0", "Failed: 0"]);
     expect(requiredPermissions(store.diff)).toEqual(["transactions.write", "discord.write"]);
     expect(store.editorDirty).toBe(false);

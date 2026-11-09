@@ -299,7 +299,7 @@ async function stage() {
     if (stableJson(tuningSettings(editing.value.kernel)) !== initialTuning.value) throw new Error("The tuning draft changed while this form was open. Reset the editor before staging.");
     if (candidateError.value) throw new Error(candidateError.value);
     store.stage(buildCandidate()); resetForm();
-    notice.value = "Performance changes staged. Review in SAVE, then verify connectivity and performance before confirming.";
+    notice.value = "Performance changes staged.";
   } catch (failure) { formError.value = failure instanceof Error ? failure.message : String(failure); }
 }
 </script>
@@ -340,7 +340,7 @@ async function stage() {
       Receive Packet Steering (RPS) distributes incoming packet processing across selected CPUs.
     </p>
     <p v-if="mode === 'offloads'">
-      Changes apply only through SAVE. RSS, XPS and XDP remain read-only.
+      RSS, XPS and XDP remain read-only.
     </p>
     <p
       v-if="capabilitiesLoading"
@@ -548,7 +548,7 @@ async function stage() {
               />
             </div>
             <p>
-              Select Enabled or Disabled, then STAGE CHANGES and review in SAVE. Hover a setting name for its Linux feature name.
+              Hover a setting name for its Linux feature name.
             </p>
             <p v-if="!offloadRows.length">
               No configurable offloads were found. Refresh capabilities to scan the physical NICs.
@@ -636,9 +636,7 @@ async function stage() {
       v-if="notice"
       role="status"
     >
-      {{ notice }} <router-link :to="{ name: 'changes' }">
-        Review in SAVE
-      </router-link>
+      {{ notice }}
     </p>
   </section>
 </template>

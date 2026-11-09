@@ -193,7 +193,7 @@ async function send(): Promise<void> {
           Explicitly imports an existing unmanaged VLAN using interfaces.write and transactions.write.
           The parent must be managed Ethernet. This changes ownership immediately, without a confirmation timer;
           supported live settings are preserved and the imported role is unassigned.
-          Assign LAN role, addresses, firewall or NAT afterward through SAVE and the confirmed configuration workflow.
+          Assign LAN role, addresses, firewall or NAT afterward.
           Interrupted ownership recovery may need backend recovery. This POST is never sent on selection or automatically retried.
         </p>
         <v-textarea
