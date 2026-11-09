@@ -15,6 +15,7 @@ const registryReady = computed(() => Boolean(getRegistrySessionToken()));
 const registryBusy = ref(false);
 const registryError = ref<string | null>(null);
 const devices = ref<RegistryDevice[]>([]);
+const devicesLoaded = ref(false);
 const editingId = ref<string | null>(null);
 const deviceForm = reactive({ name: "", address: "", credential: "" });
 
@@ -36,6 +37,7 @@ function resetDeviceForm(): void {
 
 async function refreshDevices(): Promise<void> {
   devices.value = await listRegistryDevices();
+  devicesLoaded.value = true;
 }
 
 async function signIn(): Promise<void> {
@@ -120,6 +122,7 @@ async function signOut(): Promise<void> {
     await logoutRegistry();
     store.disconnect();
     devices.value = [];
+    devicesLoaded.value = false;
     resetDeviceForm();
   } catch (error) {
     registryError.value = error instanceof Error ? error.message : "Unable to sign out";
@@ -249,13 +252,14 @@ async function signOut(): Promise<void> {
       </v-card>
 
       <p
-        v-if="!devices.length"
+        v-if="devicesLoaded && !devices.length"
         class="text-medium-emphasis my-6"
       >
         No firewalls are registered yet.
       </p>
 
       <details
+        v-if="devicesLoaded"
         :open="Boolean(editingId) || !devices.length"
         class="mt-6"
       >
