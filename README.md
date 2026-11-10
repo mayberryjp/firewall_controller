@@ -1188,7 +1188,10 @@ not proof that traffic should be authorized. Exact source IPs, destination IPs o
 explicit `*` destinations, protocol 6 (TCP) or 17 (UDP), and destination ports
 1..65535 or explicit `*` ports are translated into outbound accept candidates.
 Protocol 1 (ICMP) and 58 (ICMPv6) candidates are also supported when their
-addresses match the protocol family and their destination port is explicit `*`.
+addresses match the protocol family and their destination port is explicit `*`
+or `0` (including string `"0"`). Sando's ICMP zero-port placeholder is ignored;
+no destination-port constraint is created. TCP and UDP still require ports
+1..65535 or explicit `*`.
 ICMPv6 requires global IPv6 enabled.
 Destination wildcards become `0.0.0.0/0` or `::/0` according to the source IP,
 so they do not enable the other address family on a dual-stack host. Port

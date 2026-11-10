@@ -34,6 +34,33 @@ describe("Sando API and persistence", () => {
     expect(importSando(result.config, [device()], [connection({ protocol: 1, dst_port: "*" })], "drop").rulesAdded).toBe(0);
   });
   it.each([
+    { protocol: 1, src_ip: "192.0.2.20", dst_ip: "198.51.100.40", destination: "198.51.100.40/32", expectedProtocol: "icmp" },
+    { protocol: 1, src_ip: "192.0.2.20", dst_ip: "*", destination: "0.0.0.0/0", expectedProtocol: "icmp" },
+    { protocol: 58, src_ip: "2001:db8::20", dst_ip: "2001:db8::40", destination: "2001:db8::40/128", expectedProtocol: "icmpv6" },
+    { protocol: 58, src_ip: "2001:db8::20", dst_ip: "*", destination: "::/0", expectedProtocol: "icmpv6" },
+  ])("ignores numeric and string zero ports for $expectedProtocol to $dst_ip", ({ protocol, src_ip, dst_ip, destination, expectedProtocol }) => {
+    for (const dst_port of [0, "0"]) {
+      const row = sandoConnectionSchema.parse({ protocol, src_ip, dst_ip, dst_port });
+      const result = importSando(emptyConfig(), [device()], [row], "drop");
+      expect(result.skipped).toEqual([]);
+      expect(result.rulesAdded).toBe(1);
+      expect(result.config.firewall.policies!.hosts[0]!.rules).toEqual([
+        { origin: "import", import_source: "sando", destination, protocol: expectedProtocol, action: "accept" },
+      ]);
+      expect(validateConfig(result.config)).toEqual([]);
+      const repeated = importSando(result.config, [], [row, { ...row, dst_port: "*" }], "drop");
+      expect(repeated.rulesAdded).toBe(0);
+      expect(repeated.duplicates).toBe(2);
+      expect(repeated.skipped).toEqual([]);
+    }
+  });
+  it.each([6, 17])("rejects zero destination ports for transport protocol %s", protocol => {
+    const result = importSando(emptyConfig(), [device()], [connection({ protocol, dst_port: 0 })], "drop");
+    expect(result.rulesAdded).toBe(0);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.skipped[0]).toContain("destination port must be 1..65535");
+  });
+  it.each([
     { protocol: 1, src_ip: "2001:db8::20", dst_ip: "2001:db8::40", dst_port: "*" as const },
     { protocol: 58, dst_port: "*" as const },
     { protocol: 1, dst_port: 443 },

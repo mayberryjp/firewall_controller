@@ -147,13 +147,14 @@ export function importSando(
       if ((protocol === "icmp" && source.kind() !== "ipv4") || (protocol === "icmpv6" && source.kind() !== "ipv6")) {
         throw new Error("source and destination must match the protocol's address family");
       }
-      if ((protocol === "icmp" || protocol === "icmpv6") && connection.dst_port !== "*") throw new Error("ICMP and ICMPv6 must not specify destination ports");
-      if (connection.dst_port !== "*" && (!Number.isInteger(connection.dst_port) || connection.dst_port < 1 || connection.dst_port > 65535)) throw new Error("destination port must be 1..65535 or an explicit * wildcard");
+      const destinationPort = (protocol === "icmp" || protocol === "icmpv6") && connection.dst_port === 0 ? "*" : connection.dst_port;
+      if ((protocol === "icmp" || protocol === "icmpv6") && destinationPort !== "*") throw new Error("ICMP and ICMPv6 must not specify destination ports");
+      if (destinationPort !== "*" && (!Number.isInteger(destinationPort) || destinationPort < 1 || destinationPort > 65535)) throw new Error("destination port must be 1..65535 or an explicit * wildcard");
       const rule: Policies["hosts"][number]["rules"][number] = {
         origin: "import", import_source: "sando",
         destination: destination ? `${connection.dst_ip}/${destination.kind() === "ipv4" ? 32 : 128}` : source.kind() === "ipv4" ? "0.0.0.0/0" : "::/0",
         protocol,
-        ...(connection.dst_port === "*" ? {} : { destination_ports: [connection.dst_port] }), action: "accept",
+        ...(destinationPort === "*" ? {} : { destination_ports: [destinationPort] }), action: "accept",
       };
       let host = policies.hosts.find(host => host.addresses.includes(connection.src_ip));
       if (!host) {

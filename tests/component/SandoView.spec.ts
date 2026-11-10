@@ -305,6 +305,24 @@ describe("one-time Sando imports", () => {
     expect(wrapper.text()).toContain("0 hosts and 1 rules staged");
     expect(wrapper.text()).toContain("1 previous Sando rules replaced");
   });
+  it("stages Sando ICMP zero-port entries without skipped warnings or port constraints", async () => {
+    vi.mocked(sando.getSandoConnections).mockResolvedValue([
+      { src_ip: "192.0.2.20", dst_ip: "*", protocol: 1, dst_port: 0 },
+      { src_ip: "192.0.2.20", dst_ip: "198.51.100.40", protocol: 1, dst_port: 0 },
+    ]);
+    wrapper = mount(SandoView, { global: { stubs } }); await prepare();
+    await button("Import rules").trigger("click"); await flushPromises();
+    const store = useControllerStore();
+    expect(store.draft!.firewall.policies!.hosts[0]!.rules).toEqual([
+      { origin: "import", import_source: "sando", destination: "0.0.0.0/0", protocol: "icmp", action: "accept" },
+      { origin: "import", import_source: "sando", destination: "198.51.100.40/32", protocol: "icmp", action: "accept" },
+    ]);
+    expect(store.draft!.sando!.rules_import).toMatchObject({ status: "succeeded", imported_count: 2, skipped_count: 0 });
+    expect(wrapper.text()).not.toContain("Skipped entries");
+    await button("Import rules").trigger("click"); await flushPromises();
+    expect(store.draft!.firewall.policies!.hosts[0]!.rules).toHaveLength(2);
+    expect(store.draft!.sando!.rules_import).toMatchObject({ status: "succeeded", imported_count: 2, skipped_count: 0 });
+  });
   it("preserves the latest draft edits made while requests are in flight", async () => {
     let resolve!: (value: typeof devices) => void;
     vi.mocked(sando.getSandoDevices).mockReturnValue(new Promise(done => { resolve = done; }));
