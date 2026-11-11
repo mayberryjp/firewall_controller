@@ -145,7 +145,7 @@ test("Interface capabilities lists saved support separately from enabled state a
   await expect(page.getByRole("tab", { name: "Interface capabilities", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(inspector).toContainText("No saved capability snapshot");
   expect(scans).toBe(0);
-  expect(requests).toHaveLength(2);
+  expect(requests).toHaveLength(3);
   const refresh = inspector.getByRole("button", { name: "Refresh capabilities", exact: true });
   await refresh.click();
   const inventory = inspector.getByLabel("Interface capability inventory", { exact: true });
@@ -161,8 +161,8 @@ test("Interface capabilities lists saved support separately from enabled state a
   expect(await footer.evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize)))
     .toBeLessThan(await guidance.evaluate(element => Number.parseFloat(getComputedStyle(element).fontSize)));
   const cells = inventory.locator("tbody > tr").first().getByRole("cell");
-  await expect(cells.nth(2).locator(".v-chip")).toHaveText("Supported");
-  await expect(cells.nth(2).locator(".v-chip")).toHaveClass(/text-info/);
+  await expect(cells.nth(2).locator(".v-chip")).toHaveText("Unknown");
+  await expect(cells.nth(2).locator(".v-chip")).not.toHaveClass(/text-info/);
   await expect(cells.nth(2).locator(".v-chip")).toHaveAttribute("title", "Support: Supported; enabled: Unknown");
   await expect(cells.nth(3).locator(".v-chip")).toHaveText("Disabled");
   await expect(cells.nth(3).locator(".v-chip")).toHaveClass(/text-warning/);

@@ -1701,8 +1701,8 @@ test("relay repair is explicit, bodyless and keeps forbidden errors visible", as
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-async function navigate(page: Page, label: string): Promise<void> {
-  const section = navigationSections.find(group => group.pages.some(entry => entry.title === label));
+async function navigate(page: Page, label: string, path?: string): Promise<void> {
+  const section = navigationSections.find(group => group.pages.some(entry => entry.title === label && (!path || entry.path === path)));
   if (!section) throw new Error(`Unknown navigation page: ${label}`);
   if (section.name === "overview-section") {
     await page.locator(".product-branding").click();
@@ -2018,11 +2018,12 @@ test("operational pages keep content compact with readable details", async ({ pa
   const backend = await mockBackend(page, { initialStatus: "committed" });
   await connect(page);
   for (const entry of navigationSections.flatMap(section => section.pages).filter(entry => entry.path !== "/overview")) {
-    await navigate(page, entry.title);
+    await navigate(page, entry.title, entry.path);
     const main = page.getByRole("main");
     await expect(page).toHaveURL(new RegExp(`${entry.path}$`));
-    const hasPageHeading = entry.path !== "/settings/remote-dns" &&
-      /^\/(settings|connections|config\/(upgrade|editor))/.test(entry.path);
+    const hasPageHeading = (entry.path !== "/settings/remote-dns" &&
+      /^\/(settings|connections|config\/(upgrade|editor))/.test(entry.path)) ||
+      ["/diagnostics/dhcp-relay-logs", "/diagnostics/syslog", "/diagnostics/rss-irq"].includes(entry.path);
     await expect(main.getByRole("heading", { level: 1 }), entry.path).toHaveCount(hasPageHeading ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
     await expect(main).not.toContainText("Operator prerequisites");

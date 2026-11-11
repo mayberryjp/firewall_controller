@@ -209,9 +209,8 @@ function toggle(name: string, enabled: boolean): void {
 .relay-table :deep(table) { table-layout: fixed; width: 100%; min-width: 840px; }
 .relay-table :deep(.column-actions) { width: 96px; }
 .relay-table :deep(th), .relay-table :deep(td) { white-space: normal; overflow-wrap: anywhere; }
-.relay-interface { display: flex; align-items: baseline; gap: 8px; width: 100%; max-width: 240px; }
-.relay-interface-name { min-width: 0; }
-.relay-interface-role { flex-shrink: 0; }
+.relay-interface { display: flex; align-items: baseline; gap: 8px; width: 100%; max-width: 240px; white-space: nowrap; }
+.relay-interface-name, .relay-interface-role { flex-shrink: 0; }
 .relay-interface-role { font-size: 10px; font-weight: 500; }
 .relay-interface-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 </style>

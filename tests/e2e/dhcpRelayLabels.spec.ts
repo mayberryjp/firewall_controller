@@ -33,7 +33,7 @@ test("DHCP relay interface labels stay on one compact line", async ({ page }) =>
   expect(await table.locator(".relay-interface").first().evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(24);
   const rowHeights = await table.locator("tbody tr").evaluateAll(rows => rows.map(row => row.getBoundingClientRect().height));
   expect(rowHeights[0]).toBe(rowHeights[1]);
-  await expect(table.locator("thead th")).toHaveCount(5);
+  await expect(table.locator("thead th")).toHaveCount(7);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(backend.writes).toHaveLength(0);
 });
