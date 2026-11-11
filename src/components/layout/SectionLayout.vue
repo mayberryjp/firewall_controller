@@ -3,8 +3,13 @@ import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { useDisplay } from "vuetify";
 import type { NavigationSection } from "@/constants/navigation";
+import { useControllerStore } from "@/stores/controller";
+import { useInterfaceCapabilities } from "@/composables/useInterfaceCapabilities";
 
 const props = defineProps<{ section: NavigationSection }>();
+const store = useControllerStore();
+const { error: capabilityReadError } = useInterfaceCapabilities(() => props.section.name === "diagnostics-section");
+const pages = computed(() => props.section.pages.filter(page => page.name !== "rss-irq" || !store.rssIrqNavigation.hidden));
 const showNavigation = computed(() => props.section.pages.length > 1 || ["settings-section", "diagnostics-section"].includes(props.section.name));
 const route = useRoute();
 const selectedPage = computed(() => route.meta.navigationPage ?? route.name);
@@ -46,12 +51,13 @@ watch(() => route.name, () => { collapsed.value = collapsible.value; });
         color="primary"
       >
         <v-tab
-          v-for="page in section.pages"
+          v-for="page in pages"
           :key="page.name"
           :value="page.name"
           :to="{ name: page.name }"
           :exact="page.name !== selectedPage"
           :aria-label="page.title"
+          :title="page.name === 'rss-irq' && capabilityReadError ? capabilityReadError : undefined"
           :aria-current="selectedPage === page.name ? 'page' : undefined"
         >
           {{ page.title }}

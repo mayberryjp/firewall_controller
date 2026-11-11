@@ -47,6 +47,7 @@ import { config, state, runtime, transaction, gatewayStatistics, monitor, statis
 import type { Component } from "vue";
 import { bgpConfig, bgpRoutes } from "../bgpFixtures";
 import { dragRule } from "../dragRule";
+import { relayStatistics } from "../serviceTelemetryFixtures";
 
 const box = { template: "<div><slot /></div>" };
 const stubs = {
@@ -64,6 +65,7 @@ beforeEach(() => {
   const store = useControllerStore();
   store.connected = true; store.state.data = state(); store.runtime.data = runtime();
   vi.spyOn(api, "getMqttStatus").mockResolvedValue(mqttStatus());
+  vi.spyOn(api, "getDHCPRelayStatistics").mockResolvedValue(relayStatistics());
   vi.spyOn(api, "getGatewayStatistics").mockResolvedValue({ sample: statistics().sample, monitors: [] });
   vi.spyOn(api, "getVnStatReporting").mockResolvedValue(vnstatReporting());
   vi.spyOn(api, "getSystemUpgrade").mockResolvedValue({ enabled: false, repository: null, job: null, last_successful_version: null });
@@ -94,7 +96,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.get(".relay-interface-description").text()).toBe(link.metadata.display_name);
     expect(wrapper.get(".relay-interface-description").attributes("title")).toBe(link.metadata.display_name);
     expect(wrapper.text()).not.toContain("Not the display name");
-    expect(wrapper.findAll("thead th")).toHaveLength(5);
+    expect(wrapper.findAll("thead th")).toHaveLength(7);
     wrapper.unmount();
   });
   it("keeps DHCP relay interface names and roles when no display name is configured", async () => {
@@ -133,7 +135,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.text()).toContain("Source: journald");
     expect(wrapper.get('[title="/run/systemd/journal/syslog"]').text()).toContain("Source: journald");
     expect(wrapper.text()).not.toContain("missed destination deliveries");
-    expect(wrapper.text()).not.toContain("collector.example: disconnected");
+    expect(wrapper.text()).toContain("collector.example: disconnected");
     expect(wrapper.findComponent({ name: "VAlert" }).exists()).toBe(false);
     expect(wrapper.findAll("button").find(button => button.text() === "Add remote syslog server")!.attributes("disabled")).toBeUndefined();
     expect(store.draft).toBeNull();
@@ -271,7 +273,7 @@ describe("October 17 frontend workflows", () => {
     try {
       expect(wrapper.findAll("button").some(button => button.text() === "Add NetFlow/IPFIX export")).toBe(true);
       expect(wrapper.findAll("button").some(button => button.text() === "Add export")).toBe(false);
-      expect(wrapper.findAll("thead th").map(header => header.text()).slice(-5)).toEqual(["Observed", "State", "Dropped packets", "Status", "Actions"]);
+      expect(wrapper.findAll("thead th").map(header => header.text()).slice(-7)).toEqual(["Observed", "State", "Dropped packets", "Flow records", "Export datagrams", "Status", "Actions"]);
       const cells = wrapper.findAll("tbody tr")[0]!.findAll("td");
       expect(cells.at(-2)!.find('[aria-label="Export enabled for capture"]').exists()).toBe(true);
       expect(cells.at(-1)!.find('button[aria-label="Edit / stage"]').exists()).toBe(true);
@@ -2513,7 +2515,7 @@ describe("October 17 frontend workflows", () => {
     expect(store.draft).toBeNull(); expect(wrapper.text()).toContain("lowercase ASCII DNS");
     field().vm.$emit("update:modelValue", "logs.example"); await flushPromises(); await press("Save");
     expect(store.draft?.syslog).toEqual({ enabled: true, servers: [{ host: "logs.example", port: 514, transport: "udp" }] });
-    expect(wrapper.find("tbody").text()).toContain("UDP"); expect(wrapper.text()).not.toContain("Operator prerequisites");
+    expect(wrapper.find(".service-table tbody").text()).toContain("UDP"); expect(wrapper.text()).not.toContain("Operator prerequisites");
     wrapper.unmount();
   });  it("adds, edits, toggles and removes a single vnStat collector inline while preserving shared changes", async () => {
     const store = useControllerStore(), submit = vi.spyOn(api, "submitPackage"), confirm = vi.spyOn(window, "confirm");
@@ -2968,7 +2970,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.find('[title*="Current error: child exited"]').exists()).toBe(true);
     const toggle = wrapper.findAllComponents(stubs.VSwitch).find(item => item.attributes("aria-label") === "Relay enabled for lab0")!;
     expect(toggle.props("modelValue")).toBe(true);
-    expect(wrapper.findAll("thead th").map(header => header.text())).toEqual(["Interface", "Servers", "Status", "Enabled", "Actions"]);
+    expect(wrapper.findAll("thead th").map(header => header.text())).toEqual(["Interface", "Servers", "Status", "Enabled", "Requests forwarded", "Replies received", "Actions"]);
     const cells = wrapper.findAll("tbody tr")[0]!.findAll("td");
     expect(cells[1]!.text()).toBe("198.51.100.1, 198.51.100.2");
     expect(cells[2]!.get(".status-chip").text()).toBe("Exited");
@@ -2990,7 +2992,7 @@ describe("October 17 frontend workflows", () => {
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
     await wrapper.get('button[aria-label="Edit DHCP relay lab0"]').trigger("click");
     const cells = wrapper.findAll("tbody tr")[0]!.findAll("td");
-    expect(cells).toHaveLength(5);
+    expect(cells).toHaveLength(7);
     expect(cells[1]!.findComponent({ name: "VTextField" }).exists()).toBe(true);
     expect(cells[2]!.get(".status-chip").text()).toBe(label);
     expect(cells[2]!.get(".status-chip").attributes("data-color")).toBe(color);
@@ -3000,7 +3002,7 @@ describe("October 17 frontend workflows", () => {
     const store = useControllerStore();
     store.state.data!.desired.interfaces = [];
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
-    expect(wrapper.get("tbody td").attributes("colspan")).toBe("5");
+    expect(wrapper.get("tbody td").attributes("colspan")).toBe("7");
     expect(wrapper.get("tbody td").text()).toBe("No interface records available.");
   });
   it("edits DHCP relay servers inline and toggles it without a dialog, preserving the interface", async () => {

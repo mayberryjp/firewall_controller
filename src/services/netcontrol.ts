@@ -4,6 +4,8 @@ import { cloneConfig, numericAddress, stableJson } from "@/services/configuratio
 import { hostHealthSchema } from "@/services/hostHealth";
 import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
 import { interfaceCapabilitySnapshotSchema } from "@/services/interfaceCapabilities";
+import { dhcpRelayLogPageSchema, dhcpRelayStatisticsSchema, dhcpLogQuerySchema, type DHCPLogQuery } from "@/services/dhcpDiagnostics";
+import { persistentLogPageSchema, persistentLogQuerySchema, logSourceSchema, type LogSource, type PersistentLogQuery } from "@/services/logs";
 import { rpsDiagnosticsSchema } from "@/services/rps";
 import { pathTestRequestSchema, pathTestStatusSchema, type PathTestRequest } from "@/services/pathTests";
 import { tuningSettings } from "@/services/tuning";
@@ -26,6 +28,19 @@ import {
 } from "@/types/domain";
 
 const id = encodeURIComponent;
+export const getDHCPRelayStatistics = (signal?: AbortSignal) =>
+  request("GET", "/statistics/dhcp-relay", dhcpRelayStatisticsSchema, undefined, signal);
+export function getDHCPRelayLog(query: DHCPLogQuery = {}, signal?: AbortSignal) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(dhcpLogQuerySchema.parse(query))) if (value !== undefined) params.set(key, String(value));
+  return request("GET", `/services/dhcp-relay/log${params.size ? `?${params}` : ""}`, dhcpRelayLogPageSchema, undefined, signal);
+}
+export function getPersistentLog(source: LogSource, query: PersistentLogQuery = {}, signal?: AbortSignal) {
+  const selected = logSourceSchema.parse(source), params = new URLSearchParams();
+  for (const [key, value] of Object.entries(persistentLogQuerySchema.parse(query))) if (value !== undefined) params.set(key, String(value));
+  return request("GET", `/logs/${selected}${params.size ? `?${params}` : ""}`,
+    persistentLogPageSchema.refine(value => value.source === selected, "Log response belongs to a different stream"), undefined, signal);
+}
 export function adoptVlan(input: AdoptVlanRequest, signal?: AbortSignal) {
   const value = adoptVlanRequestSchema.parse(input);
   return request("POST", "/interfaces/adopt-vlan", adoptVlanResponseSchema.refine(result =>

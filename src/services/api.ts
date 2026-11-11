@@ -119,7 +119,10 @@ export async function request<T>(
     : response.headers["x-registry-auth-error"];
   if (response.status === 401 && registryAuthError === "true") unauthorized();
   let data: unknown;
-  try { data = decodeJson(raw, method === "GET" && path === "/services/mqtt/status" ? ["connection_attempts", "reconnect_count"] : []); }
+  const exactFields = method === "GET" && ["/runtime", "/services/syslog/status", "/services/softflowd/status"].includes(path)
+    ? ["received_records", "forwarded_deliveries", "captured_records", "forwarded_records", "failed_deliveries", "exported_flows"]
+    : method === "GET" && path === "/services/mqtt/status" ? ["connection_attempts", "reconnect_count"] : [];
+  try { data = decodeJson(raw, exactFields); }
   catch (error) {
     const reason = error instanceof Error ? diagnostic(error.message, requestCredential) : "Unable to decode response";
     throw new ApiFailure(`HTTP ${response.status}: non-JSON or incompatible response. ${reason}`,

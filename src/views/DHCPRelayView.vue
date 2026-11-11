@@ -5,6 +5,9 @@ import { cloneConfig, validateConfig } from "@/services/configuration";
 import { dhcpRelaySchema } from "@/types/domain";
 import DatasetStatus from "@/components/base/DatasetStatus.vue";
 import RelayStatus from "@/components/feature/RelayStatus.vue";
+import { useDiagnosticRead } from "@/composables/useDiagnosticRead";
+import { getDHCPRelayStatistics } from "@/services/netcontrol";
+import { formatCount } from "@/services/counters";
 import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
 
 const store = useControllerStore();
@@ -12,7 +15,12 @@ const stored = computed(() => store.draft ?? store.activeTransactions.find(item 
 const links = computed(() => sortByInterface((stored.value?.interfaces ?? []).filter(link => link.kind !== "wireguard"), link => link.name));
 const blocked = computed(() => Boolean(store.readOnlyReason) || !stored.value);
 const editing = ref<string | null>(null), servers = ref(""), error = ref("");
+const { data: counters, loading: countersLoading, error: countersError, stale: countersStale } = useDiagnosticRead(getDHCPRelayStatistics);
 const runtimeStatus = (name: string) => store.runtime.data?.dhcp_relay.find(item => item.interface === name);
+function counter(name: string, key: "requests_forwarded" | "replies_received"): string {
+  if (!counters.value && countersLoading.value) return "...";
+  return formatCount(counters.value?.interfaces.find(row => row.interface === name)?.counters?.[key]);
+}
 const statusColors: Record<string, string> = {
   running: "success", simulated: "info", waiting: "warning",
   unhealthy: "error", exited: "error", error: "error", unavailable: "error",
@@ -73,6 +81,13 @@ function toggle(name: string, enabled: boolean): void {
     >
       {{ error }}
     </v-alert>
+    <p
+      v-if="countersError || counters?.worker.error"
+      role="alert"
+      class="text-error"
+    >
+      {{ countersError || counters?.worker.error }}
+    </p>
     <v-table class="relay-table">
       <thead>
         <tr>
@@ -80,6 +95,8 @@ function toggle(name: string, enabled: boolean): void {
           <th>Servers</th>
           <th>Status</th>
           <th>Enabled</th>
+          <th>Requests forwarded</th>
+          <th>Replies received</th>
           <th class="column-actions">
             Actions
           </th>
@@ -142,6 +159,12 @@ function toggle(name: string, enabled: boolean): void {
               @update:model-value="toggle(link.name, Boolean($event))"
             />
           </td>
+          <td :title="countersStale ? 'Last-known counters' : undefined">
+            {{ counter(link.name, 'requests_forwarded') }}
+          </td>
+          <td :title="countersStale ? 'Last-known counters' : undefined">
+            {{ counter(link.name, 'replies_received') }}
+          </td>
           <td>
             <template v-if="editing === link.name">
               <v-btn
@@ -173,7 +196,7 @@ function toggle(name: string, enabled: boolean): void {
           </td>
         </tr>
         <tr v-if="stored && !links.length">
-          <td colspan="5">
+          <td colspan="7">
             No interface records available.
           </td>
         </tr>
@@ -183,10 +206,12 @@ function toggle(name: string, enabled: boolean): void {
 </template>
 
 <style scoped>
-.relay-table :deep(.column-actions) { width: 160px; }
-.relay-table :deep(th), .relay-table :deep(td) { white-space: nowrap; }
-.relay-interface { display: flex; align-items: baseline; gap: 8px; width: clamp(180px, 24vw, 320px); }
-.relay-interface-name, .relay-interface-role { flex-shrink: 0; }
+.relay-table :deep(table) { table-layout: fixed; width: 100%; min-width: 840px; }
+.relay-table :deep(.column-actions) { width: 96px; }
+.relay-table :deep(th), .relay-table :deep(td) { white-space: normal; overflow-wrap: anywhere; }
+.relay-interface { display: flex; align-items: baseline; gap: 8px; width: 100%; max-width: 240px; }
+.relay-interface-name { min-width: 0; }
+.relay-interface-role { flex-shrink: 0; }
 .relay-interface-role { font-size: 10px; font-weight: 500; }
 .relay-interface-description { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 </style>

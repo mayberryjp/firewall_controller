@@ -25,10 +25,10 @@ const readIssues = computed(() => [
 const serviceIssues = computed(() => {
   if (health.value && !health.value.stale) return [];
   const issues = new Map<string, { resource: string; message: string; retrying?: boolean }>();
-  const add = (worker: { name?: string; interface?: string; state?: string; process_state?: string; health?: string; error?: string | null; retrying?: boolean; warnings?: string[]; destination_errors?: string[]; failed_deliveries?: number }, fallback: string) => {
+  const add = (worker: { name?: string; interface?: string; state?: string; process_state?: string; health?: string; error?: string | null; retrying?: boolean; warnings?: string[]; destination_errors?: string[]; failed_deliveries?: string }, fallback: string) => {
     const resource = worker.name ?? worker.interface ?? fallback;
     const messages = [worker.error, ...(worker.warnings ?? []), ...(worker.destination_errors ?? [])].filter(Boolean);
-    if (worker.failed_deliveries) messages.push(`${worker.failed_deliveries} missed destination deliveries; missed records are not replayed.`);
+    if (worker.failed_deliveries !== undefined && BigInt(worker.failed_deliveries) > 0n) messages.push(`${worker.failed_deliveries} missed destination deliveries; missed records are not replayed.`);
     if (worker.retrying && !messages.length) messages.push("Recovering");
     if (worker.name === "bgp" && worker.health === "degraded" && !messages.length) messages.push("BGP peers or route installation are degraded.");
     const state = worker.state ?? worker.process_state;

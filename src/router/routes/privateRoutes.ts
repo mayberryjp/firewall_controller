@@ -49,6 +49,9 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/services/maintenance", name: "service-maintenance", component: () => import("@/views/ServiceMaintenanceView.vue") },
   ],
   "diagnostics-section": [
+    { path: "/diagnostics/dhcp-relay-logs", name: "dhcp-relay-logs", component: () => import("@/views/DHCPRelayLogsView.vue") },
+    { path: "/diagnostics/syslog", name: "syslog-logs", component: () => import("@/views/SyslogLogsView.vue") },
+    { path: "/diagnostics/rss-irq", name: "rss-irq", component: () => import("@/views/RSSIRQView.vue") },
     { path: "/diagnostics/firewall-drops", name: "firewall-drops", component: () => import("@/views/FirewallDropsView.vue") },
     { path: "/diagnostics/possible-missing-rules", name: "possible-missing-rules", component: () => import("@/views/PossibleMissingRulesView.vue") },
     { path: "/diagnostics/traffic", name: "real-time-traffic", component: () => import("@/views/RealTimeTrafficView.vue") },

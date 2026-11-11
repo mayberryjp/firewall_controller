@@ -20,7 +20,7 @@ function chip(feature?: PerformanceCapability) {
   if (feature?.support === "unsupported") return { label: "Unsupported", color: "error" };
   if (feature?.enabled === true) return { label: "Enabled", color: "success" };
   if (feature?.enabled === false) return { label: "Disabled", color: "warning" };
-  if (feature?.support === "supported") return { label: "Supported", color: "info" };
+  if (feature?.support === "supported" && !["rss", "rps"].includes(feature.name)) return { label: "Supported", color: "info" };
   return { label: "Unknown", color: "default" };
 }
 function chipTitle(feature?: PerformanceCapability) {

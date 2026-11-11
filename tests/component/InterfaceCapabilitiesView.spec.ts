@@ -30,6 +30,47 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe("interface capability diagnostics", () => {
+  it("keeps RSS navigation visible while initially pending and on failure, and updates it after explicit refresh", async () => {
+    const pending = deferred<InterfaceCapabilitySnapshot | null>(), store = useControllerStore();
+    vi.mocked(api.getInterfaceCapabilities).mockReturnValueOnce(pending.promise);
+    const wrapper = render();
+    expect(store.rssIrqNavigation.hidden).toBe(false);
+    const snapshot = interfaceCapabilitySnapshot();
+    snapshot.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "rss")!.support = "unsupported";
+    pending.resolve(snapshot); await flushPromises();
+    expect(store.rssIrqNavigation.hidden).toBe(true);
+    vi.mocked(api.refreshInterfaceCapabilities).mockRejectedValueOnce(new ApiFailure("HTTP 503: Scan failed", 503));
+    await wrapper.get("button").trigger("click"); await flushPromises();
+    expect(store.rssIrqNavigation.hidden).toBe(false);
+    vi.mocked(api.refreshInterfaceCapabilities).mockResolvedValueOnce(snapshot);
+    await wrapper.get("button").trigger("click"); await flushPromises();
+    expect(store.rssIrqNavigation.hidden).toBe(true);
+    store.disconnect();
+    expect(store.rssIrqNavigation.hidden).toBe(false);
+  });
+  it("does not let a late cached read overwrite a newer RSS navigation observation", async () => {
+    const pending = deferred<InterfaceCapabilitySnapshot | null>(), store = useControllerStore();
+    const newer = interfaceCapabilitySnapshot();
+    newer.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "rss")!.enabled = true;
+    vi.mocked(api.getInterfaceCapabilities).mockReturnValueOnce(pending.promise).mockResolvedValueOnce(newer);
+    render(); render(); await flushPromises();
+    const old = interfaceCapabilitySnapshot();
+    old.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "rss")!.support = "unsupported";
+    pending.resolve(old); await flushPromises();
+    expect(store.rssIrqNavigation.hidden).toBe(false);
+  });
+  it.each([true, false, null])("shows the effective VLAN RPS state %j without adding parent prose", async enabled => {
+    const snapshot = interfaceCapabilitySnapshot(), row = snapshot.inventory.interfaces[0]!;
+    row.kind = "vlan"; row.name = "vlan10"; row.queues[0]!.rps_cpus = enabled ? "0" : "f";
+    const rps = row.capabilities.find(feature => feature.name === "rps")!;
+    rps.enabled = enabled; rps.inherited_from = "eno2";
+    vi.mocked(api.getInterfaceCapabilities).mockResolvedValue(snapshot);
+    const wrapper = render(); await flushPromises();
+    const vlan = wrapper.findAll("tbody tr").find(row => row.text().includes("VLAN10"))!;
+    expect(vlan.findAll("[data-color]")[1]!.text()).toBe(enabled === null ? "Unknown" : enabled ? "Enabled" : "Disabled");
+    expect(wrapper.text()).not.toContain("Inherited");
+    expect(wrapper.text()).not.toContain("eno2");
+  });
   it("reads only saved data initially and distinguishes pending from a completed null snapshot", async () => {
     const pending = deferred<InterfaceCapabilitySnapshot | null>();
     vi.mocked(api.getInterfaceCapabilities).mockReturnValue(pending.promise);
@@ -76,7 +117,7 @@ describe("interface capability diagnostics", () => {
     expect(rows[1]!.text()).toContain("lo");
     const chips = rows[0]!.findAll("[data-color]");
     expect(chips.map(chip => [chip.text(), chip.attributes("data-color")])).toEqual([
-      ["Supported", "info"], ["Disabled", "warning"], ["Enabled", "success"],
+      ["Unknown", "default"], ["Disabled", "warning"], ["Enabled", "success"],
       ["Enabled", "success"], ["Unsupported", "error"], ["Unknown", "default"],
     ]);
     expect(chips[0]!.attributes("title")).toBe("Support: Supported; enabled: Unknown");

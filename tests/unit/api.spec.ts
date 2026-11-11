@@ -17,6 +17,7 @@ import { pathTestRequest, pathTestStatus } from "../pathTestFixtures";
 import { conntrackCatalog, conntrackSnapshot } from "../conntrackFixtures";
 import { discordStatus, webhookReference, webhookUrl } from "../discordFixtures";
 import { discordDefaults } from "@/services/discord";
+import { persistentLog, relayLog, relayStatistics, telemetryEpoch } from "../serviceTelemetryFixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -30,6 +31,37 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("reads DHCP diagnostics through bodyless authenticated GETs with exact cursors", async () => {
+    body = encodeJson(relayStatistics());
+    expect(await net.getDHCPRelayStatistics()).toEqual(relayStatistics());
+    expect(captured).toMatchObject({ method: "get", url: "/statistics/dhcp-relay" });
+    body = encodeJson(relayLog());
+    expect(await net.getDHCPRelayLog({ limit: 100, interface: "vlan10", cursor: `${telemetryEpoch}:0` })).toEqual(relayLog());
+    expect(captured?.url).toBe(`/services/dhcp-relay/log?limit=100&interface=vlan10&cursor=${telemetryEpoch}%3A0`);
+    expect(captured?.data).toBeUndefined();
+  });
+  it.each(["syslog", "netcontrol"] as const)("reads the %s persistent stream without sharing source identities", async source => {
+    body = encodeJson(persistentLog(source));
+    expect(await net.getPersistentLog(source)).toEqual(persistentLog(source));
+    expect(captured).toMatchObject({ method: "get", url: `/logs/${source}` });
+    expect(captured?.data).toBeUndefined();
+    body = encodeJson(persistentLog(source === "syslog" ? "netcontrol" : "syslog"));
+    await expect(net.getPersistentLog(source)).rejects.toMatchObject({ incompatible: true });
+  });
+  it.each(["", "bad", `${telemetryEpoch}:01`, `${telemetryEpoch}:18446744073709551616`])("rejects invalid cursor %j before sending", async cursor => {
+    expect(() => net.getDHCPRelayLog({ cursor })).toThrow();
+    expect(() => net.getPersistentLog("syslog", { cursor })).toThrow();
+    expect(adapter).not.toHaveBeenCalled();
+  });
+  it("preserves numeric u64 syslog/flow fields and decimal export totals without rounding", async () => {
+    body = encodeJson({ ...runtime(), appliance_services: [{ name: "syslog", scope: "host", state: "running", forwarding_enabled: false }],
+      softflowd: [{ name: "office", state: "running", exported_packets: "9007199254740993", export_errors: "0" }],
+    }).replace('"forwarding_enabled":false', '"forwarding_enabled":false,"received_records":18446744073709551615,"forwarded_deliveries":9007199254740993')
+      .replace('"export_errors":"0"', '"export_errors":"0","exported_flows":18446744073709551615');
+    const result = await net.getRuntime();
+    expect(result.appliance_services[0]).toMatchObject({ forwarding_enabled: false, received_records: "18446744073709551615", forwarded_deliveries: "9007199254740993" });
+    expect(result.softflowd[0]).toMatchObject({ exported_flows: "18446744073709551615", exported_packets: "9007199254740993" });
+  });
   it.each(["disabled", "loose", "strict"] as const)("preserves %s RPF through state, submission, confirmation and rollback", async mode => {
     const candidate = config(); candidate.firewall.rpf_mode = mode;
     body = encodeJson({ ...state(), desired: candidate, observed: candidate });
@@ -1014,7 +1046,7 @@ describe("controller-proxied API boundary", () => {
     const result = await net.getRuntime();
     expect(result.appliance_services[0]).toMatchObject({
       retrying: false, restart_count: 2, last_error: "Collector disconnected",
-      destination_errors: ["collector.example: unavailable"], captured_records: 20, forwarded_records: 10, failed_deliveries: 10,
+      destination_errors: ["collector.example: unavailable"], captured_records: "20", forwarded_records: "10", failed_deliveries: "10",
     });
     expect(result.softflowd[0]).toMatchObject({ retrying: true, restart_count: 1, last_error: "Link down" });
     for (const worker of [result.appliance_services[1], result.dhcp_relay[0], result.gateway_monitors[0]]) {

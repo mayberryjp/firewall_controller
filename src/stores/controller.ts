@@ -99,6 +99,10 @@ export const useControllerStore = defineStore("controller", () => {
     bgpStatus.stale = true; bgpRoutes.stale = true; bgpAdvertisedRoutes.stale = true;
   }, { flush: "sync" });
   const sessionVersion = ref(0);
+  const rssIrqNavigation = shallowReactive({ hidden: false, version: 0 });
+  watch(() => [connected.value, sessionVersion.value], () => {
+    rssIrqNavigation.hidden = false; rssIrqNavigation.version++;
+  }, { flush: "sync" });
   const restartPending = ref(""), restartReconnecting = ref(false), restartNotice = ref(""), restartError = ref("");
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   onScopeDispose(() => clearTimeout(reconnectTimer));
@@ -863,7 +867,7 @@ export const useControllerStore = defineStore("controller", () => {
     pathTests, pathInterfaces, pathTestsUnsupported, pathTestPending, pathTestUncertain, pathTestActionError,
     pathTestWriteBlockedReason, refreshPathTests, refreshPathInterfaces, startPathTest, cancelPathTest,
     udpRelayStatus, udpRelayStatusCurrent, refreshUDPRelayStatus,
-    linkDiagnostics, refreshLinkDiagnostics, sessionVersion, operationBlockedReason,
+    linkDiagnostics, refreshLinkDiagnostics, sessionVersion, operationBlockedReason, rssIrqNavigation,
     bgpStatus, bgpRoutes, bgpUnsupported, bgpStatusCurrent, bgpRoutesCurrent, bgpMonitoring, refreshBGPStatus, refreshBGPRoutes,
     bgpAdvertisedRoutes, bgpAdvertisedRoutesCurrent, bgpRouteDirection, refreshBGPAdvertisedRoutes,
     restartProcess, restartPending, restartReconnecting, restartNotice, restartError,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { LosslessNumber } from "lossless-json";
+import { numericCounterSchema, uint64Schema } from "@/services/counters";
 import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
 import { dateVersionSchema } from "@/services/versions";
 import { sandoSchema } from "@/services/sandoState";
@@ -265,9 +265,7 @@ export const mqttSchema = z.object({
 }).strict();
 export type MqttConfig = z.infer<typeof mqttSchema>;
 export const mqttPasswordReferenceSchema = z.object({ password_ref: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
-const mqttCountSchema = z.union([integer.nonnegative(), z.instanceof(LosslessNumber)])
-  .transform(value => value.toString())
-  .refine(value => /^(0|[1-9]\d*)$/.test(value) && BigInt(value) <= 18446744073709551615n, "Use an unsigned 64-bit integer count");
+const mqttCountSchema = numericCounterSchema;
 export const mqttStatusSchema = z.object({
   device_id: z.string(), enabled: z.boolean(),
   state: z.string(),
@@ -419,6 +417,10 @@ export const serviceStatusSchema = z.object({
   started_at: timestamp.nullable().optional(), error: optionalText,
   dropped_packets: z.string().regex(/^(0|[1-9]\d*)$/).optional(),
   statistics_complete: z.boolean().optional(),
+  exported_flows: numericCounterSchema.optional(),
+  exported_packets: uint64Schema.optional(), exported_bytes: uint64Schema.optional(),
+  exported_flow_packets: uint64Schema.optional(), exported_flow_bytes: uint64Schema.optional(),
+  export_errors: uint64Schema.optional(),
 });
 export const dhcpRelayStatusSchema = z.object({
   ...supervisionFields,
@@ -455,8 +457,10 @@ export const applianceStatusSchema = z.object({
   last_report_date: z.string().nullable().optional(), last_report_error: z.string().nullable().optional(),
   sent_datagrams: z.string().regex(/^(0|[1-9]\d*)$/).optional(), failed_datagrams: z.string().regex(/^(0|[1-9]\d*)$/).optional(),
   destination_errors: z.array(z.string()).optional(),
-  captured_records: integer.nonnegative().optional(), forwarded_records: integer.nonnegative().optional(),
-  failed_deliveries: integer.nonnegative().optional(),
+  forwarding_enabled: z.boolean().optional(),
+  received_records: numericCounterSchema.optional(), forwarded_deliveries: numericCounterSchema.optional(),
+  captured_records: numericCounterSchema.optional(), forwarded_records: numericCounterSchema.optional(),
+  failed_deliveries: numericCounterSchema.optional(),
   name: z.string(), scope: z.enum(["host", "managed"]), state: z.string(),
   pid: integer.optional(), started_at: timestamp.nullable().optional(),
   database_directory: optionalText, source: optionalText, host_source: optionalText, error: optionalText,

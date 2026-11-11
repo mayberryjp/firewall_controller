@@ -2,7 +2,7 @@ import { onBeforeUnmount, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { ApiFailure } from "@/services/api";
 import { getInterfaceCapabilities, refreshInterfaceCapabilities } from "@/services/netcontrol";
-import type { InterfaceCapabilitySnapshot } from "@/services/interfaceCapabilities";
+import { hideRssIrqNavigation, type InterfaceCapabilitySnapshot } from "@/services/interfaceCapabilities";
 
 export function useInterfaceCapabilities(enabled: () => boolean = () => true) {
   const store = useControllerStore();
@@ -18,12 +18,14 @@ export function useInterfaceCapabilities(enabled: () => boolean = () => true) {
       return;
     }
     const controller = new AbortController(), session = store.sessionVersion;
+    const observationVersion = ++store.rssIrqNavigation.version;
     active = controller; loading.value = true;
     const current = () => active === controller && session === store.sessionVersion;
     try {
       const result = await (refresh ? refreshInterfaceCapabilities : getInterfaceCapabilities)(controller.signal);
       if (!current()) return;
       snapshot.value = result; completed.value = true; stale.value = false; error.value = "";
+      if (observationVersion === store.rssIrqNavigation.version) store.rssIrqNavigation.hidden = hideRssIrqNavigation(result);
     } catch (failure) {
       if (!current()) return;
       error.value = failure instanceof Error ? failure.message : String(failure);
@@ -31,6 +33,7 @@ export function useInterfaceCapabilities(enabled: () => boolean = () => true) {
         error.value += " Refresh outcome is unknown; no scan was automatically repeated.";
       }
       stale.value = snapshot.value !== null;
+      if (observationVersion === store.rssIrqNavigation.version) store.rssIrqNavigation.hidden = false;
       if (failure instanceof ApiFailure && failure.status === 403) refreshDenied.value = true;
     } finally {
       if (current()) { loading.value = false; active = null; }

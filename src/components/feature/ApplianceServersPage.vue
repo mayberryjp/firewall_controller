@@ -5,6 +5,7 @@ import { cloneConfig, validateConfig } from "@/services/configuration";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { isApplianceStatus, type Config } from "@/types/domain";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
+import { formatCount } from "@/services/counters";
 const { formatTimestamp, timeZone } = useTimestamps();
 
 interface Row { host: string; port?: number; transport?: string }
@@ -20,6 +21,11 @@ const blocked = computed(() => Boolean(store.readOnlyReason) || !editing.value);
 const status = computed(() => store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === props.service));
 const sampleAvailable = computed(() => !store.runtime.stale && !status.value?.retrying && !status.value?.error && status.value?.sample_status === "available");
 const statColumns = 5;
+const syslogCounters = [
+  { key: "received_records", title: "Logs read" }, { key: "forwarded_deliveries", title: "Remote sends" },
+] as const;
+const counterText = (key: typeof syslogCounters[number]["key"]) =>
+  !store.runtime.data && store.runtime.loading ? "..." : formatCount(status.value?.[key]);
 const ms = (value: number | null | undefined, signed = false) =>
   value === null || value === undefined ? "—" : `${signed && value > 0 ? "+" : ""}${value.toFixed(3).replace(/\.?0+$/, "")} ms`;
 // Status applies to the synced server; before a server is known it is shown on the first row.
@@ -133,7 +139,11 @@ function remove(index: number): void {
       <template v-if="store.runtime.stale">
         Stale last-known state:
       </template>
+      <template v-if="status.forwarding_enabled !== undefined">
+        Local capture:
+      </template>
       <ServiceWorkerStatus :status="status" />
+      <span v-if="status.forwarding_enabled !== undefined"> · Forwarding: {{ status.forwarding_enabled ? 'Enabled' : 'Disabled' }}</span>
       <span
         v-if="status.source"
         :title="status.host_source"
@@ -141,6 +151,30 @@ function remove(index: number): void {
         · Source: {{ status.source }}
       </span>
     </p>
+    <template v-if="service === 'syslog'">
+      <p
+        v-if="store.runtime.error"
+        role="alert"
+        class="text-error"
+      >
+        {{ store.runtime.error }}
+      </p>
+      <p
+        v-if="status?.error"
+        role="alert"
+        class="text-error"
+      >
+        {{ status.error }}
+      </p>
+      <p
+        v-for="message in service === 'syslog' ? status?.destination_errors ?? [] : []"
+        :key="message"
+        role="alert"
+        class="text-error"
+      >
+        {{ message }}
+      </p>
+    </template>
     <v-table class="service-table">
       <thead>
         <tr>
@@ -170,6 +204,13 @@ function remove(index: number): void {
             </th>
             <th scope="col">
               Transport
+            </th>
+            <th
+              v-for="column in syslogCounters"
+              :key="column.key"
+              scope="col"
+            >
+              {{ column.title }}
             </th>
           </template>
           <th
@@ -263,6 +304,16 @@ function remove(index: number): void {
                   {{ row.transport?.toUpperCase() }}
                 </v-chip>
               </td>
+              <template v-if="index === 0">
+                <td
+                  v-for="column in syslogCounters"
+                  :key="column.key"
+                  :rowspan="list.length"
+                  :title="store.runtime.stale ? 'Last-known service totals' : 'Service total'"
+                >
+                  {{ counterText(column.key) }}
+                </td>
+              </template>
             </template>
             <td>
               <v-btn
@@ -323,6 +374,16 @@ function remove(index: number): void {
                   hide-details
                 />
               </td>
+              <template v-if="index === 0">
+                <td
+                  v-for="column in syslogCounters"
+                  :key="column.key"
+                  :rowspan="list.length"
+                  :title="store.runtime.stale ? 'Last-known service totals' : 'Service total'"
+                >
+                  {{ counterText(column.key) }}
+                </td>
+              </template>
             </template>
             <td>
               <v-btn
@@ -344,9 +405,18 @@ function remove(index: number): void {
           </tr>
         </template>
         <tr v-if="!rows.length && editIndex === null">
-          <td :colspan="service === 'syslog' ? 4 : 2 + statColumns">
+          <td :colspan="service === 'syslog' ? 3 : 2 + statColumns">
             No servers.
           </td>
+          <template v-if="service === 'syslog'">
+            <td
+              v-for="column in syslogCounters"
+              :key="column.key"
+            >
+              {{ counterText(column.key) }}
+            </td>
+            <td />
+          </template>
         </tr>
       </tbody>
     </v-table>

@@ -17,6 +17,7 @@ import RuleOriginLabel from "@/components/feature/RuleOriginLabel.vue";
 import { useRuleDrag } from "@/composables/useRuleDrag";
 import { resourceItems } from "@/services/resourceCollections";
 import { formatInterfaceName } from "@/services/interfaceNames";
+import { formatCount } from "@/services/counters";
 const { formatTimestamp, timeZone } = useTimestamps();
 
 const props = defineProps<{ section: Section; rows: ResourceRow[]; total: number; disabled: boolean; detail: boolean; wireguard?: boolean; vlan?: boolean; inventory?: boolean; loopbacks?: boolean; expandedName?: string; editingRow?: number }>();
@@ -68,7 +69,7 @@ function statusLabel(value: Record<string, unknown>): string {
   if (props.section === "gateway_monitors") return `Monitoring enabled for ${value.name}`;
   return props.section === "softflowd" ? `Export enabled for ${value.name}` : `Route enabled for ${value.destination}`;
 }
-const columns = computed(() => visibleColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 3 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)) + Number(counterEnabled.value) * 3);
+const columns = computed(() => visibleColumns.value.length + 1 + Number(hasStatus.value) + Number(hasChanges.value) + Number(props.section === "softflowd") * 5 + (props.section === "gateway_monitors" ? monitorMetrics.length : 0) + Number(["firewall", "nat"].includes(props.section)) + Number(counterEnabled.value) * 3);
 function editable(row: ResourceRow): boolean {
   return row.value.name !== "lo" && !isSystemLoopback(row.discovered) && (!row.discovered || (row.index >= 0 && ["ethernet", "veth", "dummy", "vlan", "wireguard"].includes(row.discovered.kind)));
 }
@@ -137,6 +138,12 @@ function interfaceChipColor(row: ResourceRow, key: string): string {
   return "primary";
 }
 const softflowStatus = (name: unknown) => store.runtime.data?.softflowd.find(item => item.name === name);
+const exportCounters = [
+  { key: "exported_flows", title: "Flow records" },
+  { key: "exported_packets", title: "Export datagrams" },
+] as const;
+const exportCount = (name: unknown, key: typeof exportCounters[number]["key"]) =>
+  !store.runtime.data && store.runtime.loading ? "..." : formatCount(softflowStatus(name)?.[key]);
 function observedEnabled(name: unknown): string {
   const observed = configSchema.safeParse(store.state.data?.observed);
   if (!observed.success) return "Unknown";
@@ -187,7 +194,7 @@ function staged(value: unknown): string {
   >
     {{ dragError }}
   </p>
-  <v-table :class="{ 'interface-table': section === 'interfaces', 'compact-interface-table': compact, 'physical-table': physical, 'wireguard-table': wireguard, 'vlan-table': vlan, 'loopback-table': loopbacks, 'routes-table': section === 'routes', 'monitors-table': section === 'gateway_monitors', 'nat-table': section === 'nat', 'inventory-table': inventory }">
+  <v-table :class="{ 'interface-table': section === 'interfaces', 'compact-interface-table': compact, 'physical-table': physical, 'wireguard-table': wireguard, 'vlan-table': vlan, 'loopback-table': loopbacks, 'routes-table': section === 'routes', 'monitors-table': section === 'gateway_monitors', 'netflow-table': section === 'softflowd', 'nat-table': section === 'nat', 'inventory-table': inventory }">
     <caption
       v-if="counterEnabled"
       class="text-caption text-medium-emphasis text-left"
@@ -224,6 +231,12 @@ function staged(value: unknown): string {
           <th>Observed</th>
           <th>State</th>
           <th>Dropped packets</th>
+          <th
+            v-for="column in exportCounters"
+            :key="column.key"
+          >
+            {{ column.title }}
+          </th>
         </template>
         <th
           v-if="hasStatus"
@@ -428,6 +441,17 @@ function staged(value: unknown): string {
                 {{ softflowStatus(row.value.name)?.dropped_packets === undefined ? '—' : countFormat.format(BigInt(softflowStatus(row.value.name)!.dropped_packets!)) }}
               </v-chip>
             </td>
+            <td
+              v-for="column in exportCounters"
+              :key="column.key"
+              :title="store.runtime.stale ? 'Last-known counters' : undefined"
+            >
+              <span
+                class="compact-cell-label"
+                aria-hidden="true"
+              >{{ column.title }}</span>
+              {{ exportCount(row.value.name, column.key) }}
+            </td>
           </template>
           <td v-if="hasStatus">
             <span
@@ -603,6 +627,7 @@ function staged(value: unknown): string {
 .compact-interface-table :deep(.v-btn__content) { min-width: 0; white-space: normal; }
 .compact-interface-table :deep(table) { width: 100%; min-width: 0; table-layout: fixed; }
 .compact-interface-table :deep(.column-name) { width: 16%; }
+.netflow-table :deep(.column-name) { width: 104px; }
 .compact-interface-table :deep(.column-role) { width: 104px; }
 .compact-interface-table :deep(.column-up) { width: 88px; }
 .compact-interface-table :deep(.column-mtu) { width: 76px; }

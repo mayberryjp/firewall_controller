@@ -109,7 +109,7 @@ describe("navbar firewall status", () => {
   it("consolidates legacy service errors without adding page banners", () => {
     const store = useControllerStore();
     store.runtime.data = { ...runtime(), error: "Observation failed", appliance_services: [{
-      name: "syslog", scope: "host", state: "running", destination_errors: ["Collector unavailable"], failed_deliveries: 3,
+      name: "syslog", scope: "host", state: "running", destination_errors: ["Collector unavailable"], failed_deliveries: "3",
     }], dhcp_relay: [{ interface: "lab0", state: "exited", error: "Relay exited" }] };
     const wrapper = mount(ConnectionBubble, { global: { stubs, directives: { tooltip: () => {} } } });
     expect(wrapper.get('[aria-label="Service issues"]').text()).toContain("Collector unavailable");

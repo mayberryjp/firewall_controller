@@ -75,6 +75,8 @@ Simulator results also do not verify gateway reachability, clock synchronization
 whole-appliance log capture/delivery or real vnStat history. Native host mode
 can take ownership of physical NICs on first start; keep console access and
 review the backend's networkd/resolved and persistent-state prerequisites.
+Also review the [native appliance deployment policies](#native-appliance-deployment-policies)
+before installing or upgrading a host-mode daemon.
 
 ### UDP Broadcast Relay
 
@@ -164,9 +166,46 @@ tooltip. It does not read `/dev/log`, `/dev/kmsg` or tail a backend log file dir
 Deploy the backend's reviewed Ubuntu installer/full-source-upgrade logging units and
 journald configuration before enabling native forwarding. Direct/OpenRC launches lack
 the required systemd socket activation; signed API/package upgrades do not provision
-these host files. Disabling native syslog stops remote forwarding, not local journal
-capture. Bounded queued input may forward on later enable, but loss and restart can
-discard records; missed destination sends are not replayed.
+these host files. On backends implementing the November 11 logging contract,
+local socket capture continues with remote forwarding disabled. Services > Syslog
+shows local capture and applied forwarding separately, with **Logs read** and
+**Remote sends** columns in the existing server table. These are shared service
+totals, displayed once across the server rows rather than invented per-server counts.
+Numeric API u64 counts are decoded losslessly and displayed exactly;
+missing measurements remain unknown. Counters reset per worker attempt, not lifetime.
+Successful sends are local transport writes, not collector acknowledgements.
+Captured counts advance after local append and synchronization; enabling forwarding
+does not replay retained history or missed destination sends.
+
+Diagnostics > **Syslog** (`/diagnostics/syslog`) has separate Syslog and Netcontrol
+tabs, with independent cursors and recent/live versus retained-history browsing.
+Both endpoints require `logs.read`, not merely `state.read` or `syslog.write`;
+scoped keys need an explicit grant. Potentially sensitive third-party messages are
+escaped text, without automatic redaction, export, browser persistence or analytics.
+Each backend stream retains four 2 MiB disk segments; provision at least 16 MiB
+plus metadata and a temporary rotation segment per stream. Old private text logs
+are preserved but not imported into these APIs. Corrupt history/storage failures
+remain explicit; no automatic deletion or repair is performed.
+Visible tabs poll every three seconds, serially draining up to four pages per
+cycle. Displayed history is bounded to 2048 entries and 2 MiB; overwrite, epoch
+reset, display eviction and capture failures remain compact inline notices.
+Cursor identity survives normal backend restart. The streams can overlap and
+are not summed or deduplicated. See the
+[persistent logging handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-05-persistent-socket-and-netcontrol-log-apis).
+
+Services > **DHCPv4 relay** adds **Requests forwarded** and **Replies received**
+columns to its existing interface rows, without a separate counter table. Reads
+from `GET /api/v1/statistics/dhcp-relay` every three seconds while visible.
+Disabled/simulated/unavailable measurements remain unknown; stopped-worker
+observations and actual errors remain visible without changing configuration.
+Forwarded requests and received replies are separate counts, not lease-success evidence.
+Counters reset on preparation attempts, including retry, repair and rollback.
+Diagnostics > **DHCP relay logs** (`/diagnostics/dhcp-relay-logs`) polls the separate
+RAM event ring every second, with an optional interface filter, bounded serial
+paging and explicit overwrite/reset notices. Filter changes discard old selections
+and late responses; daemon restart clears the backend ring. Neither page repairs
+workers or changes settings automatically. Both reads require `state.read` and
+the matching [DHCP diagnostics backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-02-dhcp-relay-diagnostics).
 
 Syslog delivery conditions appear in the consolidated issues panel even while its worker
 is running. Failed sends are not replayed, and successful writes are not delivery receipts. Stale samples
@@ -851,6 +890,32 @@ and `statistics_complete: false` produce an inline warning that flow totals may
 undercount traffic. Loss remains recorded until that worker restarts. Missing
 statistics are unknown, not evidence of loss-free capture; running does not
 verify collector delivery.
+
+The NetFlow/IPFIX page and per-export detail add **Flow records** and **Export
+datagrams** columns to the existing export rows, without a separate counter table.
+Values come from the existing runtime read. Decimal-string counters and numeric
+flow-record counts retain u64 precision; unavailable values are unknown. Totals
+reset per execution attempt and may remain visible after stop/error. Sampling is
+not scaled, unexported active flows are excluded, and UDP writes do not establish
+collector delivery. Deploy the matching
+[NetFlow counter backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-03-per-instance-netflow-export-counters).
+
+Interface capabilities shows VLAN RPS activation from the backend's effective
+physical-parent observation, not raw VLAN queue masks; null activation is Unknown.
+Source metadata remains in the typed snapshot without additional explanatory UI.
+Diagnostics > **RSS / IRQ** (`/diagnostics/rss-irq`) separately shows RSS queue
+targets/hash settings, per-queue effective interrupt CPUs and expandable IRQ
+counts/errors. Exact interrupt counts are cumulative observations, not packet
+rates or CPU load. Unknown mappings/measurements stay unknown. Both pages read the
+saved capability snapshot and scan only through explicit Refresh; deploy the
+matching [capability backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-06-rss-and-queue-irq-observations)
+and explicitly refresh once for new observations. No RSS/IRQ tuning is added.
+RSS / IRQ is hidden from Diagnostics navigation when a nonempty saved
+snapshot shows every interface's RSS as **Not supported** or **Unknown**, including
+partial or simulated snapshots. Any Enabled or Disabled interface keeps the link
+visible. Initial pending reads, empty snapshots and failures keep the link visible;
+the page remains directly accessible. Navigation reads cached capabilities, never
+initiates a scan, and observes explicit refresh results.
 
 Deep links fall back to the SPA; reload restores an unexpired registry session
 and reconnects the remembered firewall.
@@ -1652,6 +1717,99 @@ deployment separately: that backend refuses numeric v1 journals unchanged.
 Never delete/reset them or automatically
 convert existing appliance data. Existing appliances require a separately reviewed
 operator deployment plan and private backup.
+
+### Native appliance deployment policies
+
+The [November 10 backend handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-10.md)
+adds the following operator requirements. These changes are Unreleased; journal
+entries and local regression tests do not establish release availability,
+deployment on an existing appliance or real boot/connectivity acceptance.
+Use reviewed, updated deployment scripts and keep independent console access.
+The frontend does not install these host policies or add controls for them.
+
+#### AppArmor disablement
+
+The updated Ubuntu `install.sh` and full source `upgrade.sh` require host-wide
+AppArmor confinement to be disabled. This is a loss of mandatory-access-control
+protection, not a security improvement. Take a protected snapshot and use a local
+console. The final policy is **disable-only**: all packages, profiles, caches and
+APT preferences remain untouched by AppArmor preparation, including existing pins.
+It does not purge packages, remove profiles or prevent package reinstallation.
+Previously downloaded purge-based scripts retain their former behavior; use the
+updated scripts rather than forcing package removal.
+
+The scripts require a supported GRUB layout and systemd, prepare and verify
+`apparmor=0`, then stop, disable and persistently mask `apparmor.service` after
+verifying kernel disablement. If the running kernel still enables AppArmor,
+deployment stops with an error requiring a manual console reboot and rerun of
+the same command; it does not reboot automatically or report successful completion.
+Stopping the service alone does not establish kernel disablement. Unknown kernel
+state, unsafe files and boot/service-control or verification failures abort.
+Full source upgrades perform this check before old-daemon shutdown or binary
+replacement. Privileged boot/service overrides can re-enable enforcement.
+
+Build-only, HTTP/automatic binary updates, signed packages, reset and standalone
+hardening do not establish this mandatory deployment policy. See the backend
+[AppArmor disablement guide](https://github.com/mayberryjp/firewall_backend/blob/main/docs/BUILD_AND_INSTALL.md#apparmor-disablement).
+
+#### Network-online boot wait
+
+The updated packaged daemon orders after `network.target`, not
+`network-online.target`. Fresh installation and full source upgrades stop,
+disable and persistently mask only the standard, non-instantiated
+`systemd-networkd-wait-online.service`, including when absent. Setup verifies
+inactive/failed state and persistent masking; failures abort. Custom units and
+arguments are preserved. Source upgrades apply this setup before binary replacement,
+and completed host changes are not undone by binary rollback.
+
+This removes the usual two-minute networkd wait, not networking itself:
+networkd, resolved, Wi-Fi authentication and saved networking are unchanged by
+this helper. Other online-target consumers may start before connectivity is
+ready; review network-dependent workloads, especially network-mounted storage.
+Other waiter implementations and custom instances are not masked. No overall
+boot-time bound or WAN readiness is promised; Netcontrol READY still requires
+successful native recovery and HTTP listener binding.
+
+For immediate mitigation on an existing appliance, review those workloads first,
+then run from its **local console**, without restarting Netcontrol or networking:
+
+```bash
+sudo systemctl disable --now systemd-networkd-wait-online.service; sudo systemctl mask systemd-networkd-wait-online.service; systemctl show systemd-networkd-wait-online.service --property=ActiveState --property=UnitFileState
+```
+
+Inspect every command error; expect `ActiveState=inactive` (or `failed`) and
+`UnitFileState=masked`, not a runtime-only mask. On the next console-backed boot,
+inspect `systemd-analyze critical-chain netcontrold.service` and test actual LAN
+management and WAN recovery. Binary-only HTTP/automatic updates, signed packages,
+reset and build-only runs do not install this policy; changing the packaged
+dependency also requires unit deployment, not just a binary update. See the backend
+[network-online boot-wait guide](https://github.com/mayberryjp/firewall_backend/blob/main/docs/BUILD_AND_INSTALL.md#network-online-boot-wait).
+
+#### Mandatory kernel panic reboot
+
+An updated native **host-mode** daemon takes over host-global `kernel.panic=10`:
+Linux attempts to reboot ten seconds after a genuine kernel panic. This applies
+on install, restart, boot and upgrades that start that daemon, including binary-only
+self-upgrades. It requires writable host procfs and a trusted root-owned
+`/etc/sysctl.d`, verifies the live value, and persists
+`/etc/sysctl.d/99-netcontrol-panic.conf`. A worker reclaims live-value and owned-file
+drift every second. Initial takeover failures abort startup; later failures are
+logged, retried and reported through existing platform health/alerts without
+blocking unrelated valid configuration writes.
+
+There is no editable setting or original-value restoration. Stopping the daemon
+leaves the live value and boot file in place but stops reclamation; configuration
+rollback does not undo the policy. Competing privileged writers can change the
+value between checks, and foreign boot settings can override it until daemon
+startup. Simulator and native lab mode do not manage this host-global setting.
+Panic triggers and hardware watchdog policy are unchanged, and some catastrophic
+failures cannot execute the reboot path.
+
+Deployment requires console access and explicit operator acceptance of automatic
+reboot after genuine panics. Inspect live/boot settings and health on a disposable,
+console-backed appliance; never deliberately panic a shared or production host.
+No actual panic reboot was tested by frontend validation. See the backend
+[kernel panic reboot guide](https://github.com/mayberryjp/firewall_backend/blob/main/docs/BUILD_AND_INSTALL.md#kernel-panic-reboot-ownership).
 
 ### Breaking source-policy removal
 
