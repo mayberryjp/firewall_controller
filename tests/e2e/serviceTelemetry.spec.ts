@@ -4,8 +4,13 @@ import { config, runtime } from "../fixtures";
 import { relayStatistics, relayLog, persistentLog } from "../serviceTelemetryFixtures";
 import { interfaceCapabilitySnapshot } from "../diagnosticsFixtures";
 
-async function connect(page: Page) {
+async function connect(page: Page, { physicalInterface = false } = {}) {
   const initialConfig = config();
+  if (physicalInterface) {
+    initialConfig.interfaces.push({
+      ...initialConfig.interfaces[0]!, name: "eno1", kind: "ethernet", up: true, addresses: [],
+    });
+  }
   initialConfig.syslog = { enabled: true, servers: [
     { host: "logs.example", port: 514, transport: "udp" },
     { host: "backup.example", port: 6514, transport: "tls" },
@@ -68,7 +73,7 @@ test("Syslog uses two shared counter columns in the server table", async ({ page
 });
 
 test("new diagnostics are reachable and log streams remain separate", async ({ page }) => {
-  await connect(page); await page.goto("/diagnostics/dhcp-relay-logs");
+  await connect(page, { physicalInterface: true }); await page.goto("/diagnostics/dhcp-relay-logs");
   await expect(page.getByRole("heading", { name: "DHCP relay logs", exact: true })).toBeVisible();
   await expect(page.getByText("Request forwarded", { exact: true })).toBeVisible();
   await page.goto("/diagnostics/syslog");
@@ -78,6 +83,7 @@ test("new diagnostics are reachable and log streams remain separate", async ({ p
   await expect(page.getByText("syslog entry 1", { exact: true })).toBeHidden();
   await page.goto("/diagnostics/rss-irq");
   await expect(page.getByRole("heading", { name: "RSS / IRQ", exact: true })).toBeVisible();
+  await expect(page.locator(".rss-irq-table").getByRole("rowheader", { name: "ENO1", exact: true })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "RX queue targets", exact: true }).first()).toBeVisible();
 });
 
@@ -121,7 +127,7 @@ test("both persistent log tabs keep timestamps narrow with long messages", async
 });
 
 test("RSS/IRQ navigation hides all-unsupported interfaces even in a partial snapshot", async ({ page }) => {
-  await connect(page);
+  await connect(page, { physicalInterface: true });
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (!path.endsWith("/interface-capabilities") && !path.endsWith("/interface-capabilities/refresh")) return route.fallback();
