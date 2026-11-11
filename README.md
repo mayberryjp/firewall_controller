@@ -169,7 +169,9 @@ the required systemd socket activation; signed API/package upgrades do not provi
 these host files. On backends implementing the November 11 logging contract,
 local socket capture continues with remote forwarding disabled. Services > Syslog
 shows local capture and applied forwarding separately, with **Logs read** and
-**Remote sends** columns in the existing server table. These are shared service
+**Remote sends** columns in the existing server table, using compact tonal chips:
+info for logs read, primary for remote sends, and neutral for pending or unknown
+measurements. These are shared service
 totals, displayed once across the server rows rather than invented per-server counts.
 Numeric API u64 counts are decoded losslessly and displayed exactly;
 missing measurements remain unknown. Counters reset per worker attempt, not lifetime.
@@ -196,14 +198,20 @@ are not summed or deduplicated. See the
 Services > **DHCPv4 relay** adds **Requests forwarded** and **Replies received**
 columns to its existing interface rows, without a separate counter table. Reads
 from `GET /api/v1/statistics/dhcp-relay` every three seconds while visible.
-Disabled/simulated/unavailable measurements remain unknown; stopped-worker
+Disabled relay status and measurements display `-`. Request/reply counts use
+green chips when equal and red chips when unequal; unknown or pending counts
+remain neutral. Simulated/unavailable measurements remain unknown; stopped-worker
 observations and actual errors remain visible without changing configuration.
 Forwarded requests and received replies are separate counts, not lease-success evidence.
 Counters reset on preparation attempts, including retry, repair and rollback.
 Diagnostics > **DHCP relay logs** (`/diagnostics/dhcp-relay-logs`) polls the separate
-RAM event ring every second, with an optional interface filter, bounded serial
-paging and explicit overwrite/reset notices. Filter changes discard old selections
-and late responses; daemon restart clears the backend ring. Neither page repairs
+RAM event ring every second, with MAC address and event dropdowns filtering the
+bounded loaded history without restarting paging. MAC addresses display uppercase;
+events and nonempty reasons use colored chips; reason colors stay consistent while
+the page is open. **Failures only**
+includes rejected packets, send errors and worker errors; **Rejected** shows only
+rejected packets. Bounded serial paging retains explicit overwrite/reset notices;
+daemon restart clears the backend ring. Neither page repairs
 workers or changes settings automatically. Both reads require `state.read` and
 the matching [DHCP diagnostics backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-02-dhcp-relay-diagnostics).
 
@@ -893,6 +901,8 @@ verify collector delivery.
 
 The NetFlow/IPFIX page and per-export detail add **Flow records** and **Export
 datagrams** columns to the existing export rows, without a separate counter table.
+Both counters use tonal chips: info for flow records, primary for export datagrams,
+and neutral chips for pending or unavailable values.
 Values come from the existing runtime read. Decimal-string counters and numeric
 flow-record counts retain u64 precision; unavailable values are unknown. Totals
 reset per execution attempt and may remain visible after stop/error. Sampling is
@@ -903,10 +913,12 @@ collector delivery. Deploy the matching
 Interface capabilities shows VLAN RPS activation from the backend's effective
 physical-parent observation, not raw VLAN queue masks; null activation is Unknown.
 Source metadata remains in the typed snapshot without additional explanatory UI.
-Diagnostics > **RSS / IRQ** (`/diagnostics/rss-irq`) separately shows RSS queue
-targets/hash settings, per-queue effective interrupt CPUs and expandable IRQ
-counts/errors. Exact interrupt counts are cumulative observations, not packet
-rates or CPU load. Unknown mappings/measurements stay unknown. Both pages read the
+Diagnostics > **RSS / IRQ** (`/diagnostics/rss-irq`) shows enabled physical Ethernet
+interfaces in one table with colored RSS, queue/hash and IRQ/CPU chips. Disabled
+interfaces, VLANs and other virtual interfaces are excluded; enabled means the
+saved interface's `up` setting or an available unmanaged parent's runtime `up`,
+not link carrier or RSS activation. Interrupt expansion and counts are omitted;
+mapping errors remain inline. Unknown mappings/measurements stay neutral. Both pages read the
 saved capability snapshot and scan only through explicit Refresh; deploy the
 matching [capability backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-06-rss-and-queue-irq-observations)
 and explicitly refresh once for new observations. No RSS/IRQ tuning is added.
@@ -1032,8 +1044,11 @@ details and Disconnect. There is no profile/person button. Interfaces
 contains Physical interfaces, Loopbacks and VLANs. Routing contains Static Routes
 Gateway monitors and BGP. The Modan モダン
 brand links to Overview; there is no separate Overview navigation button. Firewall
-contains forwarding, Firewall destined, Connections, NAT and DNAT; VPN contains WireGuard. The existing **Config rN**
-revision box opens `/config`; there is no separate Config navigation button.
+contains forwarding, Firewall destined, Connections, NAT and DNAT; VPN contains WireGuard.
+The header save control shows the config revision above the saved Netcontrol
+software version, when available, beside a larger save icon. It opens
+`/config/changes` for the existing review/apply flow; there is no separate Config
+navigation button.
 Each section exposes its own routed page tabs: a left rail on desktop and a
 horizontal scrollable strip below 1280px when a section has multiple pages. `/networking` (Interfaces), `/routing`, `/vpn`, `/services`, and
 `/config` open the first page in their section. Old `/activity`, `/changes`,

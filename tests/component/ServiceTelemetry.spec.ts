@@ -1,6 +1,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent } from "vue";
+import { LosslessNumber } from "lossless-json";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DHCPRelayView from "@/views/DHCPRelayView.vue";
 import DHCPRelayLogsView from "@/views/DHCPRelayLogsView.vue";
@@ -53,6 +54,50 @@ beforeEach(() => {
 afterEach(() => { useControllerStore().$dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("service counters", () => {
+  it.each(["disabled", "missing"] as const)("uses a dash for %s disabled relay status and counters", async status => {
+    const store = useControllerStore();
+    store.runtime.data!.dhcp_relay = status === "disabled" ? [{ interface: "lab0", state: "disabled" }] : [];
+    const result = relayStatistics();
+    result.interfaces[0]!.enabled = false;
+    result.interfaces[0]!.state = "disabled";
+    result.interfaces[0]!.counters = null;
+    vi.mocked(api.getDHCPRelayStatistics).mockResolvedValueOnce(result);
+    const wrapper = mount(DHCPRelayView, { global: { stubs } }); await flushPromises();
+    const cells = wrapper.get("tbody tr").findAll("td");
+    expect(cells[2]!.text()).toBe("-");
+    expect(cells.slice(4, 6).map(cell => cell.text())).toEqual(["-", "-"]);
+    expect(cells.slice(4, 6).map(cell => cell.get("span").attributes("color"))).toEqual(["default", "default"]);
+    wrapper.unmount();
+  });
+  it.each([
+    ["0", "0", "success"],
+    ["3", "3", "success"],
+    ["3", "2", "error"],
+    ["9007199254740993", "9007199254740992", "error"],
+    ["18446744073709551615", "18446744073709551615", "success"],
+    [null, "2", "default"],
+  ])("colors request/reply chips for %s / %s as %s", async (requests, replies, color) => {
+    const result = relayStatistics();
+    if (requests === null) result.interfaces[0]!.counters = null;
+    else {
+      result.interfaces[0]!.counters!.requests_forwarded = requests;
+      result.interfaces[0]!.counters!.replies_received = replies!;
+    }
+    vi.mocked(api.getDHCPRelayStatistics).mockResolvedValueOnce(result);
+    const wrapper = mount(DHCPRelayView, { global: { stubs } }); await flushPromises();
+    const cells = wrapper.get("tbody tr").findAll("td").slice(4, 6);
+    expect(cells.map(cell => cell.get("span").attributes("color"))).toEqual([color, color]);
+    expect(cells.map(cell => cell.get("span").attributes("variant"))).toEqual(["tonal", "tonal"]);
+    wrapper.unmount();
+  });
+  it("keeps unknown runtime status visible for an enabled relay", async () => {
+    const store = useControllerStore();
+    store.draft!.interfaces[0]!.dhcp_relay.enabled = true;
+    store.runtime.data!.dhcp_relay = [];
+    const wrapper = mount(DHCPRelayView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.get("tbody tr").findAll("td")[2]!.text()).toBe("Unknown");
+    wrapper.unmount();
+  });
   it("adds only the two requested counters to existing DHCP relay rows", async () => {
     const store = useControllerStore(), before = JSON.stringify(store.draft);
     const result = relayStatistics();
@@ -72,12 +117,14 @@ describe("service counters", () => {
     vi.mocked(api.getDHCPRelayStatistics).mockReturnValueOnce(pending.promise);
     const wrapper = mount(DHCPRelayView, { global: { stubs } });
     expect(wrapper.findAll("tbody tr")[0]!.findAll("td").slice(4, 6).map(cell => cell.text())).toEqual(["...", "..."]);
+    expect(wrapper.get("tbody tr").findAll("td").slice(4, 6).map(cell => cell.get("span").attributes("color"))).toEqual(["default", "default"]);
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     if (outcome === "success") pending.resolve(relayStatistics());
     else pending.reject(new ApiFailure("HTTP 503: Relay unavailable", 503));
     await flushPromises();
     expect(wrapper.text()).toContain(outcome === "success" ? "Requests forwarded" : "HTTP 503");
     expect(wrapper.findAll("tbody tr")[0]!.findAll("td")[4]!.text()).toBe(outcome === "success" ? "3" : "Unknown");
+    expect(wrapper.get("tbody tr").findAll("td").slice(4, 6).map(cell => cell.get("span").attributes("color"))).toEqual(outcome === "success" ? ["error", "error"] : ["default", "default"]);
   });
   it("renders changed attempts, retained errors and null measurements without modifying settings", async () => {
     const result = relayStatistics(); result.generation = "2"; result.totals = null;
@@ -107,6 +154,53 @@ describe("service counters", () => {
     expect(wrapper.text()).toContain("Collector unavailable");
     expect(wrapper.text()).toContain("Send failed");
     expect(api.getPersistentLog).not.toHaveBeenCalled();
+  });
+  it.each(["servers", "editing", "empty"] as const)("uses colored syslog total chips with %s rows", async mode => {
+    const store = useControllerStore();
+    store.draft!.syslog.servers = mode === "empty" ? [] : [
+      { host: "192.0.2.10", port: 514, transport: "udp" },
+      { host: "192.0.2.11", port: 514, transport: "tcp" },
+    ];
+    store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{
+      name: "syslog", scope: "host", state: "running",
+      received_records: new LosslessNumber("18446744073709551615"), forwarded_deliveries: 0,
+    }] });
+    const before = JSON.stringify(store.draft);
+    const wrapper = mount(SyslogView, { global: { stubs } });
+    if (mode === "editing") await wrapper.get('[aria-label="Edit 192.0.2.10"]').trigger("click");
+    const cells = wrapper.get("tbody tr").findAll("td");
+    const chips = cells.slice(mode === "empty" ? 1 : 3, mode === "empty" ? 3 : 5).map(cell => cell.get("span"));
+    expect(chips.map(chip => chip.text())).toEqual(["18,446,744,073,709,551,615", "0"]);
+    expect(chips.map(chip => chip.attributes("color"))).toEqual(["info", "primary"]);
+    expect(chips.map(chip => chip.attributes("variant"))).toEqual(["tonal", "tonal"]);
+    expect(chips.map(chip => chip.attributes("size"))).toEqual(["small", "small"]);
+    if (mode !== "empty") expect(wrapper.findAll('td[title="Service total"]')).toHaveLength(2);
+    expect(JSON.stringify(store.draft)).toBe(before);
+    wrapper.unmount();
+  });
+  it.each(["success", "failure"] as const)("keeps syslog counter chips neutral while pending until %s", async outcome => {
+    const store = useControllerStore();
+    store.draft!.syslog.servers = [];
+    store.runtime.data = null;
+    store.runtime.loading = true;
+    store.runtime.error = null;
+    const wrapper = mount(SyslogView, { global: { stubs } });
+    const chips = () => wrapper.get("tbody tr").findAll("td").slice(1, 3).map(cell => cell.get("span"));
+    expect(chips().map(chip => chip.text())).toEqual(["...", "..."]);
+    expect(chips().map(chip => chip.attributes("color"))).toEqual(["default", "default"]);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    store.runtime.loading = false;
+    if (outcome === "success") {
+      store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{
+        name: "syslog", scope: "host", state: "running",
+        received_records: 10, forwarded_deliveries: 2,
+      }] });
+    } else store.runtime.error = "HTTP 503: Syslog unavailable";
+    await flushPromises();
+    expect(chips().map(chip => chip.text())).toEqual(outcome === "success" ? ["10", "2"] : ["Unknown", "Unknown"]);
+    expect(chips().map(chip => chip.attributes("color"))).toEqual(outcome === "success" ? ["info", "primary"] : ["default", "default"]);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(outcome === "failure");
+    wrapper.unmount();
   });
   it("puts exact per-instance NetFlow counters on Services NetFlow", () => {
     const store = useControllerStore();
@@ -151,20 +245,88 @@ describe("diagnostic log pages", () => {
     expect(wrapper.findAll("tbody tr")).toHaveLength(2);
     expect(wrapper.text()).toContain("Discover");
     expect(wrapper.get("time").text()).toBe("2026-11-11 00:00:00");
-    expect(api.getDHCPRelayLog).toHaveBeenNthCalledWith(2, { cursor: `${telemetryEpoch}:1`, interface: undefined, limit: 100 }, expect.any(AbortSignal));
-    expect(api.getDHCPRelayLog).toHaveBeenNthCalledWith(3, { cursor: `${telemetryEpoch}:2`, interface: undefined, limit: 100 }, expect.any(AbortSignal));
-    await wrapper.get("input").setValue("old-vlan"); await flushPromises();
-    expect(api.getDHCPRelayLog).toHaveBeenLastCalledWith({ cursor: undefined, interface: "old-vlan", limit: 100 }, expect.any(AbortSignal));
+    expect(api.getDHCPRelayLog).toHaveBeenNthCalledWith(2, { cursor: `${telemetryEpoch}:1`, limit: 100 }, expect.any(AbortSignal));
+    expect(api.getDHCPRelayLog).toHaveBeenNthCalledWith(3, { cursor: `${telemetryEpoch}:2`, limit: 100 }, expect.any(AbortSignal));
+    wrapper.unmount();
   });
-  it("ignores a late DHCP response from an old interface selection", async () => {
+  it("keeps pending DHCP logs neutral and applies the current event filter when loading completes", async () => {
     const pending = deferred<ReturnType<typeof relayLog>>();
-    vi.mocked(api.getDHCPRelayLog).mockReturnValueOnce(pending.promise).mockResolvedValueOnce(relayLog("2"));
+    vi.mocked(api.getDHCPRelayLog).mockReturnValueOnce(pending.promise);
     const wrapper = mount(DHCPRelayLogsView, { global: { stubs } });
-    await wrapper.get("input").setValue("lab1"); await flushPromises();
-    const old = relayLog(); old.events[0]!.reason = "late old interface";
-    pending.resolve(old); await flushPromises();
-    expect(wrapper.text()).not.toContain("late old interface");
+    await wrapper.get('[aria-label="Event"]').setValue("packets_rejected");
+    expect(wrapper.get('[role="status"]').text()).toBe("Loading logs...");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("No matching relay events.");
+    pending.resolve(relayLog()); await flushPromises();
+    expect(wrapper.get("tbody").text()).toBe("No matching relay events.");
+    expect(api.getDHCPRelayLog).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+  it("surfaces an initial DHCP read failure with filters selected", async () => {
+    const pending = deferred<ReturnType<typeof relayLog>>();
+    vi.mocked(api.getDHCPRelayLog).mockReturnValueOnce(pending.promise);
+    const wrapper = mount(DHCPRelayLogsView, { global: { stubs } });
+    await wrapper.get('[aria-label="Event"]').setValue("failures");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    pending.reject(new ApiFailure("HTTP 503: Relay unavailable", 503)); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("HTTP 503");
+    expect(wrapper.find("table").exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it("colors DHCP event and reason chips and filters uppercase MACs and failures without resetting history", async () => {
+    const page = relayLog("7");
+    const base = page.events[0]!;
+    page.events = [
+      { ...base, sequence: "1", client_mac: "aa:bb:cc:dd:ee:01" },
+      { ...base, sequence: "2", event: "packets_rejected", reason: "malformed", client_mac: "Aa:Bb:Cc:Dd:Ee:01" },
+      { ...base, sequence: "3", event: "send_errors", reason: "send failed", client_mac: "aa:bb:cc:dd:ee:02" },
+      { ...base, sequence: "4", event: "worker_error", reason: "worker failed", client_mac: null },
+      { ...base, sequence: "5", event: "transactions_expired", reason: "expired", client_mac: "aa:bb:cc:dd:ee:01" },
+      { ...base, sequence: "6", event: "replies_received", reason: "", client_mac: "aa:bb:cc:dd:ee:01" },
+      { ...base, sequence: "7", event: "packets_rejected", reason: "malformed", client_mac: "aa:bb:cc:dd:ee:02" },
+    ];
+    vi.mocked(api.getDHCPRelayLog).mockResolvedValueOnce(page);
+    const wrapper = mount(DHCPRelayLogsView, { global: { stubs } }); await flushPromises();
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows.map(row => row.findAll("td")[6]!.text())).toEqual([
+      "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02", "-",
+      "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02",
+    ]);
+    expect(rows.map(row => row.findAll("td")[2]!.get("span").attributes("color"))).toEqual([
+      "success", "error", "error", "error", "warning", "primary", "error",
+    ]);
+    const reasons = rows.map(row => row.findAll("td")[7]!);
+    expect(reasons[0]!.text()).toBe("-");
+    expect(reasons[0]!.find("span").exists()).toBe(false);
+    expect(reasons[1]!.get("span").attributes("color")).toBe(reasons[6]!.get("span").attributes("color"));
+    expect(reasons[1]!.get("span").attributes("color")).not.toBe(reasons[2]!.get("span").attributes("color"));
+    expect(reasons[1]!.get("span").attributes("variant")).toBe("tonal");
+    expect(reasons[1]!.text()).toBe("malformed");
+    expect(wrapper.get('[aria-label="Client MAC"]').findAll("option").map(option => option.text())).toEqual([
+      "All MAC addresses", "AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02",
+    ]);
+    await wrapper.get('[aria-label="Event"]').setValue("failures");
+    expect(wrapper.findAll("tbody tr")).toHaveLength(4);
+    await wrapper.get('[aria-label="Client MAC"]').setValue("AA:BB:CC:DD:EE:01");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+    expect(wrapper.get("tbody").text()).toContain("Rejected");
+    await wrapper.get('[aria-label="Client MAC"]').setValue("");
+    await wrapper.get('[aria-label="Event"]').setValue("packets_rejected");
+    expect(wrapper.findAll("tbody tr")).toHaveLength(2);
+    await wrapper.get('[aria-label="Event"]').setValue("");
+    expect(wrapper.findAll("tbody tr")).toHaveLength(7);
+    expect(api.getDHCPRelayLog).toHaveBeenCalledTimes(1);
+    const next = relayLog("8");
+    next.events[0]!.client_mac = "aa:bb:cc:dd:ee:01";
+    next.events[0]!.event = "packets_rejected";
+    next.events[0]!.reason = "malformed";
+    vi.mocked(api.getDHCPRelayLog).mockResolvedValueOnce(next);
+    await wrapper.get('[aria-label="Event"]').setValue("packets_rejected");
+    await vi.advanceTimersByTimeAsync(1000); await flushPromises();
+    expect(wrapper.findAll("tbody tr")).toHaveLength(3);
+    expect(api.getDHCPRelayLog).toHaveBeenLastCalledWith({ cursor: `${telemetryEpoch}:7`, limit: 100 }, expect.any(AbortSignal));
+    expect(wrapper.findAll("tbody tr").at(-1)!.findAll("td")[7]!.get("span").attributes("color")).toBe(reasons[1]!.get("span").attributes("color"));
+    wrapper.unmount();
   });
   it("reports DHCP gaps and clears old-epoch entries on daemon reset", async () => {
     const wrapper = mount(DHCPRelayLogsView, { global: { stubs } }); await flushPromises();
@@ -261,7 +423,12 @@ describe("polling and history bounds", () => {
 });
 
 describe("RSS / IRQ diagnostics", () => {
-  it("shows exact IRQ observations without refreshing automatically or adding tuning controls", async () => {
+  function enablePhysicalInterface(name = "eno1") {
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces.push({ ...config().interfaces[0]!, name, kind: "ethernet", up: true });
+  }
+  it("shows IRQ observations in chips without interrupt expansion, automatic refresh or tuning controls", async () => {
+    enablePhysicalInterface();
     const snapshot = interfaceCapabilitySnapshot(), row = snapshot.inventory.interfaces[0]!;
     snapshot.collected_at = "2026-11-11T00:00:00.987654Z";
     row.rss = { context: 0, indirection_table: [0, 1, 1, 3], hash_function: 9, input_transformation: 0 };
@@ -273,7 +440,11 @@ describe("RSS / IRQ diagnostics", () => {
     expect(wrapper.text()).toContain("0, 1, 3");
     expect(wrapper.text()).toContain("Toeplitz, 0x8");
     expect(wrapper.text()).toContain("135: 1, 7");
-    expect(wrapper.text()).toContain("18,446,744,073,709,551,615");
+    expect(wrapper.text()).not.toContain("18,446,744,073,709,551,615");
+    expect(wrapper.find("details").exists()).toBe(false);
+    expect(wrapper.findAll("table")).toHaveLength(1);
+    expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+    expect(wrapper.get("tbody tr").findAll("td")[0]!.get("span").attributes("color")).toBe("success");
     expect(wrapper.get("time").text()).toBe("2026-11-11 00:00:00");
     await vi.advanceTimersByTimeAsync(10000);
     expect(api.getInterfaceCapabilities).toHaveBeenCalledTimes(1);
@@ -281,5 +452,67 @@ describe("RSS / IRQ diagnostics", () => {
     expect(wrapper.findAll("button")).toHaveLength(1);
     await wrapper.get("button").trigger("click"); await flushPromises();
     expect(api.refreshInterfaceCapabilities).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+  it("combines enabled physical interfaces while excluding disabled, VLAN and virtual interfaces", async () => {
+    enablePhysicalInterface();
+    enablePhysicalInterface("eno2");
+    enablePhysicalInterface("eno3");
+    const store = useControllerStore();
+    store.state.data!.desired.interfaces.find(link => link.name === "eno3")!.up = false;
+    store.state.data!.desired.interfaces.push({ ...config().interfaces[0]!, name: "vlan10", kind: "vlan", vlan: { parent: "eno1", id: 10 } });
+    store.runtime.data!.parent_interfaces = [
+      { name: "eno4", kind: "ethernet", available: true, up: true },
+      { name: "eno5", kind: "ethernet", available: true, up: false },
+      { name: "eno6", kind: "ethernet", available: false, up: true },
+    ];
+    const snapshot = interfaceCapabilitySnapshot(), physical = snapshot.inventory.interfaces[0]!;
+    physical.capabilities.find(feature => feature.name === "rss")!.enabled = false;
+    physical.link!.carrier = false;
+    snapshot.inventory.interfaces.push(
+      { ...physical, name: "eno2" },
+      { ...physical, name: "eno3" },
+      { ...physical, name: "eno4" },
+      { ...physical, name: "eno5" },
+      { ...physical, name: "eno6" },
+      { ...physical, name: "vlan10", kind: "vlan" },
+      { ...physical, name: "lab0", hardware: null },
+    );
+    vi.mocked(api.getInterfaceCapabilities).mockResolvedValueOnce(snapshot);
+    const before = JSON.stringify(store.state.data);
+    const wrapper = mount(RSSIRQView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.findAll("table")).toHaveLength(1);
+    expect(wrapper.findAll("tbody tr").map(row => row.get("th").text())).toEqual(["ENO1", "ENO2", "ENO4"]);
+    expect(wrapper.findAll("tbody tr").map(row => row.findAll("td")[0]!.get("span").attributes("color"))).toEqual(["warning", "warning", "warning"]);
+    expect(wrapper.find("details").exists()).toBe(false);
+    expect(JSON.stringify(store.state.data)).toBe(before);
+    wrapper.unmount();
+  });
+  it("shows a focused empty state when no enabled physical interfaces qualify", async () => {
+    const wrapper = mount(RSSIRQView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).toContain("No enabled physical interfaces.");
+    expect(wrapper.find("table").exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it.each(["success", "failure"] as const)("keeps pending interface configuration neutral until %s", async outcome => {
+    const store = useControllerStore(), saved = state();
+    saved.desired.interfaces.push({ ...config().interfaces[0]!, name: "eno1", kind: "ethernet" });
+    store.state.data = null; store.runtime.data = null;
+    store.state.loading = true;
+    const wrapper = mount(RSSIRQView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).toContain("Loading interfaces...");
+    expect(wrapper.text()).not.toContain("No enabled physical interfaces.");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    store.state.loading = false;
+    if (outcome === "success") store.state.data = saved;
+    else store.state.error = "Unable to read interface configuration";
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Loading interfaces...");
+    if (outcome === "success") expect(wrapper.get("tbody tr th").text()).toBe("ENO1");
+    else {
+      expect(wrapper.get('[role="alert"]').text()).toBe("Unable to read interface configuration");
+      expect(wrapper.text()).not.toContain("No enabled physical interfaces.");
+    }
+    wrapper.unmount();
   });
 });

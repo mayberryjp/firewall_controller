@@ -139,8 +139,8 @@ function interfaceChipColor(row: ResourceRow, key: string): string {
 }
 const softflowStatus = (name: unknown) => store.runtime.data?.softflowd.find(item => item.name === name);
 const exportCounters = [
-  { key: "exported_flows", title: "Flow records" },
-  { key: "exported_packets", title: "Export datagrams" },
+  { key: "exported_flows", title: "Flow records", color: "info" },
+  { key: "exported_packets", title: "Export datagrams", color: "primary" },
 ] as const;
 const exportCount = (name: unknown, key: typeof exportCounters[number]["key"]) =>
   !store.runtime.data && store.runtime.loading ? "..." : formatCount(softflowStatus(name)?.[key]);
@@ -450,7 +450,13 @@ function staged(value: unknown): string {
                 class="compact-cell-label"
                 aria-hidden="true"
               >{{ column.title }}</span>
-              {{ exportCount(row.value.name, column.key) }}
+              <v-chip
+                :color="softflowStatus(row.value.name)?.[column.key] === undefined ? 'default' : column.color"
+                size="small"
+                variant="tonal"
+              >
+                {{ exportCount(row.value.name, column.key) }}
+              </v-chip>
             </td>
           </template>
           <td v-if="hasStatus">

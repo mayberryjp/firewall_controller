@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { mockBackend } from "./mockBackend";
-import { config, gatewayStatistics, monitor, statistics, connections, healthSnapshot, runtime, hostPolicyConfig, transaction } from "../fixtures";
+import { config, gatewayStatistics, monitor, statistics, connections, healthSnapshot, runtime, hostPolicyConfig, transaction, software } from "../fixtures";
 import { navigationSections } from "../../src/constants/navigation";
 
 async function signInToRegistry(page: Page): Promise<void> {
@@ -307,7 +307,7 @@ test("refresh discovery stays off the page and failures retain the fixed-size co
   const healthy = (await bubble.boundingBox())!;
   expect(healthy.width).toBe(healthy.height); expect(healthy.width).toBeLessThanOrEqual(40);
   releaseRead();
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true }).locator(".config-revision")).toHaveText("R2026.10.29.1");
   failed = true;
   await page.clock.fastForward(6000);
   await expect(bubble).toHaveAttribute("aria-label", "Read failed");
@@ -1408,17 +1408,38 @@ test("monitor editor keeps usable fields and compact actions when adding beside 
   expect(backend.writes).toHaveLength(0);
 });
 
+test("header stacks the Netcontrol version beneath the config revision with a larger save icon", async ({ page }, testInfo) => {
+  const initialConfig = config();
+  initialConfig.software = { ...software(), version: "2026.11.11.4" };
+  await mockBackend(page, { initialConfig }); await connect(page);
+  const save = page.getByRole("link", { name: "Save configuration", exact: true });
+  await expect(save.locator(".config-revision")).toHaveText("R2026.10.29.1");
+  await expect(save.locator(".netcontrol-version")).toHaveText("netcontrol 2026.11.11.4");
+  const revision = await save.locator(".config-revision").boundingBox();
+  const netcontrol = await save.locator(".netcontrol-version").boundingBox();
+  const icon = await save.locator(".save-icon").boundingBox();
+  const banner = await page.getByRole("banner").boundingBox();
+  const button = await save.boundingBox();
+  expect(netcontrol!.y).toBeGreaterThanOrEqual(revision!.y + revision!.height);
+  expect(icon!.width).toBe(24);
+  expect(icon!.height).toBe(24);
+  expect(button!.y).toBeGreaterThanOrEqual(banner!.y);
+  expect(button!.y + button!.height).toBeLessThanOrEqual(banner!.y + banner!.height);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("header-versions.png"), fullPage: false, animations: "disabled" });
+});
+
 test("shared route draft preserves other subsystems and requires explicit apply and confirmation", async ({ page }, testInfo) => {
   const initial = config(), backend = await mockBackend(page, { initialConfig: initial });
   await connect(page);
   await expect(page.getByRole("button", { name: "Connected", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true }).locator(".config-revision")).toHaveText("R2026.10.29.1");
   await navigate(page, "Static Routes");
   await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
   await page.getByLabel("Metric", { exact: true }).fill("42");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   expect(backend.writes).toHaveLength(0);
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true }).locator(".config-revision")).toHaveText("R2026.10.29.1");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("navbar-status.png"), fullPage: false, animations: "disabled" });
   expect(await page.getByRole("banner").getByRole("link", { name: "Modan モダン", exact: true }).evaluate(element => {
@@ -1452,7 +1473,7 @@ test("shared route draft preserves other subsystems and requires explicit apply 
   await expect(page).toHaveURL(/\/config\/commits\/[^/]+$/);
   await expect(page.getByRole("region", { name: "Commit detail", exact: true })).toContainText("committed");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.2");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true }).locator(".config-revision")).toHaveText("R2026.10.29.2");
   expect(backend.writes.filter(write => write.path.endsWith("/confirm"))).toHaveLength(1);
   expect(await page.evaluate(() => Object.values(localStorage))).toEqual(["11111111-1111-4111-8111-111111111111"]);
   expect(await page.evaluate(() => sessionStorage.length)).toBe(0);

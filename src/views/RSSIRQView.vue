@@ -1,14 +1,26 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { useInterfaceCapabilities } from "@/composables/useInterfaceCapabilities";
 import { useTimestamps } from "@/composables/useTimestamps";
-import { formatCount } from "@/services/counters";
 import { formatInterfaceName, sortByInterface } from "@/services/interfaceNames";
-import { rssState } from "@/services/interfaceCapabilities";
+import { rssState, type InterfaceCapabilities } from "@/services/interfaceCapabilities";
 
 const store = useControllerStore();
 const { snapshot, completed, loading, error, stale, refreshDenied, read } = useInterfaceCapabilities();
 const { formatTimestamp, timeZone } = useTimestamps();
+const interfacesPending = computed(() => !store.state.data && !store.runtime.data && (store.state.loading || store.runtime.loading));
+const rows = computed(() => sortByInterface((snapshot.value?.inventory.interfaces ?? []).filter(row => {
+  if (row.kind !== "ethernet" || !row.hardware) return false;
+  const configured = store.state.data?.desired.interfaces.find(link => link.name === row.name);
+  if (configured) return configured.kind === "ethernet" && configured.up;
+  const parent = store.runtime.data?.parent_interfaces.find(link => link.name === row.name);
+  return parent?.kind === "ethernet" && parent.available && parent.up === true;
+}), row => row.name));
+const rssColors = { Enabled: "success", Disabled: "warning", "Not supported": "error", Unknown: "default" };
+function queueCpus(row: InterfaceCapabilities, queue: InterfaceCapabilities["queues"][number]): string {
+  return queue.irqs == null ? "Unknown" : queue.irqs.map(irq => `${irq}: ${cpus(row.interrupts?.find(item => item.irq === irq)?.effective_cpus)}`).join("; ") || "None";
+}
 function hash(value: number | null | undefined): string {
   if (value == null) return "Unknown";
   const names = [[1, "Toeplitz"], [2, "XOR"], [4, "CRC32"]] as const;
@@ -71,93 +83,152 @@ const cpus = (values: number[] | null | undefined) => values == null ? "Unknown"
       >
         {{ message }}
       </p>
-      <p v-if="!snapshot.inventory.interfaces.length">
-        No interfaces.
-      </p>
-      <section
-        v-for="row in sortByInterface(snapshot.inventory.interfaces, row => row.name)"
-        :key="row.name"
-        :aria-label="`${row.name} RSS / IRQ`"
-        class="mt-4"
+      <p
+        v-if="interfacesPending"
+        role="status"
       >
-        <h2 class="text-subtitle-1">
-          {{ formatInterfaceName(row.name) }}
-        </h2>
-        <v-table density="compact">
-          <thead><tr><th>RSS</th><th>RX queue targets</th><th>Hash</th><th>Input transformation</th></tr></thead>
-          <tbody>
-            <tr>
-              <td>{{ rssState(row) }}</td>
-              <td>{{ row.rss?.indirection_table == null ? 'Unknown' : [...new Set(row.rss.indirection_table)].join(', ') || 'None' }}</td>
-              <td>{{ hash(row.rss?.hash_function) }}</td>
-              <td>{{ row.rss?.input_transformation == null ? 'Unknown' : `0x${row.rss.input_transformation.toString(16)}` }}</td>
-            </tr>
-          </tbody>
-        </v-table>
-        <v-table
-          density="compact"
-          class="mt-2"
-        >
-          <thead><tr><th>Queue</th><th>IRQ</th><th>Effective CPUs</th></tr></thead>
-          <tbody>
-            <tr
-              v-for="queue in row.queues"
-              :key="queue.name"
-            >
-              <th scope="row">
-                {{ queue.name }}
-              </th>
-              <td :title="queue.irq_mapping_reason ?? undefined">
-                {{ queue.irqs == null ? 'Unknown' : queue.irqs.join(', ') || 'None' }}
-              </td>
-              <td>{{ queue.irqs == null ? 'Unknown' : queue.irqs.map(irq => `${irq}: ${cpus(row.interrupts?.find(item => item.irq === irq)?.effective_cpus)}`).join('; ') || 'None' }}</td>
-            </tr>
-            <tr v-if="!row.queues.length">
-              <td colspan="3">
-                No queues.
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-        <details class="mt-2">
-          <summary>Interrupts</summary>
-          <p v-if="row.interrupts == null">
-            Unknown
-          </p>
-          <v-table
-            v-else
-            density="compact"
+        Loading interfaces...
+      </p>
+      <p
+        v-else-if="!rows.length && !store.state.error && !store.runtime.error"
+        role="status"
+      >
+        No enabled physical interfaces.
+      </p>
+      <p
+        v-if="store.state.error || store.runtime.error"
+        role="alert"
+        class="text-error"
+      >
+        {{ store.state.error || store.runtime.error }}
+      </p>
+      <v-table
+        v-if="rows.length"
+        density="compact"
+        class="rss-irq-table"
+        aria-label="Enabled physical interfaces RSS / IRQ"
+      >
+        <thead>
+          <tr><th>Interface</th><th>RSS</th><th>RX queue targets</th><th>Hash</th><th>Input transformation</th><th>Queue</th><th>IRQ</th><th>Effective CPUs</th></tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="row in rows"
+            :key="row.name"
           >
-            <thead><tr><th>IRQ</th><th>Action</th><th>Effective CPUs</th><th>Interrupt counts by CPU</th><th>Errors</th></tr></thead>
-            <tbody>
-              <tr
-                v-for="irq in row.interrupts"
-                :key="irq.irq"
+            <th scope="row">
+              {{ formatInterfaceName(row.name) }}
+              <p
+                v-for="message in [...row.errors, ...row.capabilities.filter(feature => feature.name === 'rss').flatMap(feature => feature.reason ? [feature.reason] : [])]"
+                :key="message"
+                role="alert"
+                class="text-error text-caption"
               >
-                <th scope="row">
-                  {{ irq.irq }}
-                </th><td>{{ irq.description ?? 'Unknown' }}</td>
-                <td>{{ cpus(irq.effective_cpus) }}</td>
-                <td>{{ irq.counts == null ? 'Unknown' : irq.counts.map(count => `${count.cpu_id}: ${formatCount(count.interrupts)}`).join('; ') || 'None' }}</td>
-                <td>{{ irq.errors.join('; ') || '-' }}</td>
-              </tr>
-              <tr v-if="!row.interrupts.length">
-                <td colspan="5">
-                  No interrupts.
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
-        </details>
-        <p
-          v-for="message in [...row.errors, ...row.capabilities.filter(feature => feature.name === 'rss').flatMap(feature => feature.reason ? [feature.reason] : [])]"
-          :key="message"
-          role="alert"
-          class="text-error"
-        >
-          {{ message }}
-        </p>
-      </section>
+                {{ message }}
+              </p>
+            </th>
+            <td>
+              <v-chip
+                :color="rssColors[rssState(row)]"
+                size="small"
+                variant="tonal"
+              >
+                {{ rssState(row) }}
+              </v-chip>
+            </td>
+            <td>
+              <v-chip
+                :color="row.rss?.indirection_table == null ? 'default' : 'info'"
+                size="small"
+                variant="tonal"
+              >
+                {{ row.rss?.indirection_table == null ? 'Unknown' : [...new Set(row.rss.indirection_table)].join(', ') || 'None' }}
+              </v-chip>
+            </td>
+            <td>
+              <v-chip
+                :color="row.rss?.hash_function == null ? 'default' : 'info'"
+                size="small"
+                variant="tonal"
+              >
+                {{ hash(row.rss?.hash_function) }}
+              </v-chip>
+            </td>
+            <td>
+              <v-chip
+                :color="row.rss?.input_transformation == null ? 'default' : 'info'"
+                size="small"
+                variant="tonal"
+              >
+                {{ row.rss?.input_transformation == null ? 'Unknown' : `0x${row.rss.input_transformation.toString(16)}` }}
+              </v-chip>
+            </td>
+            <td>
+              <div
+                v-for="queue in row.queues"
+                :key="queue.name"
+                class="queue-observation"
+              >
+                <v-chip
+                  color="info"
+                  size="small"
+                  variant="tonal"
+                >
+                  {{ queue.name }}
+                </v-chip>
+              </div>
+              <span v-if="!row.queues.length">No queues.</span>
+            </td>
+            <td>
+              <div
+                v-for="queue in row.queues"
+                :key="queue.name"
+                class="queue-observation"
+              >
+                <v-chip
+                  :color="queue.irqs == null ? 'default' : 'info'"
+                  :title="queue.irq_mapping_reason ?? undefined"
+                  size="small"
+                  variant="tonal"
+                >
+                  {{ queue.irqs == null ? 'Unknown' : queue.irqs.join(', ') || 'None' }}
+                </v-chip>
+              </div>
+              <span v-if="!row.queues.length">-</span>
+            </td>
+            <td>
+              <div
+                v-for="queue in row.queues"
+                :key="queue.name"
+                class="queue-observation"
+              >
+                <v-chip
+                  :color="queue.irqs == null || queue.irqs.some(irq => row.interrupts?.find(item => item.irq === irq)?.effective_cpus == null) ? 'default' : 'info'"
+                  size="small"
+                  variant="tonal"
+                >
+                  {{ queueCpus(row, queue) }}
+                </v-chip>
+              </div>
+              <p
+                v-for="message in row.interrupts?.flatMap(irq => irq.errors) ?? []"
+                :key="message"
+                role="alert"
+                class="text-error text-caption"
+              >
+                {{ message }}
+              </p>
+              <span v-if="!row.queues.length">-</span>
+            </td>
+          </tr>
+        </tbody>
+      </v-table>
     </template>
   </section>
 </template>
+
+<style scoped>
+.rss-irq-table :deep(th),
+.rss-irq-table :deep(td) { vertical-align: top; padding-top: 8px; padding-bottom: 8px; }
+.queue-observation { min-height: 28px; white-space: nowrap; }
+</style>

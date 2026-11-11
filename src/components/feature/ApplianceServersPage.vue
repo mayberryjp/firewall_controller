@@ -22,7 +22,8 @@ const status = computed(() => store.runtime.data?.appliance_services.filter(isAp
 const sampleAvailable = computed(() => !store.runtime.stale && !status.value?.retrying && !status.value?.error && status.value?.sample_status === "available");
 const statColumns = 5;
 const syslogCounters = [
-  { key: "received_records", title: "Logs read" }, { key: "forwarded_deliveries", title: "Remote sends" },
+  { key: "received_records", title: "Logs read", color: "info" },
+  { key: "forwarded_deliveries", title: "Remote sends", color: "primary" },
 ] as const;
 const counterText = (key: typeof syslogCounters[number]["key"]) =>
   !store.runtime.data && store.runtime.loading ? "..." : formatCount(status.value?.[key]);
@@ -311,7 +312,13 @@ function remove(index: number): void {
                   :rowspan="list.length"
                   :title="store.runtime.stale ? 'Last-known service totals' : 'Service total'"
                 >
-                  {{ counterText(column.key) }}
+                  <v-chip
+                    :color="status?.[column.key] == null ? 'default' : column.color"
+                    size="small"
+                    variant="tonal"
+                  >
+                    {{ counterText(column.key) }}
+                  </v-chip>
                 </td>
               </template>
             </template>
@@ -381,7 +388,13 @@ function remove(index: number): void {
                   :rowspan="list.length"
                   :title="store.runtime.stale ? 'Last-known service totals' : 'Service total'"
                 >
-                  {{ counterText(column.key) }}
+                  <v-chip
+                    :color="status?.[column.key] == null ? 'default' : column.color"
+                    size="small"
+                    variant="tonal"
+                  >
+                    {{ counterText(column.key) }}
+                  </v-chip>
                 </td>
               </template>
             </template>
@@ -413,7 +426,13 @@ function remove(index: number): void {
               v-for="column in syslogCounters"
               :key="column.key"
             >
-              {{ counterText(column.key) }}
+              <v-chip
+                :color="status?.[column.key] == null ? 'default' : column.color"
+                size="small"
+                variant="tonal"
+              >
+                {{ counterText(column.key) }}
+              </v-chip>
             </td>
             <td />
           </template>

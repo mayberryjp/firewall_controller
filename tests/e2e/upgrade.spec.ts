@@ -44,7 +44,7 @@ test("default release checks work with installation disabled and wait for fresh 
   await expect(upgrade).toContainText("2026-10-30 01:02:03", { timeout: 15_000 });
   await expect(upgrade.getByRole("status")).toHaveText("Up to date"); await expect(check).toBeEnabled();
   expect(checks).toBe(1); expect(backend.writes).toEqual([]);
-  await expect(page.getByRole("link", { name: "Save configuration", exact: true })).toHaveText("R2026.10.29.1");
+  await expect(page.getByRole("link", { name: "Save configuration", exact: true }).locator(".config-revision")).toHaveText("R2026.10.29.1");
 });
 
 test("legacy numeric-revision appliances can log in and stage changes without software metadata", async ({ page }) => {

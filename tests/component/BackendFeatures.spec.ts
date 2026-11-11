@@ -25,6 +25,7 @@ import FieldInput from "@/components/base/FieldInput.vue";
 import PhysicalInterfaceEditor from "@/components/feature/PhysicalInterfaceEditor.vue";
 import ResourceRowEditor from "@/components/feature/ResourceRowEditor.vue";
 import ResourceFilters from "@/components/feature/ResourceFilters.vue";
+import ResourceTable from "@/components/feature/ResourceTable.vue";
 import DHCPRetryButton from "@/components/feature/DHCPRetryButton.vue";
 import ConfigDiff from "@/components/feature/ConfigDiff.vue";
 import NTPView from "@/views/NTPView.vue";
@@ -252,19 +253,50 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.findAll("th").map(header => header.text())).not.toContain("Observed enabled / runtime");
     expect(wrapper.text()).not.toContain("Capture statistics are incomplete");
     const chips = () => wrapper.findAll("tbody tr")[0]!.findAll(".status-chip").map(chip => [chip.text(), chip.attributes("data-color")]);
-    expect(chips().at(-1)).toEqual(["1,234,567", "red"]);
-    expect(chips().at(-2)).toEqual(["Running", "success"]);
+    expect(chips().at(-3)).toEqual(["1,234,567", "red"]);
+    expect(chips().at(-4)).toEqual(["Running", "success"]);
     expect(wrapper.find('[title*="capture statistics are incomplete"]').exists()).toBe(true);
     expect(store.runtime.data.softflowd[0]?.state).toBe("running");
     expect(store.draft).toBeNull();
     for (const [dropped, color] of [["0", "green"], ["5", "yellow"], ["1000", "orange"]] as const) {
       store.runtime.data = runtimeSchema.parse({ ...runtime(), softflowd: [{ name: "capture", state: "running", dropped_packets: dropped, statistics_complete: true }] });
       await flushPromises();
-      expect(chips().at(-1)![1]).toBe(color);
+      expect(chips().at(-3)![1]).toBe(color);
     }
     store.runtime.data = runtime(); await flushPromises();
-    expect(chips().at(-1)).toEqual(["—", "default"]);
+    expect(chips().at(-3)).toEqual(["—", "default"]);
     wrapper.unmount();
+  });
+  it.each([false, true])("colors export counter chips while preserving exact and unknown counts (detail=%s)", async detail => {
+    const store = useControllerStore();
+    const value = store.state.data!.desired.softflowd[0]!;
+    store.runtime.data = null; store.runtime.loading = true;
+    const wrapper = mount(ResourceTable, {
+      props: { section: "softflowd", rows: [{ value, index: 0, rowID: value.name }], total: 1, disabled: false, detail },
+      global: { stubs: { ...stubs, RouterLink: box } },
+    });
+    const chips = () => wrapper.findAll("tbody .status-chip").slice(-2).map(chip => [chip.text(), chip.attributes("data-color")]);
+    try {
+      expect(chips()).toEqual([["...", "default"], ["...", "default"]]);
+      store.runtime.loading = false; store.runtime.error = "Read failed";
+      await flushPromises();
+      expect(chips()).toEqual([["Unknown", "default"], ["Unknown", "default"]]);
+      store.runtime.error = null; store.runtime.stale = false;
+      store.runtime.data = {
+        ...runtime(), softflowd: [{ name: value.name, state: "running", exported_flows: "9007199254740993", exported_packets: "18446744073709551615" }],
+      };
+      await flushPromises();
+      expect(chips()).toEqual([["9,007,199,254,740,993", "info"], ["18,446,744,073,709,551,615", "primary"]]);
+      store.runtime.stale = true; await flushPromises();
+      expect(wrapper.findAll('[title="Last-known counters"]')).toHaveLength(2);
+      expect(chips()[0]).toEqual(["9,007,199,254,740,993", "info"]);
+      store.runtime.data = {
+        ...runtime(), softflowd: [{ name: value.name, state: "disabled", exported_flows: "0" }],
+      };
+      await flushPromises();
+      expect(chips()).toEqual([["0", "info"], ["Unknown", "default"]]);
+      expect(store.draft).toBeNull();
+    } finally { wrapper.unmount(); }
   });
   it("labels the add button Add NetFlow/IPFIX export and stages an inline enabled toggle without a live request", async () => {
     const store = useControllerStore();
@@ -2982,11 +3014,11 @@ describe("October 17 frontend workflows", () => {
   });
   it.each([
     ["running", false, "Running", "success"],
-    ["disabled", false, "Disabled", "default"],
+    ["disabled", false, "-", "default"],
     ["simulated", false, "Simulated", "info"],
     ["error", true, "Recovering", "warning"],
-    [undefined, false, "Unknown", "default"],
-  ] as const)("shows DHCP relay runtime %s in a separate status chip while editing", async (state, retrying, label, color) => {
+    [undefined, false, "-", "default"],
+  ] as const)("shows DHCP relay runtime %s in its status column while editing", async (state, retrying, label, color) => {
     const store = useControllerStore();
     store.runtime.data!.dhcp_relay = state ? [{ interface: "lab0", state, retrying }] : [];
     const wrapper = await render(DHCPRelayView, "/services/dhcp-relay");
@@ -2994,8 +3026,9 @@ describe("October 17 frontend workflows", () => {
     const cells = wrapper.findAll("tbody tr")[0]!.findAll("td");
     expect(cells).toHaveLength(7);
     expect(cells[1]!.findComponent({ name: "VTextField" }).exists()).toBe(true);
-    expect(cells[2]!.get(".status-chip").text()).toBe(label);
-    expect(cells[2]!.get(".status-chip").attributes("data-color")).toBe(color);
+    expect(cells[2]!.text()).toBe(label);
+    if (label === "-") expect(cells[2]!.find(".status-chip").exists()).toBe(false);
+    else expect(cells[2]!.get(".status-chip").attributes("data-color")).toBe(color);
     expect(cells[3]!.findComponent(stubs.VSwitch).exists()).toBe(true);
   });
   it("spans all DHCP relay columns when no interfaces are available", async () => {

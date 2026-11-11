@@ -7,14 +7,14 @@ import ApplyConfigurationDialog from "@/components/feature/ApplyConfigurationDia
 import SafetyBanner from "@/components/layout/SafetyBanner.vue";
 import TransactionActions from "@/components/feature/TransactionActions.vue";
 import { useControllerStore } from "@/stores/controller";
-import { config, state, transaction, monitor, runtime, processHealthSnapshot } from "../fixtures";
+import { config, state, transaction, monitor, runtime, processHealthSnapshot, software } from "../fixtures";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 const box = { template: "<div><slot /></div>" };
 const stubs = {
   VIcon: { template: "<span />" },
-  VBtn: { props: ["disabled", "to"], template: '<button :disabled="disabled" :data-to="to"><slot /></button>' },
+  VBtn: { props: ["disabled", "to"], template: '<button :disabled="disabled" :data-to="to"><slot name="prepend" /><slot /></button>' },
   VDialog: { props: ["modelValue"], template: '<div v-if="modelValue" role="dialog"><slot /></div>' },
   VCard: box, VCardText: box, VCardActions: box, VAlert: box,
   VMenu: { template: '<div><slot name="activator" :props="{}" /><slot /></div>' },
@@ -159,7 +159,7 @@ describe("navbar firewall status", () => {
     const wrapper = status();
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("title")).toBeUndefined();
   });
-  it("keeps only the revision visible while highlighting unsaved changes", async () => {
+  it("keeps the revision unchanged while highlighting unsaved changes", async () => {
     const store = useControllerStore(), refresh = vi.spyOn(store, "refresh").mockResolvedValue();
     store.state.data = { ...state(), revision: "2026.10.29.75" };
     const wrapper = status();
@@ -167,21 +167,46 @@ describe("navbar firewall status", () => {
     expect(wrapper.findAll("button")).toHaveLength(1);
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("data-to")).toBe("/config/changes");
     const button = wrapper.get('[aria-label="Save configuration"]');
-    expect(button.text()).toBe("R2026.10.29.75");
+    expect(button.get(".config-revision").text()).toBe("R2026.10.29.75");
     expect(button.attributes("color")).toBeUndefined();
     expect(button.find(".config-pending").exists()).toBe(false);
     stageDraft();
     await flushPromises();
-    expect(button.text()).toBe("R2026.10.29.75");
+    expect(button.get(".config-revision").text()).toBe("R2026.10.29.75");
     expect(button.attributes("color")).toBe("warning");
     expect(button.find(".config-pending").exists()).toBe(true);
     store.draft = null;
     await flushPromises();
-    expect(button.text()).toBe("R2026.10.29.75");
+    expect(button.get(".config-revision").text()).toBe("R2026.10.29.75");
     expect(button.attributes("color")).toBeUndefined();
     expect(button.find(".config-pending").exists()).toBe(false);
     expect(wrapper.find('[aria-label="Refresh firewall state"]').exists()).toBe(false);
     expect(refresh).not.toHaveBeenCalled();
+  });
+  it("shows the saved Netcontrol version below the revision with a larger save icon", async () => {
+    const store = useControllerStore(), refresh = vi.spyOn(store, "refresh").mockResolvedValue();
+    store.state.data!.desired.software = { ...software(), version: "2026.11.11.4" };
+    const wrapper = status(), button = wrapper.get('[aria-label="Save configuration"]');
+    expect(button.get(".config-revision").text()).toBe("R2026.10.29.1");
+    expect(button.get(".netcontrol-version").text()).toBe("netcontrol 2026.11.11.4");
+    expect(button.get(".save-icon").attributes("width")).toBe("24");
+    expect(button.get(".save-icon").attributes("fill")).toBe("none");
+    expect(button.get(".save-icon").attributes("stroke-width")).toBe("1.5");
+    expect(button.get(".save-icon").attributes("aria-hidden")).toBe("true");
+    store.draft = { ...config(), software: { ...software(), version: "2026.12.01.1" } };
+    await flushPromises();
+    expect(button.get(".netcontrol-version").text()).toBe("netcontrol 2026.11.11.4");
+    store.state.data = {
+      ...store.state.data!,
+      desired: { ...store.state.data!.desired, software: { ...software(), version: "2026.11.11.5" } },
+    };
+    await flushPromises();
+    expect(button.get(".netcontrol-version").text()).toBe("netcontrol 2026.11.11.5");
+    store.state.data = { ...store.state.data!, desired: config() };
+    await flushPromises();
+    expect(button.find(".netcontrol-version").exists()).toBe(false);
+    expect(refresh).not.toHaveBeenCalled();
+    wrapper.unmount();
   });
   it("reports unavailable observation separately from a healthy connection", () => {
     useControllerStore().state.error = "Read failed";
@@ -224,9 +249,9 @@ describe("navbar firewall status", () => {
     stageDraft();
     const apply = vi.spyOn(useControllerStore(), "apply"), wrapper = status();
     expect(wrapper.findAll("button")).toHaveLength(1);
-    expect(wrapper.get('[aria-label="Save configuration"]').text()).toBe("R2026.10.29.1");
+    expect(wrapper.get(".config-revision").text()).toBe("R2026.10.29.1");
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("color")).toBe("warning");
-    expect(wrapper.get('[aria-label="Save configuration"]').attributes("prepend-icon")).toBe("mdi-content-save-outline");
+    expect(wrapper.get(".save-icon").element.tagName).toBe("svg");
     await wrapper.get('[aria-label="Save configuration"]').trigger("click");
     expect(wrapper.get('[aria-label="Save configuration"]').attributes("data-to")).toBe("/config/changes");
     expect(wrapper.findComponent(ApplyConfigurationDialog).exists()).toBe(false);
@@ -241,7 +266,7 @@ describe("navbar firewall status", () => {
     store.editorDirty = true;
     await flushPromises();
     const button = wrapper.get('[aria-label="Save configuration"]');
-    expect(button.text()).toBe("R2026.10.29.1");
+    expect(button.get(".config-revision").text()).toBe("R2026.10.29.1");
     expect(button.attributes("color")).toBe("warning");
     expect(button.find(".config-pending").exists()).toBe(true);
     expect(button.attributes("disabled")).toBeDefined();

@@ -19,7 +19,21 @@ const { data: counters, loading: countersLoading, error: countersError, stale: c
 const runtimeStatus = (name: string) => store.runtime.data?.dhcp_relay.find(item => item.interface === name);
 function counter(name: string, key: "requests_forwarded" | "replies_received"): string {
   if (!counters.value && countersLoading.value) return "...";
-  return formatCount(counters.value?.interfaces.find(row => row.interface === name)?.counters?.[key]);
+  const row = counters.value?.interfaces.find(row => row.interface === name);
+  if (row?.state === "disabled" || row?.enabled === false) return "-";
+  return formatCount(row?.counters?.[key]);
+}
+function counterColor(name: string): string {
+  const row = counters.value?.interfaces.find(row => row.interface === name);
+  if (row?.state === "disabled" || row?.enabled === false) return "default";
+  const requests = row?.counters?.requests_forwarded, replies = row?.counters?.replies_received;
+  if (requests == null || replies == null) return "default";
+  return requests === replies ? "success" : "error";
+}
+function statusDisabled(name: string): boolean {
+  const status = runtimeStatus(name);
+  return status?.state === "disabled" && !status.retrying
+    || !status && links.value.find(link => link.name === name)?.dhcp_relay.enabled === false;
 }
 const statusColors: Record<string, string> = {
   running: "success", simulated: "info", waiting: "warning",
@@ -139,7 +153,9 @@ function toggle(name: string, enabled: boolean): void {
             {{ link.dhcp_relay.servers.join(", ") || "None" }}
           </td>
           <td>
+            <span v-if="statusDisabled(link.name)">-</span>
             <v-chip
+              v-else
               :color="runtimeColor(link.name)"
               size="small"
               variant="tonal"
@@ -160,10 +176,22 @@ function toggle(name: string, enabled: boolean): void {
             />
           </td>
           <td :title="countersStale ? 'Last-known counters' : undefined">
-            {{ counter(link.name, 'requests_forwarded') }}
+            <v-chip
+              :color="counterColor(link.name)"
+              size="small"
+              variant="tonal"
+            >
+              {{ counter(link.name, 'requests_forwarded') }}
+            </v-chip>
           </td>
           <td :title="countersStale ? 'Last-known counters' : undefined">
-            {{ counter(link.name, 'replies_received') }}
+            <v-chip
+              :color="counterColor(link.name)"
+              size="small"
+              variant="tonal"
+            >
+              {{ counter(link.name, 'replies_received') }}
+            </v-chip>
           </td>
           <td>
             <template v-if="editing === link.name">
