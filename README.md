@@ -189,7 +189,9 @@ plus metadata and a temporary rotation segment per stream. Old private text logs
 are preserved but not imported into these APIs. Corrupt history/storage failures
 remain explicit; no automatic deletion or repair is performed.
 Visible tabs poll every three seconds, serially draining up to four pages per
-cycle. Displayed history is bounded to 2048 entries and 2 MiB; overwrite, epoch
+cycle. Both tabs display newest entries first in recent/live and retained-history
+views, with newly fetched entries appearing at the top.
+Displayed history is bounded to 2048 entries and 2 MiB; overwrite, epoch
 reset, display eviction and capture failures remain compact inline notices.
 Cursor identity survives normal backend restart. The streams can overlap and
 are not summed or deduplicated. See the

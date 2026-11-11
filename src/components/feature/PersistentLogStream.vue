@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useLogHistory } from "@/composables/useLogHistory";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { getPersistentLog } from "@/services/netcontrol";
@@ -12,6 +12,7 @@ const { data, loading, error, stale } = useLogHistory(async (cursor, signal) => 
   const page = await getPersistentLog(props.source, { cursor, limit: 100 }, signal);
   return { page, entries: page.entries };
 }, 3000, () => `${props.source}:${mode.value}`, () => props.active, () => startCursor.value);
+const displayedEntries = computed(() => [...(data.value?.entries ?? [])].reverse());
 const { formatTimestamp, timeZone } = useTimestamps();
 function changeMode(value: string): void {
   startCursor.value = value === "history" ? data.value?.page.oldest_cursor ?? undefined : undefined;
@@ -89,7 +90,7 @@ function changeMode(value: string): void {
         <thead><tr><th>Time ({{ timeZone }})</th><th>Message</th></tr></thead>
         <tbody>
           <tr
-            v-for="entry in data.entries"
+            v-for="entry in displayedEntries"
             :key="entry.sequence"
           >
             <td class="log-time">

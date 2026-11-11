@@ -353,6 +353,36 @@ describe("diagnostic log pages", () => {
     await flushPromises();
     expect(wrapper.text()).toContain(outcome === "success" ? "syslog entry 1" : "logs.read");
   });
+  it.each([
+    ["syslog", "recent"], ["netcontrol", "recent"],
+    ["syslog", "history"], ["netcontrol", "history"],
+  ] as const)("shows newest %s entries first in %s mode and prepends polled updates", async (source, mode) => {
+    const first = persistentLog(source, "2");
+    first.entries.unshift(...persistentLog(source, "1").entries);
+    vi.mocked(api.getPersistentLog).mockResolvedValue(first);
+    const wrapper = mount(PersistentLogStream, { props: { source, active: true }, global: { stubs } });
+    await flushPromises();
+    if (mode === "history") {
+      await wrapper.get("select").setValue(mode); await flushPromises();
+      expect(api.getPersistentLog).toHaveBeenLastCalledWith(source, { cursor: `${telemetryEpoch}:0`, limit: 100 }, expect.any(AbortSignal));
+    }
+    const messages = () => wrapper.findAll("td.log-message").map(cell => cell.text());
+    expect(messages()).toEqual([`${source} entry 2`, `${source} entry 1`]);
+    expect(first.entries.map(entry => entry.sequence)).toEqual(["1", "2"]);
+
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(persistentLog(source, "3"));
+    await vi.advanceTimersByTimeAsync(3000); await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenLastCalledWith(source, { cursor: `${telemetryEpoch}:2`, limit: 100 }, expect.any(AbortSignal));
+    expect(messages()).toEqual([`${source} entry 3`, `${source} entry 2`, `${source} entry 1`]);
+
+    const empty = persistentLog(source, "3"); empty.entries = [];
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(empty);
+    await vi.advanceTimersByTimeAsync(3000); await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenLastCalledWith(source, { cursor: `${telemetryEpoch}:3`, limit: 100 }, expect.any(AbortSignal));
+    expect(messages()).toEqual([`${source} entry 3`, `${source} entry 2`, `${source} entry 1`]);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
   it("keeps separate cursors and pauses polling for inactive tabs and hidden pages", async () => {
     const wrapper = mount(SyslogLogsView, { global: { stubs } }); await flushPromises();
     expect(api.getPersistentLog).toHaveBeenCalledTimes(1);
