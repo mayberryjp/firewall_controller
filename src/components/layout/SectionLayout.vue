@@ -8,7 +8,7 @@ import { useInterfaceCapabilities } from "@/composables/useInterfaceCapabilities
 
 const props = defineProps<{ section: NavigationSection }>();
 const store = useControllerStore();
-const { error: capabilityReadError } = useInterfaceCapabilities(() => props.section.name === "diagnostics-section");
+const { error: capabilityReadError } = useInterfaceCapabilities(() => props.section.name === "networking-section");
 const pages = computed(() => props.section.pages.filter(page => page.name !== "rss-irq" || !store.rssIrqNavigation.hidden));
 const showNavigation = computed(() => props.section.pages.length > 1 || ["settings-section", "diagnostics-section"].includes(props.section.name));
 const route = useRoute();

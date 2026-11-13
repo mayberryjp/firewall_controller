@@ -679,6 +679,7 @@ or appliance acceptance.
 | `/overview` | Appliance traffic visualization: WAN above, LAN below, directional rainbow streams, interface counters and compact host metrics. Full dashboard cards live in Diagnostics > SYSTEM OVERVIEW. Disabled and observed-down diagram interfaces are hidden. |
 | `/diagnostics`, `/diagnostics/system-overview` | SYSTEM OVERVIEW: the default Diagnostics page and first navigation link; the original customizable system, interface, gateway and WireGuard dashboard, preserving its shared saved layout. WireGuard shows Peer, Last handshake, Received and Sent for enabled peers, using the WireGuard page's handshake colors. Endpoints prefer configuration, then runtime; missing samples remain Unavailable and stale runtime uses neutral colors. |
 | `/interfaces`, `/interfaces/:name` | Physical interfaces inventory and active IPv4/IPv6 addresses, excluding dummy/loopback links; inline NIC editing and explicit management/release |
+| Interfaces navigation | Also contains Interface capabilities, RSS / IRQ, RPS Configuration and NIC Offloads; their existing `/diagnostics/...` URLs remain unchanged for bookmarks and links. |
 | `/loopbacks` | Loopback creation, editing and explicit adoption; built-in `lo` and other system loopback links remain read-only |
 | `/blackhole` | The single deviceless drop target (`config.blackhole`: name and drop/unreachable/prohibit action) that static routes can use as their interface; routes only, needs `routes.write`, no drop counters |
 | `/vlans`, `/vlans/:name` | VLAN-only creation, behavior editing and deletion, parent/tag validation and dependency review |
@@ -746,7 +747,7 @@ show backend detail and are never automatically retried. After interrupted,
 uncertain or unverifiable adoption, reconnect and inspect backend recovery before
 another write; do not delete appliance state or VLANs to bypass recovery.
 
-Diagnostics > **RPS Configuration** provides controls for observed,
+Interfaces > **RPS Configuration** provides controls for observed,
 managed physical Ethernet and kernel WireGuard RX queues. Receive Packet Steering
 (RPS) distributes incoming packet processing across selected CPUs. Online logical
 CPU IDs appear as read-only processor-icon chips. WireGuard targets come
@@ -792,7 +793,7 @@ queue. No RFS counts or RPS dependencies are added automatically. RFS benefits
 local socket consumers, not general forwarding, and global
 table changes affect other applications.
 
-Diagnostics > **NIC Offloads** uses exact allowlisted Linux feature names on managed
+Interfaces > **NIC Offloads** uses exact allowlisted Linux feature names on managed
 physical Ethernet interfaces (at most 32). Select one interface to see all its
 reported settings together, using the same labeled rows as General settings and detailed descriptions
 of each feature's purpose, benefits and limitations, without categories or a separate Status view.
@@ -912,11 +913,13 @@ not scaled, unexported active flows are excluded, and UDP writes do not establis
 collector delivery. Deploy the matching
 [NetFlow counter backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-03-per-instance-netflow-export-counters).
 
-Interface capabilities shows VLAN RPS activation from the backend's effective
+Interfaces > **Interface capabilities** shows VLAN RPS activation from the backend's effective
 physical-parent observation, not raw VLAN queue masks; null activation is Unknown.
 Source metadata remains in the typed snapshot without additional explanatory UI.
-Diagnostics > **RSS / IRQ** (`/diagnostics/rss-irq`) shows enabled physical Ethernet
-interfaces in one table with colored RSS, queue/hash and IRQ/CPU chips. Disabled
+Interfaces > **RSS / IRQ** (`/diagnostics/rss-irq`) shows enabled physical Ethernet
+interfaces in one table with colored RSS, queue/hash and IRQ/CPU chips. Physical
+capability rows may use either `device` or `ethernet` as their inventory kind;
+both require hardware evidence and an enabled Ethernet configuration or runtime parent. Disabled
 interfaces, VLANs and other virtual interfaces are excluded; enabled means the
 saved interface's `up` setting or an available unmanaged parent's runtime `up`,
 not link carrier or RSS activation. Interrupt expansion and counts are omitted;
@@ -924,7 +927,7 @@ mapping errors remain inline. Unknown mappings/measurements stay neutral. Both p
 saved capability snapshot and scan only through explicit Refresh; deploy the
 matching [capability backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-06-rss-and-queue-irq-observations)
 and explicitly refresh once for new observations. No RSS/IRQ tuning is added.
-RSS / IRQ is hidden from Diagnostics navigation when a nonempty saved
+RSS / IRQ is hidden from Interfaces navigation when a nonempty saved
 snapshot shows every interface's RSS as **Not supported** or **Unknown**, including
 partial or simulated snapshots. Any Enabled or Disabled interface keeps the link
 visible. Initial pending reads, empty snapshots and failures keep the link visible;

@@ -12,6 +12,7 @@ test("RSS IRQ uses one chip table for enabled physical interfaces", async ({ pag
     { ...base, name: "vlan10", kind: "vlan", up: true, vlan: { parent: "eno1", id: 10 } },
   ];
   const snapshot = interfaceCapabilitySnapshot(), physical = snapshot.inventory.interfaces[0]!;
+  physical.kind = "device";
   physical.rss = { context: 0, indirection_table: [0, 1, 1, 3], hash_function: 1, input_transformation: 0 };
   physical.capabilities.find(feature => feature.name === "rss")!.enabled = true;
   physical.queues[0]!.irqs = [135];

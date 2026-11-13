@@ -11,7 +11,7 @@ const { snapshot, completed, loading, error, stale, refreshDenied, read } = useI
 const { formatTimestamp, timeZone } = useTimestamps();
 const interfacesPending = computed(() => !store.state.data && !store.runtime.data && (store.state.loading || store.runtime.loading));
 const rows = computed(() => sortByInterface((snapshot.value?.inventory.interfaces ?? []).filter(row => {
-  if (row.kind !== "ethernet" || !row.hardware) return false;
+  if (!["ethernet", "device"].includes(row.kind) || !row.hardware) return false;
   const configured = store.state.data?.desired.interfaces.find(link => link.name === row.name);
   if (configured) return configured.kind === "ethernet" && configured.up;
   const parent = store.runtime.data?.parent_interfaces.find(link => link.name === row.name);

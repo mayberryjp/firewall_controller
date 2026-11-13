@@ -484,7 +484,7 @@ describe("RSS / IRQ diagnostics", () => {
     expect(api.refreshInterfaceCapabilities).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
-  it("combines enabled physical interfaces while excluding disabled, VLAN and virtual interfaces", async () => {
+  it.each(["ethernet", "device"])("combines enabled physical interfaces reported as %s while excluding disabled, VLAN and virtual interfaces", async kind => {
     enablePhysicalInterface();
     enablePhysicalInterface("eno2");
     enablePhysicalInterface("eno3");
@@ -497,6 +497,7 @@ describe("RSS / IRQ diagnostics", () => {
       { name: "eno6", kind: "ethernet", available: false, up: true },
     ];
     const snapshot = interfaceCapabilitySnapshot(), physical = snapshot.inventory.interfaces[0]!;
+    physical.kind = kind;
     physical.capabilities.find(feature => feature.name === "rss")!.enabled = false;
     physical.link!.carrier = false;
     snapshot.inventory.interfaces.push(

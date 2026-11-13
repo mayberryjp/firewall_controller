@@ -139,7 +139,7 @@ test("RSS/IRQ navigation hides all-unsupported interfaces even in a partial snap
   await page.goto("/diagnostics/rss-irq");
   await expect(page.getByRole("heading", { name: "RSS / IRQ", exact: true })).toBeVisible();
   await expect(page.getByText("Not supported", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Diagnostics pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Interfaces pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(0);
   await page.route("**/api/v1/**", async route => {
     if (!new URL(route.request().url()).pathname.endsWith("/interface-capabilities/refresh")) return route.fallback();
     const snapshot = interfaceCapabilitySnapshot();
@@ -151,7 +151,7 @@ test("RSS/IRQ navigation hides all-unsupported interfaces even in a partial snap
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByText("Not supported", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("navigation", { name: "Diagnostics pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Interfaces pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(0);
   await page.route("**/api/v1/**", async route => {
     if (!new URL(route.request().url()).pathname.endsWith("/interface-capabilities/refresh")) return route.fallback();
     const snapshot = interfaceCapabilitySnapshot();
@@ -159,11 +159,11 @@ test("RSS/IRQ navigation hides all-unsupported interfaces even in a partial snap
     return route.fulfill({ json: snapshot });
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByRole("navigation", { name: "Diagnostics pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("navigation", { name: "Interfaces pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(1);
   await page.route("**/api/v1/**", async route => {
     if (!new URL(route.request().url()).pathname.endsWith("/interface-capabilities/refresh")) return route.fallback();
     return route.fulfill({ status: 503, json: { error: "Scan unavailable" } });
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(page.getByRole("navigation", { name: "Diagnostics pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("navigation", { name: "Interfaces pages", exact: true }).getByRole("tab", { name: "RSS / IRQ", exact: true })).toHaveCount(1);
 });

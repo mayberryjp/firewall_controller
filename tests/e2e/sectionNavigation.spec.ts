@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { navigationSections } from "../../src/constants/navigation";
+import { interfaceCapabilitySnapshot } from "../diagnosticsFixtures";
 
 async function connect(page: Page) {
   await mockBackend(page);
@@ -40,6 +41,34 @@ test("Firewall/NAT highlights only the current page through navigation, queries 
   await page.goto("/firewall/ingress?filter=rules#selected");
   await checkSelected(section.pages[0]!.title);
   await page.screenshot({ path: testInfo.outputPath("firewall-navigation.png"), fullPage: true, animations: "disabled" });
+});
+
+test("interface capability and tuning pages use Interfaces navigation at their existing URLs", async ({ page }, testInfo) => {
+  await connect(page);
+  const snapshot = interfaceCapabilitySnapshot();
+  snapshot.inventory.interfaces[0]!.capabilities.find(feature => feature.name === "rss")!.enabled = true;
+  await page.route("**/proxy/interface-capabilities", route => route.fulfill({ json: snapshot }));
+  await page.goto("/interfaces");
+  const navigation = page.getByRole("navigation", { name: "Interfaces pages", exact: true });
+  const entries = [
+    { title: "Interface capabilities", path: "/diagnostics/interface-capabilities" },
+    { title: "RSS / IRQ", path: "/diagnostics/rss-irq" },
+    { title: "RPS Configuration", path: "/diagnostics/rps" },
+    { title: "NIC Offloads", path: "/diagnostics/nic-offloads" },
+  ];
+  for (const entry of entries) {
+    const tab = navigation.getByRole("tab", { name: entry.title, exact: true });
+    await tab.click();
+    await expect(page).toHaveURL(new URL(entry.path, testInfo.project.use.baseURL).href);
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expect(tab).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("navigation", { name: "Diagnostics pages", exact: true })).toHaveCount(0);
+  }
+  await page.goto("/diagnostics");
+  const diagnostics = page.getByRole("navigation", { name: "Diagnostics pages", exact: true });
+  for (const entry of entries) {
+    await expect(diagnostics.getByRole("tab", { name: entry.title, exact: true })).toHaveCount(0);
+  }
 });
 
 test("section tabs retain their selection on detail pages with query strings", async ({ page }) => {

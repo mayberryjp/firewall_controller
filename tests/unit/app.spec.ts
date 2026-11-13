@@ -92,7 +92,7 @@ describe("routed navigation sections", () => {
   });
   it("keeps Config routable without a duplicate primary navigation entry", () => {
     expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]);
-    expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels"]);
+    expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels", "interface-capabilities", "rss-irq", "rps-configuration", "nic-offloads"]);
     expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors", "bgp", "bgp-peers", "bgp-routes"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
@@ -101,7 +101,7 @@ describe("routed navigation sections", () => {
   });
   it("includes Download config in Diagnostics", () => {
     const diagnostics = navigationSections.find(section => section.name === "diagnostics-section");
-    expect(diagnostics?.pages.map(page => page.name)).toEqual(["system-overview", "real-time-traffic", "firewall-drops", "possible-missing-rules", "dhcp-relay-logs", "syslog-logs", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "interface-capabilities", "rss-irq", "rps-configuration", "nic-offloads", "path-tests", "api-explorer", "download-config"]);
+    expect(diagnostics?.pages.map(page => page.name)).toEqual(["system-overview", "real-time-traffic", "firewall-drops", "possible-missing-rules", "dhcp-relay-logs", "syslog-logs", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "path-tests", "api-explorer", "download-config"]);
     expect(diagnostics?.pages.find(page => page.name === "system-overview")).toMatchObject({ title: "SYSTEM OVERVIEW", path: "/diagnostics/system-overview" });
     expect(diagnostics?.pages.find(page => page.name === "possible-missing-rules")).toMatchObject({ title: "POSSIBLE MISSING RULES", path: "/diagnostics/possible-missing-rules" });
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });

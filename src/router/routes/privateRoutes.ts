@@ -14,6 +14,10 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/interfaces/:name", name: "interface-detail", component: () => import("@/views/InterfaceDetailView.vue"), props: true, meta: { navigationPage: "interfaces" } },
     { path: "/vlans", name: "vlans", component: () => import("@/views/VLANsView.vue") },
     { path: "/vlans/:name", name: "vlan-detail", component: () => import("@/views/VLANsView.vue"), props: true, meta: { navigationPage: "vlans" } },
+    { path: "/diagnostics/interface-capabilities", name: "interface-capabilities", component: () => import("@/views/InterfaceCapabilitiesView.vue") },
+    { path: "/diagnostics/rss-irq", name: "rss-irq", component: () => import("@/views/RSSIRQView.vue") },
+    { path: "/diagnostics/rps", name: "rps-configuration", component: () => import("@/views/PerformanceControlsView.vue"), props: { mode: "rps" } },
+    { path: "/diagnostics/nic-offloads", name: "nic-offloads", component: () => import("@/views/PerformanceControlsView.vue"), props: { mode: "offloads" } },
   ],
   "routing-section": [
     { path: "/routes", name: "routes", component: () => import("@/views/RoutesView.vue") },
@@ -51,7 +55,6 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   "diagnostics-section": [
     { path: "/diagnostics/dhcp-relay-logs", name: "dhcp-relay-logs", component: () => import("@/views/DHCPRelayLogsView.vue") },
     { path: "/diagnostics/syslog", name: "syslog-logs", component: () => import("@/views/SyslogLogsView.vue") },
-    { path: "/diagnostics/rss-irq", name: "rss-irq", component: () => import("@/views/RSSIRQView.vue") },
     { path: "/diagnostics/firewall-drops", name: "firewall-drops", component: () => import("@/views/FirewallDropsView.vue") },
     { path: "/diagnostics/possible-missing-rules", name: "possible-missing-rules", component: () => import("@/views/PossibleMissingRulesView.vue") },
     { path: "/diagnostics/traffic", name: "real-time-traffic", component: () => import("@/views/RealTimeTrafficView.vue") },
@@ -60,9 +63,6 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/diagnostics/process-health", name: "process-health", component: () => import("@/views/ProcessHealthView.vue") },
     { path: "/diagnostics/interface-drops", name: "interface-drops", component: () => import("@/views/InterfaceDropsView.vue") },
     { path: "/diagnostics/qdiscs", name: "qdiscs", component: () => import("@/views/QdiscsView.vue") },
-    { path: "/diagnostics/interface-capabilities", name: "interface-capabilities", component: () => import("@/views/InterfaceCapabilitiesView.vue") },
-    { path: "/diagnostics/rps", name: "rps-configuration", component: () => import("@/views/PerformanceControlsView.vue"), props: { mode: "rps" } },
-    { path: "/diagnostics/nic-offloads", name: "nic-offloads", component: () => import("@/views/PerformanceControlsView.vue"), props: { mode: "offloads" } },
     { path: "/diagnostics/path-tests", name: "path-tests", component: () => import("@/views/PathTestsView.vue") },
     { path: "/diagnostics/tcp-windowing", name: "tcp-windowing", component: () => import("@/views/TCPWindowingView.vue") },
     { path: "/diagnostics/capture-details", name: "capture-details", component: () => import("@/views/CaptureDetailsView.vue") },
