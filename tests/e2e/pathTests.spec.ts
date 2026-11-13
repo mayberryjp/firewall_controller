@@ -6,7 +6,7 @@ import { interfaceCapabilitySnapshot } from "../diagnosticsFixtures";
 import { encodeJson } from "../../src/services/json";
 import type { PathTestStatus } from "../../src/services/pathTests";
 
-test("paired diagnostics require explicit approval, preserve cleanup ownership and allow native cancellation", async ({ page }, testInfo) => {
+test("paired diagnostics require explicit approval, preserve cleanup ownership and allow native cancellation", async ({ page, isMobile }, testInfo) => {
   const initial = config(); initial.system = { hostname: "test", domain: "example.test", timezone: "Asia/Kolkata" };
   const backend = await mockBackend(page, { initialConfig: initial, discoveredInterfaces: pathTestInterfaces() });
   let current: PathTestStatus = pathTestStatus(), starts = 0, cancels = 0, scans = 0;
@@ -87,11 +87,17 @@ test("paired diagnostics require explicit approval, preserve cleanup ownership a
   await expect(start).toBeDisabled();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("paired-path-test-results.png"), fullPage: true, animations: "disabled" });
-  const navigation = page.getByRole("navigation", { name: "Diagnostics pages" });
-  await navigation.getByRole("tab", { name: "Interface capabilities", exact: true }).click();
+  const diagnosticsNavigation = page.getByRole("navigation", { name: "Diagnostics pages" });
+  const interfacesNavigation = page.getByRole("navigation", { name: "Interfaces pages" });
+  const mainNavigation = page.getByRole("navigation", { name: "Main navigation" });
+  if (isMobile) await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
+  await mainNavigation.getByRole("link", { name: "Interfaces", exact: true }).click();
+  await interfacesNavigation.getByRole("tab", { name: "Interface capabilities", exact: true }).click();
   await expect(page.getByRole("button", { name: "Refresh capabilities", exact: true })).toBeDisabled();
   expect(scans).toBe(0);
-  await navigation.getByRole("tab", { name: "Path MTU/MSS", exact: true }).click();
+  if (isMobile) await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
+  await mainNavigation.getByRole("link", { name: "Diagnostics", exact: true }).click();
+  await diagnosticsNavigation.getByRole("tab", { name: "Path MTU/MSS", exact: true }).click();
   await view.getByRole("button", { name: "Cancel and restore", exact: true }).click();
   await expect(view.getByRole("heading", { name: "restoring", exact: true })).toBeVisible();
   await expect(view).toContainText("Restoration: pending");
@@ -101,7 +107,9 @@ test("paired diagnostics require explicit approval, preserve cleanup ownership a
   await view.getByRole("button", { name: "Refresh status and interfaces", exact: true }).click();
   await expect(view).toContainText("The temporary-state lease is released");
   await expect(view.getByRole("button", { name: "Cancel and restore", exact: true })).toHaveCount(0);
-  await navigation.getByRole("tab", { name: "Interface capabilities", exact: true }).click();
+  if (isMobile) await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
+  await mainNavigation.getByRole("link", { name: "Interfaces", exact: true }).click();
+  await interfacesNavigation.getByRole("tab", { name: "Interface capabilities", exact: true }).click();
   await expect(page.getByRole("button", { name: "Refresh capabilities", exact: true })).toBeEnabled();
   expect(starts).toBe(1); expect(cancels).toBe(1); expect(scans).toBe(0); expect(backend.writes).toEqual([]);
 });

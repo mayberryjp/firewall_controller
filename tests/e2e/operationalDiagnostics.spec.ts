@@ -315,7 +315,7 @@ test("dedicated RPS and offload pages preserve saved RFS through SAVE and confir
   await controls.getByRole("button", { name: "STAGE CHANGES", exact: true }).click();
   await expect(controls.getByRole("checkbox", { name: "Manage RFS tables", exact: true })).toHaveCount(0);
   await expect(controls.getByRole("table", { name: "NIC offload settings", exact: true })).toHaveCount(0);
-  const navigation = page.getByRole("navigation", { name: "Diagnostics pages" });
+  const navigation = page.getByRole("navigation", { name: "Interfaces pages" });
   await navigation.getByRole("tab", { name: "NIC Offloads", exact: true }).click();
   const offloads = page.getByRole("region", { name: "NIC Offloads", exact: true });
   const chooseOffload = async (label: string, value: string) => {
@@ -383,8 +383,8 @@ test("a new WireGuard tunnel and an explicitly unverified RPS queue share the re
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("row", { name: /TUN_WG0/ })).toBeVisible();
   if (isMobile) await page.getByRole("button", { name: "Open navigation menu", exact: true }).click();
-  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Diagnostics", exact: true }).click();
-  await page.getByRole("navigation", { name: "Diagnostics pages" }).getByRole("tab", { name: "RPS Configuration", exact: true }).click();
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Interfaces", exact: true }).click();
+  await page.getByRole("navigation", { name: "Interfaces pages" }).getByRole("tab", { name: "RPS Configuration", exact: true }).click();
   const controls = page.getByRole("region", { name: "RPS Configuration", exact: true });
   await expect(controls.getByRole("checkbox", { name: "Enable RPS for tun_wg0/rx-0", exact: true })).toHaveCount(0);
   await controls.getByRole("combobox", { name: "New WireGuard interface", exact: true }).press("ArrowDown");
