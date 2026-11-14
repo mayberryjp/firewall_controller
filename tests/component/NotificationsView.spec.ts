@@ -44,6 +44,20 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; useControllerStore().$dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("Notification settings", () => {
+  it("places a standard primary test button after the active and delivery chips in one aligned group", async () => {
+    vi.mocked(getDiscordStatus).mockResolvedValue({ ...discordStatus(), state: "ready", enabled: true });
+    await start();
+    const group = wrapper!.get('[aria-label="Delivery statistics"]');
+    expect(group.classes()).toContain("align-center");
+    expect([...group.element.children].map(child => child.textContent?.trim())).toEqual([
+      "Active", "Delivered: 0", "Failed: 0", "Send Discord test",
+    ]);
+    const button = group.get("button");
+    expect(button.attributes("color")).toBe("primary");
+    expect(button.attributes("prepend-icon")).toBe("mdi-send-outline");
+    expect(button.attributes("variant")).toBeUndefined();
+    expect(button.attributes("size")).toBeUndefined();
+  });
   it("tests the committed webhook in the status row even with alerts disabled, preserving unsaved edits", async () => {
     const store = useControllerStore();
     store.state.data!.desired.discord = { ...discordDefaults(), webhook_ref: webhookReference };

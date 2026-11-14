@@ -302,19 +302,19 @@ async function stage(): Promise<void> {
           Notification status
         </div>
         <div class="setting-control">
-          <v-chip
-            v-if="deliveryStatus"
-            :color="deliveryStatus.color"
-            variant="tonal"
-            size="small"
-          >
-            {{ deliveryStatus.label }}
-          </v-chip>
           <div
             role="group"
             aria-label="Delivery statistics"
-            class="d-flex flex-wrap ga-2"
+            class="d-flex flex-wrap align-center ga-2"
           >
+            <v-chip
+              v-if="deliveryStatus"
+              :color="deliveryStatus.color"
+              variant="tonal"
+              size="small"
+            >
+              {{ deliveryStatus.label }}
+            </v-chip>
             <v-chip
               color="success"
               variant="tonal"
@@ -329,6 +329,16 @@ async function stage(): Promise<void> {
             >
               Failed: {{ status.failed }}
             </v-chip>
+            <v-btn
+              type="button"
+              prepend-icon="mdi-send-outline"
+              color="primary"
+              :loading="testing"
+              :disabled="testBlocked"
+              @click="sendTest"
+            >
+              Send Discord test
+            </v-btn>
           </div>
           <p
             v-if="status.error"
@@ -337,17 +347,6 @@ async function stage(): Promise<void> {
           >
             {{ status.error }}
           </p>
-          <v-btn
-            type="button"
-            size="small"
-            variant="tonal"
-            color="primary"
-            :loading="testing"
-            :disabled="testBlocked"
-            @click="sendTest"
-          >
-            Send Discord test
-          </v-btn>
           <p class="setting-desc">
             Uses the saved webhook, even with alerts disabled. Commit a new webhook before testing.
           </p>

@@ -102,6 +102,16 @@ test("Notifications matches General Settings and privately stages Discord throug
   await expect(settings.locator(".setting-row").nth(1).locator(".setting-name")).toHaveText("Replacement webhook URL");
   const sendTest = settings.getByRole("button", { name: "Send Discord test", exact: true });
   await expect(settings.locator(".setting-row").last().getByRole("button", { name: "Send Discord test" })).toBeVisible();
+  await expect(sendTest).toHaveClass(/bg-primary/);
+  await expect(sendTest).toHaveClass(/v-btn--variant-elevated/);
+  await expect(sendTest).toHaveClass(/v-btn--size-default/);
+  if (!isMobile) {
+    const group = settings.getByRole("group", { name: "Delivery statistics" });
+    const failed = await group.locator(".v-chip").last().boundingBox();
+    const button = await sendTest.boundingBox();
+    expect(button!.x).toBeGreaterThan(failed!.x + failed!.width);
+    expect(button!.y + button!.height / 2).toBeCloseTo(failed!.y + failed!.height / 2, 0);
+  }
   await sendTest.click();
   await expect(settings).toContainText("Backend: 2026.11.14.1; configuration: 2026.11.14.3");
   await expect(settings.locator(".v-chip")).toHaveText(["Active", "Delivered: 7", "Failed: 0"]);

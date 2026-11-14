@@ -474,7 +474,7 @@ notifications show only the counts, without a disabled chip or session caption.
 The simulator never sends. Backend deployment and authorized native testing are
 separate; protect/back up private webhook and first-seen index storage.
 
-**Send Discord test**, at the bottom of the Notification status row, explicitly
+**Send Discord test**, beside the status and delivery chips in the Notification status row, explicitly
 tests the committed webhook using `discord.write`, even with alerts disabled.
 It sends an empty POST to `/api/v1/services/discord/test` without automatically
 retrying. Success identifies backend and configuration versions, refreshes status,
