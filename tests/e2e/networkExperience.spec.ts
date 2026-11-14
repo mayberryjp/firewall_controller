@@ -1,0 +1,55 @@
+import { expect, test } from "@playwright/test";
+import { mockBackend } from "./mockBackend";
+import { experienceHistory, experienceLatest } from "../networkExperienceFixtures";
+import { encodeJson } from "../../src/services/json";
+
+test("NETWORK EXPERIENCE shows compact colored rows and selected-host history without writes", async ({ page }, testInfo) => {
+  const backend = await mockBackend(page);
+  const data = experienceLatest(), second = structuredClone(data.hosts[0]!);
+  second.ip_address = "2001:db8:20::20"; second.address_family = "ipv6";
+  second.sample = null; second.configured_name = "Garden sensor";
+  second.metadata.classification = "Garden Temperature"; second.metadata.icon = "https://invalid.example/icon.svg";
+  data.hosts.push(second);
+  const historyRequests: string[] = [];
+  await page.route("**/proxy/statistics/host-experience/latest?*", route =>
+    route.fulfill({ contentType: "application/json", body: encodeJson(data) }));
+  await page.route("**/proxy/statistics/host-experience/history?*", route => {
+    historyRequests.push(new URL(route.request().url()).searchParams.get("address")!);
+    return route.fulfill({ contentType: "application/json", body: encodeJson(experienceHistory()) });
+  });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/diagnostics/network-experience");
+  const view = page.getByRole("region", { name: "Network experience", exact: true });
+  await expect(page.getByRole("tab", { name: "NETWORK EXPERIENCE", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(view.locator("tbody tr")).toHaveCount(2);
+  await expect(view.locator("tbody tr").first()).toContainText("Front Door Camera");
+  await expect(view.locator("tbody tr").first()).toContainText("Excellent");
+  await expect(view.locator("tbody tr").first().locator(".v-chip").filter({ hasText: "Excellent · 100" })).toHaveClass(/text-success/);
+  await expect(view.locator(".host-icon").first()).toHaveAttribute("data-device-icon", "IP_CAMERA");
+  await expect(view.locator(".host-icon").nth(1)).toHaveAttribute("data-device-icon", "DEFAULT");
+  const icon = await view.locator(".host-icon").first().boundingBox();
+  expect(icon?.width).toBe(18); expect(icon?.height).toBe(18);
+  expect(historyRequests).toEqual([]);
+  await expect(view.locator("tbody tr").nth(1)).toContainText("Waiting");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("network-experience-rows.png"), fullPage: true, animations: "disabled" });
+  await view.getByRole("button", { name: "View experience history for Front door camera (192.0.2.20)", exact: true }).click();
+  const history = page.getByRole("region", { name: "Selected host experience history", exact: true });
+  await expect(history.locator(".apexcharts-canvas")).toBeVisible();
+  await expect(history.locator(".apexcharts-marker").first()).toBeVisible();
+  await expect(history).toContainText("Incomplete coverage");
+  expect(historyRequests).toEqual(["192.0.2.20"]);
+  await history.locator(".history-metric .v-field").click();
+  await page.getByRole("option", { name: "Passive timing (ms)", exact: true }).click();
+  await expect(history).toContainText("Remote-path ACK p95");
+  await expect(history).toContainText("Host-path ACK p95");
+  await page.screenshot({ path: testInfo.outputPath("network-experience-history.png"), fullPage: true, animations: "disabled" });
+  await history.getByRole("button", { name: "Close host history" }).click();
+  await expect(history).toHaveCount(0);
+  expect(backend.writes).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

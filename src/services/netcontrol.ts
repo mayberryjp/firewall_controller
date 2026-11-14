@@ -10,7 +10,7 @@ import { rpsDiagnosticsSchema } from "@/services/rps";
 import { pathTestRequestSchema, pathTestStatusSchema, type PathTestRequest } from "@/services/pathTests";
 import { tuningSettings } from "@/services/tuning";
 import { kernelTunablesCatalogSchema, kernelTunablesSchema, conntrackPreserved } from "@/services/conntrack";
-import { discordConfigSchema, discordDefaults, discordStatusSchema, discordWebhookSchema, discordWebhookReferenceSchema } from "@/services/discord";
+import { discordConfigSchema, discordDefaults, discordStatusSchema, discordTestSchema, discordWebhookSchema, discordWebhookReferenceSchema, redactDiscordError } from "@/services/discord";
 import { dateVersionSchema } from "@/services/versions";
 import { ruleOwnershipPreserved } from "@/services/ruleOwnership";
 import { firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, type FirewallDenyQuery } from "@/services/firewallTelemetry";
@@ -111,6 +111,15 @@ export async function getDiscordStatus(signal?: AbortSignal) {
     const status = failure instanceof ApiFailure ? failure.status : undefined;
     throw new ApiFailure(`Discord status unavailable${status ? ` (HTTP ${status})` : ""}. Check backend support and state.read permission.`,
       status, undefined, false, failure instanceof ApiFailure && failure.incompatible);
+  }
+}
+export async function testDiscordWebhook(signal?: AbortSignal) {
+  try { return await request("POST", "/services/discord/test", discordTestSchema, undefined, signal); }
+  catch (failure) {
+    const status = failure instanceof ApiFailure ? failure.status : undefined;
+    const detail = failure instanceof Error ? redactDiscordError(failure.message) : "Discord test failed.";
+    throw new ApiFailure(`${detail} Check saved webhook settings, discord.write permission and native worker availability. Delivery may have occurred; no automatic retry was made.`,
+      status, undefined, !(failure instanceof ApiFailure) || failure.uncertain, failure instanceof ApiFailure && failure.incompatible);
   }
 }
 export async function uploadDiscordWebhook(webhookUrl: string, signal?: AbortSignal) {

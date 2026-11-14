@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import NotificationsView from "@/views/NotificationsView.vue";
 import { useControllerStore } from "@/stores/controller";
-import { getDiscordStatus, uploadDiscordWebhook } from "@/services/netcontrol";
+import { getDiscordStatus, testDiscordWebhook, uploadDiscordWebhook } from "@/services/netcontrol";
 import { cloneConfig, requiredPermissions } from "@/services/configuration";
 import { state } from "../fixtures";
 import { discordStatus, webhookReference, webhookUrl } from "../discordFixtures";
@@ -11,7 +11,7 @@ import { discordDefaults } from "@/services/discord";
 
 vi.mock("@/services/netcontrol", async importOriginal => ({
   ...await importOriginal<typeof import("@/services/netcontrol")>(),
-  getDiscordStatus: vi.fn(), uploadDiscordWebhook: vi.fn(),
+  getDiscordStatus: vi.fn(), testDiscordWebhook: vi.fn(), uploadDiscordWebhook: vi.fn(),
 }));
 const stubs = {
   VDivider: true,
@@ -44,6 +44,56 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); wrapper = undefined; useControllerStore().$dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("Notification settings", () => {
+  it("tests the committed webhook in the status row even with alerts disabled, preserving unsaved edits", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.discord = { ...discordDefaults(), webhook_ref: webhookReference };
+    vi.spyOn(store, "refreshPlatformStatus").mockResolvedValue();
+    let resolve!: (value: { delivered: true; backend_version: string; config_version: string; failed: "0" }) => void;
+    vi.mocked(testDiscordWebhook).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    await start(); await secret().setValue(webhookUrl);
+    const button = wrapper!.findAll("button").find(button => button.text() === "Send Discord test")!;
+    expect(button.element.closest(".setting-row")?.textContent).toContain("Notification status");
+    await button.trigger("click");
+    expect(button.attributes("disabled")).toBeDefined();
+    await button.trigger("click");
+    expect(testDiscordWebhook).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    resolve({ delivered: true, backend_version: "2026.11.14.1", config_version: "2026.11.14.3", failed: "0" });
+    await flushPromises();
+    expect(wrapper!.text()).toContain("Backend: 2026.11.14.1; configuration: 2026.11.14.3");
+    expect(secret().element.value).toBe(webhookUrl);
+    expect(store.editorDirty).toBe(true);
+    expect(store.draft).toBeNull();
+    expect(store.refreshPlatformStatus).toHaveBeenCalledOnce();
+    expect(getDiscordStatus).toHaveBeenCalledTimes(2);
+  });
+  it("shows failed test feedback without clearing delivery failures or automatically retrying", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.discord = { ...discordDefaults(), webhook_ref: webhookReference };
+    vi.mocked(getDiscordStatus).mockResolvedValue({ ...discordStatus(), failed: "7" });
+    vi.mocked(testDiscordWebhook).mockRejectedValueOnce(new Error("HTTP 503: Discord rejected delivery"));
+    await start();
+    await wrapper!.findAll("button").find(button => button.text() === "Send Discord test")!.trigger("click"); await flushPromises();
+    expect(wrapper!.get('[role="alert"]').text()).toContain("Discord rejected");
+    expect(wrapper!.text()).toContain("Failed: 7");
+    expect(testDiscordWebhook).toHaveBeenCalledOnce();
+  });
+  it("disables testing without a committed webhook and ignores late replies from a disconnected device", async () => {
+    await start();
+    const button = () => wrapper!.findAll("button").find(button => button.text() === "Send Discord test")!;
+    expect(button().attributes("disabled")).toBeDefined();
+    const store = useControllerStore();
+    store.state.data = { ...store.state.data!, desired: { ...store.state.data!.desired, discord: { ...discordDefaults(), webhook_ref: webhookReference } } };
+    await flushPromises();
+    let resolve!: (value: { delivered: true; backend_version: string; config_version: string; failed: "0" }) => void;
+    vi.mocked(testDiscordWebhook).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    await button().trigger("click");
+    const signal = vi.mocked(testDiscordWebhook).mock.calls[0]![0]!;
+    store.disconnect(); await flushPromises();
+    expect(signal.aborted).toBe(true);
+    resolve({ delivered: true, backend_version: "2026.11.14.1", config_version: "2026.11.14.3", failed: "0" });
+    await flushPromises();
+    expect(wrapper!.text()).not.toContain("Test accepted");
+  });
   it("provides independent default-off category switches in the existing row layout", async () => {
     await start();
     for (const label of ["Broadcast drop notifications", "TCP FIN/RST/empty ACK notifications"]) {
@@ -91,7 +141,7 @@ describe("Notification settings", () => {
     expect(secret().attributes("type")).toBe("password");
     expect(wrapper!.get(".setting-field").attributes("variant")).toBeUndefined();
     expect(save().attributes("prepend-icon")).toBe("mdi-content-save-outline");
-    expect(wrapper!.findAll("button").map(button => button.text())).toEqual(["Save"]);
+    expect(wrapper!.findAll("button").map(button => button.text())).toEqual(["Send Discord test", "Save"]);
     expect(wrapper!.findAll("details, [role='dialog']")).toHaveLength(0);
     expect(enabled().element.checked).toBe(false);
     expect(save().attributes("disabled")).toBeDefined();

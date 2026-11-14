@@ -6,7 +6,7 @@ import { encodeJson } from "../../src/services/json";
 test("Notifications matches General Settings and privately stages Discord through SAVE and explicit confirmation", async ({ page, isMobile }, testInfo) => {
   const backend = await mockBackend(page);
   const longWebhookUrl = `${webhookUrl}${"a".repeat(200)}`;
-  let currentStatus = discordStatus(), uploads = 0;
+  let currentStatus = discordStatus(), uploads = 0, tests = 0;
   const dialogs: string[] = [];
   page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
   await page.route("**/proxy/services/discord/status", route => route.fulfill({ contentType: "application/json", body: encodeJson(currentStatus) }));
@@ -15,6 +15,15 @@ test("Notifications matches General Settings and privately stages Discord throug
     expect(route.request().postDataJSON()).toEqual({ webhook_url: longWebhookUrl });
     uploads++;
     return route.fulfill({ status: 201, contentType: "application/json", body: encodeJson({ webhook_ref: webhookReference }) });
+  });
+  await page.route("**/proxy/services/discord/test", route => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postData()).toBeNull();
+    tests++;
+    currentStatus = { ...currentStatus, failed: "0", error: null };
+    return route.fulfill({ contentType: "application/json", body: encodeJson({
+      delivered: true, backend_version: "2026.11.14.1", config_version: "2026.11.14.3", failed: "0",
+    }) });
   });
   await page.goto("/connect");
   await page.getByLabel("Registry admin password").fill("registry-test-password");
@@ -30,7 +39,8 @@ test("Notifications matches General Settings and privately stages Discord throug
   ]);
   await expect(settings.getByRole("heading", { name: "Firewall drop notifications", exact: true })).toBeVisible();
   await expect(settings).not.toContainText("Committed delivery");
-  await expect(settings.getByRole("button")).toHaveCount(1);
+  await expect(settings.getByRole("button")).toHaveCount(2);
+  await expect(settings.getByRole("button", { name: "Send Discord test", exact: true })).toBeDisabled();
   await expect(settings.locator("details, [role='dialog']")).toHaveCount(0);
   await expect(settings.locator(".v-chip")).toHaveText(["Delivered: 0", "Failed: 0"]);
   await expect(settings.locator(".v-chip").first()).toHaveClass(/text-success/);
@@ -90,6 +100,12 @@ test("Notifications matches General Settings and privately stages Discord throug
   await expect(secret).toHaveValue("");
   await expect(settings).toContainText("Replacement webhook URL");
   await expect(settings.locator(".setting-row").nth(1).locator(".setting-name")).toHaveText("Replacement webhook URL");
+  const sendTest = settings.getByRole("button", { name: "Send Discord test", exact: true });
+  await expect(settings.locator(".setting-row").last().getByRole("button", { name: "Send Discord test" })).toBeVisible();
+  await sendTest.click();
+  await expect(settings).toContainText("Backend: 2026.11.14.1; configuration: 2026.11.14.3");
+  await expect(settings.locator(".v-chip")).toHaveText(["Active", "Delivered: 7", "Failed: 0"]);
+  expect(tests).toBe(1);
   await enable.uncheck();
   await settings.getByRole("button", { name: "Save", exact: true }).click();
   await expect(settings).toContainText("Notification changes staged");

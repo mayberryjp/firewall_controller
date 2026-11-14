@@ -31,6 +31,25 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("sends a bodyless Discord test once and keeps backend/config versions distinct", async () => {
+    const result = { delivered: true, backend_version: "2026.11.14.1", config_version: "2026.11.14.3", failed: "0" };
+    body = encodeJson(result);
+    expect(await net.testDiscordWebhook()).toEqual(result);
+    expect(captured).toMatchObject({ method: "post", url: "/services/discord/test" });
+    expect(captured?.data).toBeUndefined();
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it.each([403, 409, 503])("keeps Discord test HTTP %s failures actionable, redacted and unretried", async code => {
+    status = code; body = encodeJson({ error: `Delivery rejected for ${webhookUrl}` });
+    try { await net.testDiscordWebhook(); expect.fail("Expected rejection"); }
+    catch (failure) {
+      expect(failure).toBeInstanceOf(ApiFailure);
+      expect(String(failure)).not.toContain(webhookUrl);
+      expect(String(failure)).toContain("no automatic retry");
+      expect(String(failure)).toContain("discord.write");
+    }
+    expect(adapter).toHaveBeenCalledOnce();
+  });
   it("reads DHCP diagnostics through bodyless authenticated GETs with exact cursors", async () => {
     body = encodeJson(relayStatistics());
     expect(await net.getDHCPRelayStatistics()).toEqual(relayStatistics());

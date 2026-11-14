@@ -1,4 +1,10 @@
 import { z } from "zod";
+import { dateVersionSchema } from "@/services/versions";
+
+export const discordTestSchema = z.object({
+  delivered: z.literal(true), backend_version: dateVersionSchema, config_version: dateVersionSchema,
+  failed: z.literal("0"),
+});
 
 const reference = z.string().regex(/^(?:|[a-f0-9]{32})$/, "Use a stored Discord webhook reference.");
 export interface DiscordConfig { enabled: boolean; webhook_ref: string; notify_broadcast: boolean; notify_tcp_closures: boolean }

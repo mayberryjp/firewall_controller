@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, stableJson, validateConfig } from "@/services/configuration";
-import { getDiscordStatus, uploadDiscordWebhook } from "@/services/netcontrol";
+import { getDiscordStatus, testDiscordWebhook, uploadDiscordWebhook } from "@/services/netcontrol";
 import { discordConfigSchema, discordDefaults, discordWebhookSchema, type DiscordStatus } from "@/services/discord";
 import { isInitialLoad } from "@/services/datasets";
 
@@ -18,6 +18,12 @@ const currentSettings = computed(() => stableJson(discordConfigSchema.parse(sele
 const dirty = computed(() => stableJson(form.value) !== initial.value || Boolean(webhook.value));
 const changed = computed(() => currentSettings.value !== initial.value);
 const status = ref<DiscordStatus | null>(null), statusLoading = ref(false), statusError = ref(""), statusStale = ref(true);
+const testing = ref(false), testNotice = ref(""), testError = ref("");
+const testBlocked = computed(() => testing.value || saving.value || loading.value || Boolean(readError.value) ||
+  statusStale.value || store.state.stale || !store.connected || !store.state.data?.desired.discord?.webhook_ref ||
+  !status.value || !["ready", "paused", "disabled"].includes(status.value.state) ||
+  Boolean(store.readOnlyReason || store.operationBlockedReason) || store.incompatible);
+let testRequest: AbortController | undefined;
 const deliveryStates: Record<DiscordStatus["state"], { label: string; color: string } | null> = {
   starting: { label: "Starting", color: "info" },
   disabled: null,
@@ -81,6 +87,7 @@ function reset(): void {
 watch(currentSettings, () => { if (!dirty.value) reset(); }, { flush: "sync" });
 watch(dirty, value => { store.editorDirty = value; }, { flush: "sync" });
 watch(() => [store.connected, store.sessionVersion], () => {
+  testRequest?.abort(); testing.value = false; testNotice.value = ""; testError.value = "";
   upload?.abort(); saving.value = false; reset();
   clearTimeout(timer); statusRequest?.abort(); statusRequest = undefined;
   status.value = null; statusError.value = ""; statusLoading.value = false; statusStale.value = true; failures = 0;
@@ -89,9 +96,27 @@ watch(() => [store.connected, store.sessionVersion], () => {
 document.addEventListener("visibilitychange", retry);
 window.addEventListener("online", retry);
 onUnmounted(() => {
+  testRequest?.abort();
   alive = false; webhook.value = ""; upload?.abort(); statusRequest?.abort(); clearTimeout(timer); store.editorDirty = false;
   document.removeEventListener("visibilitychange", retry); window.removeEventListener("online", retry);
 });
+async function sendTest(): Promise<void> {
+  if (testBlocked.value) return;
+  const controller = new AbortController(), session = store.sessionVersion;
+  testRequest = controller; testing.value = true; testNotice.value = ""; testError.value = "";
+  const current = () => alive && !controller.signal.aborted && session === store.sessionVersion;
+  try {
+    const result = await testDiscordWebhook(controller.signal);
+    if (!current()) return;
+    testNotice.value = `Test accepted by Discord. Backend: ${result.backend_version}; configuration: ${result.config_version}.`;
+    statusRequest?.abort(); statusRequest = undefined; statusLoading.value = false;
+    void readStatus(); void store.refreshPlatformStatus();
+  } catch (failure) {
+    if (current()) testError.value = failure instanceof Error ? failure.message : "Unable to test the saved Discord webhook.";
+  } finally {
+    if (current()) { testing.value = false; testRequest = undefined; }
+  }
+}
 async function stage(): Promise<void> {
   error.value = ""; notice.value = "";
   if (blocked.value || !selected.value) {
@@ -311,6 +336,34 @@ async function stage(): Promise<void> {
             class="setting-desc text-error"
           >
             {{ status.error }}
+          </p>
+          <v-btn
+            type="button"
+            size="small"
+            variant="tonal"
+            color="primary"
+            :loading="testing"
+            :disabled="testBlocked"
+            @click="sendTest"
+          >
+            Send Discord test
+          </v-btn>
+          <p class="setting-desc">
+            Uses the saved webhook, even with alerts disabled. Commit a new webhook before testing.
+          </p>
+          <p
+            v-if="testNotice"
+            role="status"
+            class="setting-desc text-success"
+          >
+            {{ testNotice }}
+          </p>
+          <p
+            v-if="testError"
+            role="alert"
+            class="setting-desc text-error"
+          >
+            {{ testError }}
           </p>
         </div>
       </div>

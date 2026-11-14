@@ -474,6 +474,39 @@ notifications show only the counts, without a disabled chip or session caption.
 The simulator never sends. Backend deployment and authorized native testing are
 separate; protect/back up private webhook and first-seen index storage.
 
+**Send Discord test**, at the bottom of the Notification status row, explicitly
+tests the committed webhook using `discord.write`, even with alerts disabled.
+It sends an empty POST to `/api/v1/services/discord/test` without automatically
+retrying. Success identifies backend and configuration versions, refreshes status,
+and resets Discord delivery failures only; unsaved form edits remain intact.
+Deploy a backend supporting the November 14 handoff before using this action.
+
+### Network experience
+
+Diagnostics > **NETWORK EXPERIENCE** (`/diagnostics/network-experience`) displays
+one compact row per protected IP on a managed LAN: small device icon, configured
+name, original-case local description, network, experience/confidence, activity,
+download/upload, one-hour observed usage and last seen in the saved system timezone.
+IPv4 and IPv6 addresses remain separate rows. Colored chips distinguish measured
+experience and traffic; missing/idle evidence never defaults to a healthy score.
+Stale measurements retain neutral colors and expired observations disappear.
+
+The read-only `state.read` client completes all `/statistics/host-experience/latest`
+cursor pages before replacing the table, restarting on invalidation. Polls do not
+overlap and pause while hidden. Selecting a host loads only that IP's one-hour
+history, with throughput, experience, passive timing, drops, TCP repeats and
+receiver-pressure graphs. Missing slots and ownership/epoch changes break lines.
+Counts remain exact decimal strings; history charts cannot plot counts beyond
+JavaScript's exact integer range. Usage is observed coverage, not 24-hour usage;
+last seen is traffic observation, not uptime or reachability. Managed policy drops
+do not penalize the backend's experience score.
+
+This requires the accepting native Linux backend from the November 14
+[implementation handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-14.md#2026-11-14-04-protected-host-experience-implementation),
+including its nft/NFLOG capabilities and private storage. Unsupported backends and
+actual read failures are shown inline; initial reads use neutral loading feedback.
+Frontend mock tests do not establish native collection or appliance acceptance.
+
 ### Conntrack tuning
 
 Settings > **CONNTRACK TUNING** edits capacity and timeouts through the existing
@@ -702,6 +735,7 @@ or appliance acceptance.
 | `/services/ntp`, `/services/syslog`, `/services/vnstat` | Shared draft appliance service editors and scoped runtime |
 | `/services/maintenance` | Explicit all-managed-services repair and a link to Config / Upgrade |
 | `/diagnostics/traffic` | REAL TIME TRAFFIC: live bytes/second and packets/second ApexCharts, with one combined inbound + outbound line per interface |
+| `/diagnostics/network-experience` | NETWORK EXPERIENCE: compact protected-host rows with device icons, descriptions, colored experience/traffic chips and selected-IP one-hour history |
 | `/diagnostics/traffic-flow` | Compatibility redirect to `/overview` |
 | `/diagnostics/process-health` | Read-only daemon/component health, recovery states, collection freshness and active alerts |
 | `/diagnostics/interface-capabilities` | Saved per-interface performance capabilities shown as color-coded chips: green Enabled, amber Disabled, blue Supported (activation unknown), red Unsupported, and neutral Unknown or N/A. Hover a chip for its separate support and enabled states. No Details controls or collection-error lists. **Refresh capabilities** explicitly scans hardware and saves observations; opening the page only reads the saved snapshot. No automatic scans, tuning, retries or configuration edits. Unknown and simulated results are not treated as measured support; partial results replace older evidence and failed requests retain the previous snapshot marked stale with an inline request error. Collection time uses the saved system timezone. |
