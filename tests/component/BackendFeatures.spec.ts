@@ -164,7 +164,7 @@ describe("October 17 frontend workflows", () => {
       const sample = {
         name: "ntp", scope: "host", state: outcome === "available" ? "running" : "error",
         sample_status: "available", server: "clock.example", server_time: serverTime,
-        error: outcome === "failed" ? "NTP read failed" : null,
+        error: outcome === "failed" ? "NTP read failed" : undefined,
       };
       store.runtime.loading = false;
       store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [sample] });
@@ -182,10 +182,14 @@ describe("October 17 frontend workflows", () => {
       store.draft.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
       await flushPromises();
       expect(wrapper.get("time").text()).toBe("2026-01-01 17:04:05");
-      store.state.data!.desired.system.timezone = "Asia/Kolkata";
+      store.state.data = {
+        ...store.state.data!, desired: { ...store.state.data!.desired, system: { hostname: "", domain: "", timezone: "Asia/Kolkata" } },
+      };
       await flushPromises();
       expect(wrapper.get("time").text()).toBe("2026-01-02 06:34:05");
-      store.state.data!.desired.system.timezone = "";
+      store.state.data = {
+        ...store.state.data, desired: { ...store.state.data.desired, system: { hostname: "", domain: "", timezone: "" } },
+      };
       await flushPromises();
       expect(wrapper.get("thead").text()).toContain("Server time (UTC)");
       expect(wrapper.get("time").text()).toBe("2026-01-02 01:04:05");
