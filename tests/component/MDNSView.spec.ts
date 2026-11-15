@@ -304,9 +304,10 @@ describe("mDNS / Discovery", () => {
     store.mdnsStatus.data = { instances: [sample], error: "" };
     store.mdnsStatus.stale = true;
     const wrapper = mount(MDNSView, { global });
-    expect(wrapper.get("form > div:last-child").findAll("button").map(button => button.text())).toEqual([
-      "Add service", "Presets", ...mdnsPresets.map(preset => `${preset.title}${preset.value}`), "Stage changes", "Cancel edits",
+    expect(wrapper.get("form > div:first-child").findAll("button").map(button => button.text())).toEqual([
+      "Add service", "Presets", ...mdnsPresets.map(preset => `${preset.title}${preset.value}`),
     ]);
+    expect(wrapper.get("form > div:last-child").findAll("button").map(button => button.text())).toEqual(["Stage changes", "Cancel edits"]);
     await setServices(wrapper, "printer.local.");
     expect(store.refreshMDNSStatus).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).not.toContain("Applied discovery status");

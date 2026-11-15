@@ -343,7 +343,10 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
             >
               {{ host.summary.experience.worst_rated_level ? experienceLabel(host.summary.experience.worst_rated_level) : "Not Rated" }}
             </v-chip>
-            <span v-else :title="experienceTitle(host)">-</span>
+            <span
+              v-else
+              :title="experienceTitle(host)"
+            >-</span>
           </td>
           <td data-metric="throughput">
             <div
@@ -358,7 +361,10 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
               >
                 ↓ {{ experienceRate(summary(host)?.traffic.received_bps, 0) }}
               </v-chip>
-              <span v-else title="Download rate unavailable">-</span>
+              <span
+                v-else
+                title="Download rate unavailable"
+              >-</span>
               <v-chip
                 v-if="summary(host)?.traffic.sent_bps != null"
                 size="small"
@@ -367,7 +373,10 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
               >
                 ↑ {{ experienceRate(summary(host)?.traffic.sent_bps, 0) }}
               </v-chip>
-              <span v-else title="Upload rate unavailable">-</span>
+              <span
+                v-else
+                title="Upload rate unavailable"
+              >-</span>
             </div>
           </td>
           <td data-metric="dns_response_time">
@@ -387,7 +396,10 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
                 aria-label="Partial timing evidence"
               />
             </v-chip>
-            <span v-else :title="timingTitle(host, 'dns')">-</span>
+            <span
+              v-else
+              :title="timingTitle(host, 'dns')"
+            >-</span>
           </td>
           <td data-metric="dropped_sent_packets">
             <v-chip
@@ -399,50 +411,62 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
             >
               {{ summary(host)?.firewall.dropped_sent_packets.total ?? "Unavailable" }}
             </v-chip>
-            <span v-else :title="sourceTitle(host, 'firewall')">-</span>
+            <span
+              v-else
+              :title="sourceTitle(host, 'firewall')"
+            >-</span>
           </td>
           <td data-metric="connections">
             <div class="d-flex align-center flex-nowrap ga-1">
-            <div data-metric="total_connections" class="d-flex align-center ga-1">
-              <v-chip
-                v-if="currentConnections(host) !== null"
-                size="small"
-                variant="tonal"
-                :color="currentConnections(host) === null || currentConnectionsStale(host) ? 'default' : 'info'"
-                :title="currentConnectionsTitle(host)"
+              <div
+                data-metric="total_connections"
+                class="d-flex align-center ga-1"
               >
-                Current {{ currentConnections(host) ?? "Unavailable" }}
-              </v-chip>
-              <span v-else :title="currentConnectionsTitle(host)">-</span>
-              <v-chip
-                v-if="currentConnections(host) !== null && currentConnectionsStale(host)"
-                size="x-small"
-                variant="tonal"
-                color="default"
-              >
-                Stale
-              </v-chip>
-              <v-chip
-                v-else-if="currentConnections(host) !== null && summary(host)?.connections.current.status === 'partial'"
-                size="x-small"
-                variant="tonal"
-                color="warning"
-              >
-                Partial
-              </v-chip>
-            </div>
-            <div data-metric="average_connections">
-            <v-chip
-              v-if="summary(host)?.connections.average.total != null"
-              size="small"
-              variant="tonal"
-              :color="historical || summary(host)?.connections.average.total == null ? 'default' : 'info'"
-              :title="averageConnectionsTitle(host)"
-            >
-              Avg {{ experienceNumber(summary(host)?.connections.average.total, false, 0) }}
-            </v-chip>
-            <span v-else :title="averageConnectionsTitle(host)">-</span>
-            </div>
+                <v-chip
+                  v-if="currentConnections(host) !== null"
+                  size="small"
+                  variant="tonal"
+                  :color="currentConnections(host) === null || currentConnectionsStale(host) ? 'default' : 'info'"
+                  :title="currentConnectionsTitle(host)"
+                >
+                  Current {{ currentConnections(host) ?? "Unavailable" }}
+                </v-chip>
+                <span
+                  v-else
+                  :title="currentConnectionsTitle(host)"
+                >-</span>
+                <v-chip
+                  v-if="currentConnections(host) !== null && currentConnectionsStale(host)"
+                  size="x-small"
+                  variant="tonal"
+                  color="default"
+                >
+                  Stale
+                </v-chip>
+                <v-chip
+                  v-else-if="currentConnections(host) !== null && summary(host)?.connections.current.status === 'partial'"
+                  size="x-small"
+                  variant="tonal"
+                  color="warning"
+                >
+                  Partial
+                </v-chip>
+              </div>
+              <div data-metric="average_connections">
+                <v-chip
+                  v-if="summary(host)?.connections.average.total != null"
+                  size="small"
+                  variant="tonal"
+                  :color="historical || summary(host)?.connections.average.total == null ? 'default' : 'info'"
+                  :title="averageConnectionsTitle(host)"
+                >
+                  Avg {{ experienceNumber(summary(host)?.connections.average.total, false, 0) }}
+                </v-chip>
+                <span
+                  v-else
+                  :title="averageConnectionsTitle(host)"
+                >-</span>
+              </div>
             </div>
           </td>
           <td data-metric="rtt_median">
@@ -452,27 +476,33 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
                 :key="side"
                 :data-metric="side === 'host' ? 'local_rtt' : 'remote_rtt'"
               >
-              <v-chip
-                v-if="summary(host)?.tcp[`rtt_${side}`].p50_ms != null"
-                size="small"
-                variant="tonal"
-                :color="experienceMetricColor(summary(host)?.tcp[`rtt_${side}`].p50_ms ?? null, 'rtt', historical || expired)"
-                :title="timingTitle(host, side)"
-              >
-                {{ side === "host" ? "Local" : "Remote" }} {{ summary(host)?.tcp[`rtt_${side}`].p50_ms == null ? "Unavailable" : `~${experienceNumber(host.summary.tcp[`rtt_${side}`].p50_ms, false, 0)} ms` }}
-                <v-icon
-                  v-if="!expired && host.summary.tcp[`rtt_${side}`].p50_ms !== null && !host.summary.tcp[`rtt_${side}`].timing_coverage_complete"
-                  icon="mdi-alert-circle-outline"
-                  size="12"
-                  class="ml-1"
-                  aria-label="Partial timing evidence"
-                />
-              </v-chip>
-              <span v-else :title="timingTitle(host, side)">-</span>
+                <v-chip
+                  v-if="summary(host)?.tcp[`rtt_${side}`].p50_ms != null"
+                  size="small"
+                  variant="tonal"
+                  :color="experienceMetricColor(summary(host)?.tcp[`rtt_${side}`].p50_ms ?? null, 'rtt', historical || expired)"
+                  :title="timingTitle(host, side)"
+                >
+                  {{ side === "host" ? "Local" : "Remote" }} {{ summary(host)?.tcp[`rtt_${side}`].p50_ms == null ? "Unavailable" : `~${experienceNumber(host.summary.tcp[`rtt_${side}`].p50_ms, false, 0)} ms` }}
+                  <v-icon
+                    v-if="!expired && host.summary.tcp[`rtt_${side}`].p50_ms !== null && !host.summary.tcp[`rtt_${side}`].timing_coverage_complete"
+                    icon="mdi-alert-circle-outline"
+                    size="12"
+                    class="ml-1"
+                    aria-label="Partial timing evidence"
+                  />
+                </v-chip>
+                <span
+                  v-else
+                  :title="timingTitle(host, side)"
+                >-</span>
               </div>
             </div>
           </td>
-          <td data-metric="tcp_retransmissions" class="compact-column">
+          <td
+            data-metric="tcp_retransmissions"
+            class="compact-column"
+          >
             <div class="d-flex align-center flex-nowrap ga-1">
               <div
                 v-for="direction in (['received', 'sent'] as const)"
@@ -488,7 +518,10 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
                 >
                   {{ direction === "received" ? "↓" : "↑" }} {{ summary(host)?.tcp[`retransmission_observations_${direction}`].total ?? "Unavailable" }}
                 </v-chip>
-                <span v-else :title="`${direction === 'received' ? 'Download' : 'Upload'} TCP repeats unavailable · ${sourceTitle(host, 'tcp')}`">-</span>
+                <span
+                  v-else
+                  :title="`${direction === 'received' ? 'Download' : 'Upload'} TCP repeats unavailable · ${sourceTitle(host, 'tcp')}`"
+                >-</span>
               </div>
             </div>
           </td>
