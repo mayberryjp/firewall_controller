@@ -248,6 +248,28 @@ block configuration operations, or trigger service/daemon restarts. Backend watc
 deployment remains a separate operator-approved action; no backend deployment is made
 by the frontend.
 
+### Routing Table
+
+Routing > **ROUTING TABLE** (`/routing/table`) reads
+`GET /api/v1/routes/table` with `state.read`, no query parameters and no body.
+It shows observed IPv4/IPv6 routes from the main kernel table (254), including
+unmanaged, DHCP/BGP and deviceless routes in that table. Local and custom tables
+are excluded from the display, counts and filter choices. It is separate from
+Static Routes and never edits, stages or repairs configuration.
+
+Family chips and local text/protocol/type/interface filters narrow the
+sortable table. Each route occupies one non-expandable row, without an outer
+table border. Numeric Linux identifiers remain explicit and missing metrics
+remain absent rather than zero. Unknown interface names retain their kernel indices.
+
+Reads refresh every 30 seconds while visible or on demand. Collection time uses
+the saved system timezone; failed refreshes retain clearly marked stale routes.
+These are sequential namespace observations, not an atomic snapshot or a
+policy-routing lookup. All routes are fetched together; display pagination is
+local. The native backend must implement this unreleased endpoint; simulator,
+permission and collection failures are surfaced inline without disturbing drafts.
+The exact endpoint is also suggested in API Explorer.
+
 ### BGP And Destination Rewrite
 
 Routing > **BGP PROCESS** (`/routing/bgp`) stages the local ASN/router ID, enable
@@ -484,18 +506,102 @@ Deploy a backend supporting the November 14 handoff before using this action.
 ### Network experience
 
 Diagnostics > **NETWORK EXPERIENCE** (`/diagnostics/network-experience`) displays
-one compact row per protected IP on a managed LAN: small device icon, configured
-name, original-case local description, network, experience/confidence, activity,
-download/upload, one-hour observed usage and last seen in the saved system timezone.
+**1-hour observed experience** using one
+`GET /statistics/host-experience/summary?limit=256` request per refresh.
+There is no cursor fetching or display pagination. If more hosts qualify,
+the page identifies the loaded/eligible count; searching and sorting apply only
+to these at most 256 hosts. Deploy the backend supporting the
+November 15 pooled DNS/passive RTT percentiles handoff before using this view; unsupported/error
+responses remain explicit, without falling back to live or per-host history reads.
+
+Each protected IP on a managed LAN occupies one compact row: small device icon,
+configured IP, original-case current local description, current network,
+one experience chip showing the worst rated level in the observed hour,
+combined download/upload observed-hour rates, DNS p50 response time,
+observed-hour sent firewall drops, current total
+connections and one-hour average together as Current/Avg chips in one Connections
+column, passive local and remote p50 RTT together as Local/Remote chips in one
+RTT Median column, download/upload TCP repeat totals, and last seen.
+Rows stay single-line: coverage, identity changes, state durations, the timestamped
+last rating, and pooled ratios/denominators are in metric tooltips rather than
+extra columns, stacked chips or subtitles. The experience chip is not an hourly
+average or current score; no rated evidence shows Not Rated.
+Not Rated rows fade to 18% opacity, returning to full opacity on hover or
+keyboard focus; host replay links remain usable.
+Hourly IP totals can span owners/attachments; current metadata does not relabel historical evidence.
+Per-source available/partial/not-observed/unavailable coverage is available in
+metric tooltips, separately from overall coverage. DNS exclusions are distinct
+from unanswered requests. DNS and RTT cells show approximate pooled-histogram
+p50 (median) estimates, prefixed with `~`, never averages of bucket percentiles.
+Timing tooltips identify timing-subset sample counts, observed/missing slots,
+unavailable reasons and overall/source coverage. A small warning icon marks
+numeric estimates with incomplete timing coverage. Complete timing-subset
+coverage does not imply a complete hour or capture; older retained rows are not
+backfilled. DNS variation in the tooltip uses retained pair weights/counts.
+Missing table values use a plain `-`, never an unavailable chip; reason/error
+tooltips are retained. Valid zero values still render as measured chips.
+Current total connections come from the pinned latest matching host/interface
+snapshot, retain exact decimal-string counts and show stale state after 30 seconds.
+Their tooltip identifies observation time in the saved timezone, advancing age,
+acquisition duration and source errors. Missing current data is never filled
+from historical observations. The hourly average weights each available
+ten-second snapshot equally, excludes partial/missing snapshots, preserves
+fractional means internally and provides snapshot/time coverage in its tooltip.
+Other individual connection gauges remain available in host replay.
+All displayed measurements (rates, timings, byte sizes, percentages and scores),
+including chart axes and tooltips, use exactly two decimal places. Integer
+counts remain whole numbers; API values and numeric sorting retain full precision.
+The Network Experience host table displays DNS/RTT p50, average connections and
+download/upload rates with zero decimal places; replay charts and other
+measurement displays retain two decimal places.
 IPv4 and IPv6 addresses remain separate rows. Colored chips distinguish measured
 experience and traffic; missing/idle evidence never defaults to a healthy score.
+Local and remote RTT p50 chips turn yellow/orange/red at 100/200/300 ms;
+DNS p50 at 100/250/500 ms.
+These are frontend display bands, not backend scoring changes.
+Firewall-drop chips use blue for zero, yellow for 1–9, orange for 10–99 and
+red for 100 or more observed-hour sent drops. These count bands do not assess
+packet-loss severity or penalize experience; managed policy drops can be intentional.
 Stale measurements retain neutral colors and expired observations disappear.
+The host list ends at Last seen; extended metric columns and their group controls
+are omitted for now.
+The default order is Connections descending by the current total.
+Columns sort in either direction by clicking their headers; IPs sort numerically,
+experience by worst observed rated level (excellent through poor),
+combined download/upload by total throughput, DNS by its p50 and RTT Median by
+remote p50 without display rounding,
+dropped sent packets and current total connections by exact integer counts
+(including above-u64 totals), hourly-average connections by their unrounded
+numeric means,
+TCP retransmissions by the
+exact sum of download/upload observations, and last seen
+by the original timestamp. Unavailable values stay last in either direction.
+Collector errors are labeled latest-collection scope, not hourly loss counts.
+The desktop left navigation starts collapsed on this page and can be reopened
+with its menu button. The IP address/icon remains pinned while scrolling the
+single-row-per-IP table horizontally.
 
-The read-only `state.read` client completes all `/statistics/host-experience/latest`
-cursor pages before replacing the table, restarting on invalidation. Polls do not
-overlap and pause while hidden. Selecting a host loads only that IP's one-hour
-history, with throughput, experience, passive timing, drops, TCP repeats and
-receiver-pressure graphs. Missing slots and ownership/epoch changes break lines.
+The read-only `state.read` client replaces the table only after its single summary
+request completes. Polls do not overlap and pause while hidden. Host IPs are real links with the same compact
+icon/text styling. They open `/diagnostics/network-experience/:address`, a
+dedicated **Host Experience** replay reading only that IP's history.
+
+The host signal map places traffic, DNS, remote timing, receive-pressure and
+firewall/connection cards around a device graphic. A 360-slot timeline scrubs
+the complete hour in observation order, including missing intervals. Previous/
+next controls, 40-times replay and **Next Finding** navigate observations;
+informational policy drops and unreplied connections alone are not impairment
+markers. Four coordinated charts show traffic, response timing, drops/TCP
+repeats and connections/receive pressure. Selecting a chart marker moves the
+timeline and all metric cards together.
+
+Manual selection or playback pins the loaded replay window so a background poll
+cannot shift the selected interval. **Latest Window** returns to the newest
+observed interval. Missing slots show unavailable values, never substituted
+samples or zero traffic. Source failures are explicit and stale retained reads
+are neutral. Display times, chart axes, tooltips and slider text use the saved
+system timezone; machine-readable interval values retain full precision.
+Missing slots and ownership/network/revision/epoch changes break chart lines.
 Counts remain exact decimal strings; history charts cannot plot counts beyond
 JavaScript's exact integer range. Usage is observed coverage, not 24-hour usage;
 last seen is traffic observation, not uptime or reachability. Managed policy drops
@@ -1080,8 +1186,8 @@ network-diagram router symbol; Firewall uses a brick wall.
 Connection health appears in an icon-only floating bottom-right bubble; hover or
 focus it for connection status, or open it for deployment
 details and Disconnect. There is no profile/person button. Interfaces
-contains Physical interfaces, Loopbacks and VLANs. Routing contains Static Routes
-Gateway monitors and BGP. The Modan モダン
+contains Physical interfaces, Loopbacks and VLANs. Routing contains Static Routes,
+ROUTING TABLE, Gateway monitors and BGP. The Modan モダン
 brand links to Overview; there is no separate Overview navigation button. Firewall
 contains forwarding, Firewall destined, Connections, NAT and DNAT; VPN contains WireGuard.
 The header save control shows the config revision above the saved Netcontrol

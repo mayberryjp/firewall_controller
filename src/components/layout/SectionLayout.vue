@@ -14,7 +14,7 @@ const showNavigation = computed(() => props.section.pages.length > 1 || ["settin
 const route = useRoute();
 const selectedPage = computed(() => route.meta.navigationPage ?? route.name);
 const { lgAndUp } = useDisplay();
-const collapsible = computed(() => ["connections", "firewall", "firewall-drops", "possible-missing-rules"].some(name => name === route.name));
+const collapsible = computed(() => ["connections", "firewall", "firewall-drops", "possible-missing-rules", "network-experience"].some(name => name === selectedPage.value));
 const collapsed = ref(collapsible.value);
 watch(() => route.name, () => { collapsed.value = collapsible.value; });
 </script>

@@ -139,6 +139,38 @@ function stage(): void {
       :disabled="blocked"
       @submit.prevent="stage"
     >
+      <div class="d-flex flex-wrap ga-3 mb-4">
+        <v-btn
+          prepend-icon="mdi-plus"
+          color="primary"
+          :disabled="blocked || form.reflection.filters.length >= 64"
+          @click="form.reflection.filters.push('')"
+        >
+          Add service
+        </v-btn>
+        <v-menu>
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              prepend-icon="mdi-playlist-plus"
+              :disabled="blocked || form.reflection.filters.length >= 64"
+            >
+              Presets
+            </v-btn>
+          </template>
+
+          <v-list density="compact">
+            <v-list-item
+              v-for="preset in mdnsPresets"
+              :key="preset.value"
+              :title="preset.title"
+              :subtitle="preset.value"
+              :disabled="presetBlocked(preset.value)"
+              @click="addPreset(preset.value)"
+            />
+          </v-list>
+        </v-menu>
+      </div>
       <v-select
         v-model="form.interfaces"
         :items="interfaceNameChoices(choices)"
@@ -189,36 +221,6 @@ function stage(): void {
         <span v-if="usage.some(row => row.counters) && status?.statistics_complete === false">Receive loss is unknown; counts may be incomplete.</span>
       </p>
       <div class="d-flex flex-wrap ga-3 mt-4">
-        <v-btn
-          prepend-icon="mdi-plus"
-          color="primary"
-          :disabled="blocked || form.reflection.filters.length >= 64"
-          @click="form.reflection.filters.push('')"
-        >
-          Add service
-        </v-btn>
-        <v-menu>
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              prepend-icon="mdi-playlist-plus"
-              :disabled="blocked || form.reflection.filters.length >= 64"
-            >
-              Presets
-            </v-btn>
-          </template>
-
-          <v-list density="compact">
-            <v-list-item
-              v-for="preset in mdnsPresets"
-              :key="preset.value"
-              :title="preset.title"
-              :subtitle="preset.value"
-              :disabled="presetBlocked(preset.value)"
-              @click="addPreset(preset.value)"
-            />
-          </v-list>
-        </v-menu>
         <v-btn
           type="submit"
           prepend-icon="mdi-check"

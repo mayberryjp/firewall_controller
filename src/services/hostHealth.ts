@@ -55,12 +55,13 @@ export function cpuUsage(current: HostHealth, previous: HostHealth | null): numb
   return total > 0n ? Number((total - idle) * 10000n / total) / 100 : null;
 }
 const display = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
-export function formatBytes(value: string | null | undefined): string {
+const fixedDisplay = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export function formatBytes(value: string | null | undefined, minimumFractionDigits: 0 | 2 = 0): string {
   if (value === null || value === undefined) return "Unavailable";
   const count = BigInt(value), units = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
   let divisor = 1n, unit = 0;
   while (count >= divisor * 1000n && unit < units.length - 1) { divisor *= 1000n; unit++; }
-  return `${display.format(Number((count * 100n + divisor / 2n) / divisor) / 100)} ${units[unit]}`;
+  return `${(minimumFractionDigits === 2 ? fixedDisplay : display).format(Number((count * 100n + divisor / 2n) / divisor) / 100)} ${units[unit]}`;
 }
 export function usagePercent(used: string, total: string): number | null {
   const limit = BigInt(total), count = BigInt(used);

@@ -36,7 +36,7 @@ const endpoints = [
   "/kernel/tunables/catalog", "/kernel/tunables",
   "/diagnostics/path-tests",
   "/statistics", "/statistics/host", "/statistics/link-diagnostics", "/statistics/connections", "/statistics/performance",
-  "/statistics/gateways", "/statistics/vnstat", "/routes/bgp", "/routes/bgp/advertised",
+  "/statistics/gateways", "/statistics/vnstat", "/routes/table", "/routes/bgp", "/routes/bgp/advertised",
   "/services/gateway-monitoring/status", "/services/mqtt/status", "/services/dynamic-dns/status",
   "/services/discord/status", "/services/discord/webhooks",
   ...["ntp", "syslog", "vnstat", "mdns", "bgp", "udp-broadcast-relay"].flatMap(service => [

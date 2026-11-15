@@ -90,10 +90,17 @@ describe("routed navigation sections", () => {
     expect(vpn?.icon).toBe("mdi-wan");
     expect(vpn?.pages.find(page => page.name === "wireguard")?.icon).toBe("mdi-wan");
   });
+  it("keeps the live kernel table separate from the configured static-route editor", () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    expect(router.resolve("/routing/table").name).toBe("routing-table");
+    expect(router.resolve("/routing/table").matched[0]?.name).toBe("routing-section");
+    expect(router.resolve("/routing/table").meta.authenticated).toBe(true);
+    expect(router.resolve("/routes").name).toBe("routes");
+  });
   it("keeps Config routable without a duplicate primary navigation entry", () => {
     expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]);
     expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels", "interface-capabilities", "rss-irq", "rps-configuration", "nic-offloads"]);
-    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "gateway-monitors", "bgp", "bgp-peers", "bgp-routes"]);
+    expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "routing-table", "gateway-monitors", "bgp", "bgp-peers", "bgp-routes"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
     expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall-ingress", "firewall", "firewall-input", "connections", "nat", "dnat"]);
@@ -107,6 +114,16 @@ describe("routed navigation sections", () => {
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
     expect(router.resolve("/diagnostics/possible-missing-rules").name).toBe("possible-missing-rules");
     expect(diagnostics?.pages.find(page => page.name === "download-config")).toMatchObject({ title: "Download config", path: "/diagnostics/download-config" });
+  });
+  it("routes IPv4 and IPv6 host replay under Network Experience without adding a navigation page", () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    for (const address of ["192.0.2.20", "2001:db8::20"]) {
+      const resolved = router.resolve({ name: "network-experience-host", params: { address } });
+      expect(resolved.params.address).toBe(address);
+      expect(resolved.meta.navigationPage).toBe("network-experience");
+      expect(resolved.meta.authenticated).toBe(true);
+      expect(resolved.matched[0]?.name).toBe("diagnostics-section");
+    }
   });
   it("opens BGP routes under Routing and redirects the old Diagnostics URL", async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });

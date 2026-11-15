@@ -4,8 +4,9 @@ import VueApexCharts from "vue3-apexcharts";
 import type { ApexOptions } from "apexcharts";
 import { useDiagnosticRead } from "@/composables/useDiagnosticRead";
 import { useTimestamps } from "@/composables/useTimestamps";
+import { hostHistoryPoints } from "@/services/hostExperience";
 import {
-  experienceLabel, getNetworkExperienceHistory, sumExperienceCounters,
+  experienceLabel, experienceNumber, getNetworkExperienceHistory, sumExperienceCounters,
   type ExperienceHost, type ExperienceSample,
 } from "@/services/networkExperience";
 
@@ -51,22 +52,8 @@ const definitions = computed<{ unit: string; lines: Line[] }>(() => {
     ] };
   }
 });
-// Category positions preserve observation order across clock corrections; nulls break epochs and gaps.
-const points = computed(() => {
-  const result: { at: string; sample: ExperienceSample | null }[] = [];
-  let previous: ExperienceSample | null = null;
-  for (const slot of data.value?.samples ?? []) {
-    const sample = slot.sample;
-    if (sample && previous && (sample.observation_epoch !== previous.observation_epoch ||
-      sample.configured_host_id !== previous.configured_host_id || sample.interface?.name !== previous.interface?.name ||
-      sample.configuration_revision !== previous.configuration_revision || previous.end_at !== sample.start_at)) {
-      result.push({ at: slot.start_at, sample: null });
-    }
-    result.push({ at: slot.end_at, sample });
-    previous = sample;
-  }
-  return result;
-});
+const points = computed(() => data.value ? hostHistoryPoints(data.value) : []);
+const countMetric = computed(() => metric.value === "drops" || metric.value === "pressure");
 const series = computed(() => definitions.value.lines.map(line => ({
   name: line.name, data: points.value.map(point => point.sample ? line.read(point.sample) : null),
 })));
@@ -82,13 +69,14 @@ const options = computed<ApexOptions>(() => ({
     labels: { formatter: value => formatTimestamp(value), hideOverlappingLabels: true, rotate: 0 },
   },
   yaxis: { min: 0, ...(metric.value === "experience" ? { max: 100 } : {}),
-    title: { text: definitions.value.unit }, labels: { formatter: value => new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, notation: "compact" }).format(value) } },
+    title: { text: definitions.value.unit }, labels: { formatter: value => countMetric.value ?
+      new Intl.NumberFormat("en-US", { maximumFractionDigits: 0, notation: "compact" }).format(value) : experienceNumber(value, true) } },
   tooltip: {
     x: { formatter: (_value, context?: { dataPointIndex: number }) => {
       const point = points.value[context?.dataPointIndex ?? -1];
       return point ? `${formatTimestamp(point.at)} ${timeZone.value}` : "Unavailable";
     } },
-    y: { formatter: value => value == null ? "Unavailable" : `${value} ${definitions.value.unit}` },
+    y: { formatter: value => value == null ? "Unavailable" : `${countMetric.value ? value : experienceNumber(value)} ${definitions.value.unit}` },
   },
   noData: { text: "No observed history yet" }, legend: { position: "top" },
   responsive: [{ breakpoint: 700, options: { xaxis: { tickAmount: 1 } } }],
@@ -214,9 +202,9 @@ const reasons = computed(() => [...new Set([...(sample.value?.experience.reasons
           :key="component.code"
           size="small"
           variant="tonal"
-          :title="`${component.samples} observations · component score ${component.score}/100`"
+          :title="`${component.samples} observations · component score ${experienceNumber(component.score)}/100`"
         >
-          {{ experienceLabel(component.code) }}: {{ component.value }} {{ component.unit }}
+          {{ experienceLabel(component.code) }}: {{ experienceNumber(component.value) }} {{ component.unit }}
         </v-chip>
       </div>
     </template>

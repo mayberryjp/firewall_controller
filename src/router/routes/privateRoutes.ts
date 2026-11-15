@@ -21,6 +21,7 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "routing-section": [
     { path: "/routes", name: "routes", component: () => import("@/views/RoutesView.vue") },
+    { path: "/routing/table", name: "routing-table", component: () => import("@/views/RouteTableView.vue") },
     { path: "/policy-rules", name: "policy-rules", redirect: "/routes" },
     { path: "/gateway-monitors", name: "gateway-monitors", component: () => import("@/views/GatewayMonitorsView.vue") },
     { path: "/routing/bgp", name: "bgp", component: () => import("@/views/BGPView.vue") },
@@ -54,6 +55,7 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
   ],
   "diagnostics-section": [
     { path: "/diagnostics/network-experience", name: "network-experience", component: () => import("@/views/NetworkExperienceView.vue") },
+    { path: "/diagnostics/network-experience/:address", name: "network-experience-host", component: () => import("@/views/NetworkExperienceHostView.vue"), props: true, meta: { navigationPage: "network-experience" } },
     { path: "/diagnostics/dhcp-relay-logs", name: "dhcp-relay-logs", component: () => import("@/views/DHCPRelayLogsView.vue") },
     { path: "/diagnostics/syslog", name: "syslog-logs", component: () => import("@/views/SyslogLogsView.vue") },
     { path: "/diagnostics/firewall-drops", name: "firewall-drops", component: () => import("@/views/FirewallDropsView.vue") },

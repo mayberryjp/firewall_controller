@@ -1,4 +1,4 @@
-import type { ExperienceHistory, ExperienceLatest, ExperienceSample } from "../src/services/networkExperience";
+import type { ExperienceHistory, ExperienceLatest, ExperienceSample, ExperienceSummary } from "../src/services/networkExperience";
 
 const start = "2026-11-14T00:25:00.123456Z", end = "2026-11-14T00:25:10.123456Z";
 const network = { name: "vlan20", index: 20, kind: "vlan", vlan_id: 20 };
@@ -68,5 +68,86 @@ export function experienceHistory(): ExperienceHistory {
       ? { start_at: start, end_at: end, status: "observed", sample: experienceSample() }
       : { start_at: new Date(Date.parse(start) - (359 - index) * 10000).toISOString(),
         end_at: new Date(Date.parse(start) - (358 - index) * 10000).toISOString(), status: "missing", sample: null }),
+  };
+}
+
+export function experienceSummary(): ExperienceSummary {
+  const latest = experienceLatest(), row = latest.hosts[0]!, sample = row.sample!;
+  const identity = {
+    ip_address: row.ip_address, address_family: row.address_family, configured_host_id: row.configured_host_id,
+    configured_name: row.configured_name, currently_protected: row.currently_protected, interface: row.interface, metadata: row.metadata,
+  };
+  const total = (count: string | null) => ({
+    total: count, observed_slots: count === null ? 0 : 1, complete_slots: count === null ? 0 : 1,
+    measured_duration_ms: count === null ? 0 : 10000, last_observed_at: count === null ? null : end,
+  });
+  const ratio = (numerator: string, denominator: string, percent: number) => ({
+    numerator, denominator, percent, observed_slots: 1, complete_slots: 1, last_observed_at: end,
+  });
+  const source = () => ({
+    available_slots: 1, partial_slots: 0, not_observed_slots: 0, unavailable_slots: 0,
+    observed_slots: 1, complete_slots: 1, observed_seconds: 10, complete_seconds: 10,
+    observed_duration_ms: 10000, complete_duration_ms: 10000, last_observed_at: end,
+  });
+  const duration = (slots: number) => ({ slots, seconds: slots * 10 });
+  const rtt = () => ({
+    samples: "20", variation_pairs: "19", variation_mean_ms: 2, min_ms: 10, max_ms: 30,
+    p50_ms: null, p95_ms: null, percentile_unavailable_reason: "per_bucket_distributions_not_retained",
+    observed_slots: 1, complete_slots: 1, last_observed_at: end,
+    timing_samples: "0", timing_observed_slots: 0, timing_missing_slots: 1, timing_coverage_complete: false,
+  });
+  return {
+    schema: latest.schema, kind: "summary", interval_seconds: 10, retention_seconds: 3600,
+    collected_at: end, age_ms: 0, collection_id: latest.collection_id, status: "partial", error: null,
+    clock_discontinuity: false, collector: latest.collector, collector_scope: "latest_collection",
+    window: { start_at: "2026-11-13T23:25:10.123456Z", end_at: end }, snapshot_at: end,
+    coverage_complete: false, eligible_hosts: 1, next_cursor: null,
+    hosts: [{
+      ...identity,
+      summary: {
+        start_at: "2026-11-13T23:25:10.123456Z", end_at: end, expected_slots: 360,
+        observed_slots: 1, complete_slots: 1, observed_seconds: 10, coverage_complete: false,
+        first_sample_at: start, last_sample_at: end, last_seen_at: sample.last_seen_at,
+        observation_epochs: 1, epoch_discontinuities: 0, identity_changed: false,
+        identity_changes: { host_id: false, interface: false, configured_identity: false },
+        sources: { traffic: source(), firewall: source(), tcp: source(), dns: source(), connections: source() },
+        connections: {
+          current: { ...sample.connections, age_ms: 0 },
+          average: {
+            total: 3, tcp_established: 2, unreplied: 1, observed_slots: 1, coverage_seconds: 10,
+            first_observed_at: end, last_observed_at: end,
+          },
+        },
+        traffic: {
+          sent_packets: total("200"), received_packets: total("400"), sent_bytes: total("20000"), received_bytes: total("500000"),
+          sent_bps: 16000, received_bps: 400000, packet_unit: "kernel_l3_packet", byte_unit: "ip_layer_bytes",
+        },
+        firewall: {
+          dropped_sent_packets: total("2"), dropped_received_packets: total("0"), drop_coverage: "managed_nftables_only",
+        },
+        tcp: {
+          data_packets_sent: total("100"), data_packets_received: total("300"),
+          retransmission_observations_sent: total("0"), retransmission_observations_received: total("0"),
+          retransmission_sent: ratio("0", "100", 0), retransmission_received: ratio("0", "300", 0),
+          rtt_remote: rtt(), rtt_host: rtt(),
+        },
+        dns: {
+          requests: total("5"), responses: total("5"), unanswered: total("0"), servfail_responses: total("0"),
+          refused_responses: total("0"), excluded_observations: total("0"), unanswered_ratio: ratio("0", "5", 0),
+          pending_at_close: "0", pending_at_close_at: end, pending_at_close_is_last_observed_slot: true,
+          response_time_p50_ms: null, response_time_p95_ms: null, response_time_variation_mean_ms: null,
+          timing_unavailable_reason: "per_bucket_distributions_and_variation_weights_not_retained",
+          min_ms: null, max_ms: null, variation_pairs: "0",
+          timing_samples: "0", timing_observed_slots: 0, timing_missing_slots: 1, timing_coverage_complete: false,
+        },
+        experience: {
+          rated: duration(1), idle: duration(0), insufficient_data: duration(0), incomplete: duration(0),
+          unavailable: duration(0), missing: duration(359),
+          rated_levels: { excellent: duration(1), good: duration(0), fair: duration(0), poor: duration(0) },
+          worst_rated_level: "excellent", last_rated: { sample_at: end, experience: sample.experience, is_last_observed_slot: true },
+          reason_frequencies: { managed_policy_drops: 1 }, reason_frequencies_truncated: false,
+        },
+      },
+    }],
   };
 }

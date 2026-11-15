@@ -30,6 +30,7 @@ export const navigationSections: NavigationSection[] = [
   ] },
   { title: "Routing", name: "routing-section", path: "/routing", icon: "mdi-transit-connection-variant", pages: [
     { title: "Static Routes", name: "routes", path: "/routes", icon: "mdi-transit-connection-variant" },
+    { title: "ROUTING TABLE", name: "routing-table", path: "/routing/table", icon: "mdi-table-network" },
     { title: "Gateway monitors", name: "gateway-monitors", path: "/gateway-monitors", icon: "mdi-access-point-network" },
     { title: "BGP PROCESS", name: "bgp", path: "/routing/bgp", icon: "mdi-router-network" },
     { title: "BGP PEERS", name: "bgp-peers", path: "/routing/bgp/peers", icon: "mdi-account-network-outline" },

@@ -37,6 +37,9 @@ describe("API Explorer defaults", () => {
     const wrapper = await render(false);
     try {
       expect(wrapper.get<HTMLInputElement>("input").element.value).toBe("/api/v1/platform/status");
+      expect(wrapper.getComponent({ name: "VCombobox" }).props("items")).toContainEqual({
+        value: "/api/v1/routes/table", title: "/api/v1/routes/table",
+      });
       expect(wrapper.find("details").exists()).toBe(false);
       expect(wrapper.text()).not.toContain("Paired path-test API methods");
       expect(api.inspectApiPath).not.toHaveBeenCalled();

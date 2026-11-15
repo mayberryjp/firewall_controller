@@ -32,7 +32,9 @@ export function usePolling(): void {
   }
   onMounted(() => {
     schedule(store.refreshPathTests, () => store.pathTests.data?.active || store.pathTestUncertain ? 1000 : 5000,
-      () => Boolean(store.pathTests.error), () => !store.pathTestsUnsupported, true, 5000);
+      () => Boolean(store.pathTests.error),
+      () => !store.pathTestsUnsupported &&
+        (route.path === "/diagnostics/path-tests" || Boolean(store.pathTests.data?.active) || store.pathTestUncertain), true, 5000);
     schedule(store.refreshPlatformStatus, () => 3000, () => Boolean(store.platform.error), () => true, true, 5000);
     schedule(store.refreshLinkDiagnostics, () => 3000, () => Boolean(store.linkDiagnostics.error),
       () => ["/diagnostics/interface-drops", "/diagnostics/qdiscs", "/diagnostics/tcp-windowing", "/diagnostics/capture-details"].includes(route.path), true, 5000);
@@ -62,7 +64,9 @@ export function usePolling(): void {
     schedule(store.refreshDynamicDnsStatus, () => 7500, () => Boolean(store.dynamicDnsStatus.error), () => route.path === "/settings/dynamic-dns", true);
     schedule(store.refreshMDNSStatus, () => 3000, () => Boolean(store.mdnsStatus.error), () => route.path === "/services/mdns", true, 5000);
     schedule(store.refreshUDPRelayStatus, () => 3000, () => Boolean(store.udpRelayStatus.error), () => route.path === "/services/udp-broadcast-relay", true, 5000);
-    schedule(store.refreshUpgrade, () => store.upgradeActive || store.upgradeUncertain ? 2000 : 15000, () => Boolean(store.upgrade.error), () => true, true);
+    schedule(store.refreshUpgrade, () => store.upgradeActive || store.upgradeUncertain ? 2000 : 15000,
+      () => Boolean(store.upgrade.error),
+      () => route.path === "/config/upgrade" || store.upgradeActive || store.upgradeUncertain, true);
   });
   onUnmounted(() => stops.forEach((stop) => stop()));
 }

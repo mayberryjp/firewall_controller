@@ -1,18 +1,33 @@
 import { expect, test } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
-import { experienceHistory, experienceLatest } from "../networkExperienceFixtures";
+import { experienceHistory, experienceSummary } from "../networkExperienceFixtures";
 import { encodeJson } from "../../src/services/json";
 
-test("NETWORK EXPERIENCE shows compact colored rows and selected-host history without writes", async ({ page }, testInfo) => {
+test("NETWORK EXPERIENCE opens a coordinated host replay without changing link styling or making writes", async ({ page, isMobile }, testInfo) => {
   const backend = await mockBackend(page);
-  const data = experienceLatest(), second = structuredClone(data.hosts[0]!);
+  const data = experienceSummary(), second = structuredClone(data.hosts[0]!);
+  data.hosts[0]!.summary.dns.response_time_p50_ms = 12;
+  data.hosts[0]!.summary.dns.timing_unavailable_reason = null;
+  data.hosts[0]!.summary.tcp.rtt_host.p50_ms = 2;
+  data.hosts[0]!.summary.tcp.rtt_remote.p50_ms = 15;
   second.ip_address = "2001:db8:20::20"; second.address_family = "ipv6";
-  second.sample = null; second.configured_name = "Garden sensor";
+  second.summary.traffic.received_bps = null; second.summary.traffic.sent_bps = null;
+  second.summary.experience.rated_levels.excellent = { slots: 0, seconds: 0 };
+  second.summary.experience.rated = { slots: 0, seconds: 0 };
+  second.summary.experience.last_rated = null;
+  second.summary.experience.worst_rated_level = null; second.configured_name = "Garden sensor";
+  second.summary.connections.current.total = null;
+  second.summary.connections.current.status = "unavailable";
+  second.summary.connections.current.error = "No matching current host attachment";
   second.metadata.classification = "Garden Temperature"; second.metadata.icon = "https://invalid.example/icon.svg";
   data.hosts.push(second);
+  data.eligible_hosts = 2;
+  const summaryRequests: string[] = [];
   const historyRequests: string[] = [];
-  await page.route("**/proxy/statistics/host-experience/latest?*", route =>
-    route.fulfill({ contentType: "application/json", body: encodeJson(data) }));
+  await page.route("**/proxy/statistics/host-experience/summary?*", route => {
+    summaryRequests.push(new URL(route.request().url()).search);
+    return route.fulfill({ contentType: "application/json", body: encodeJson(data) });
+  });
   await page.route("**/proxy/statistics/host-experience/history?*", route => {
     historyRequests.push(new URL(route.request().url()).searchParams.get("address")!);
     return route.fulfill({ contentType: "application/json", body: encodeJson(experienceHistory()) });
@@ -24,31 +39,65 @@ test("NETWORK EXPERIENCE shows compact colored rows and selected-host history wi
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await page.goto("/diagnostics/network-experience");
   const view = page.getByRole("region", { name: "Network experience", exact: true });
-  await expect(page.getByRole("tab", { name: "NETWORK EXPERIENCE", exact: true })).toHaveAttribute("aria-selected", "true");
+  if (!isMobile) {
+    const width = (await view.boundingBox())!.width;
+    await page.getByRole("button", { name: "Expand Diagnostics navigation", exact: true }).click();
+    await expect(page.getByRole("tab", { name: "NETWORK EXPERIENCE", exact: true })).toHaveAttribute("aria-selected", "true");
+    expect((await view.boundingBox())!.width).toBeLessThan(width);
+    await page.getByRole("button", { name: "Collapse Diagnostics navigation", exact: true }).click();
+    expect((await view.boundingBox())!.width).toBeCloseTo(width);
+  } else {
+    await expect(page.getByRole("tab", { name: "NETWORK EXPERIENCE", exact: true })).toHaveAttribute("aria-selected", "true");
+  }
   await expect(view.locator("tbody tr")).toHaveCount(2);
   await expect(view.locator("tbody tr").first()).toContainText("Front Door Camera");
   await expect(view.locator("tbody tr").first()).toContainText("Excellent");
-  await expect(view.locator("tbody tr").first().locator(".v-chip").filter({ hasText: "Excellent · 100" })).toHaveClass(/text-success/);
+  await expect(view.locator("tbody tr").first().locator(".v-chip").filter({ hasText: /^Excellent$/ })).toHaveClass(/text-success/);
   await expect(view.locator(".host-icon").first()).toHaveAttribute("data-device-icon", "IP_CAMERA");
   await expect(view.locator(".host-icon").nth(1)).toHaveAttribute("data-device-icon", "DEFAULT");
   const icon = await view.locator(".host-icon").first().boundingBox();
   expect(icon?.width).toBe(18); expect(icon?.height).toBe(18);
   expect(historyRequests).toEqual([]);
-  await expect(view.locator("tbody tr").nth(1)).toContainText("Waiting");
+  expect(summaryRequests).toEqual(["?limit=256"]);
+  await expect(view).toContainText("1-hour observed experience");
+  await expect(view.locator("tbody tr").nth(1).locator('[data-metric="total_connections"]')).toHaveText("-");
+  await expect(view.locator("tbody tr").nth(1).locator('[data-metric="total_connections"] .v-chip')).toHaveCount(0);
+  await expect(view.locator("tbody tr").first().locator('[data-metric="dropped_sent_packets"]')).toHaveText("2");
+  await expect(view.locator("tbody tr").first().locator('[data-metric="local_rtt"] .v-chip__content')).toHaveText("Local ~2 ms");
+  await expect(view.locator("tbody tr").first().locator('[data-metric="remote_rtt"] .v-chip__content')).toHaveText("Remote ~15 ms");
+  await expect(view.locator("tbody tr").first().locator('[data-metric="total_connections"]')).toHaveText("Current 3");
+  await expect(view.locator("tbody tr").first().locator('[data-metric="average_connections"]')).toHaveText("Avg 3");
+  await expect(view.locator("tbody tr").first().locator('[data-metric="dns_response_time"] .v-chip__content')).toHaveText("~12 ms");
+  const pinned = view.locator("tbody tr").first().locator(".pinned-host");
+  const left = (await pinned.boundingBox())!.x;
+  await view.locator(".v-table__wrapper").evaluate(element => { element.scrollLeft = 3000; });
+  expect((await pinned.boundingBox())!.x).toBeCloseTo(left, 0);
+  await view.locator(".v-table__wrapper").evaluate(element => { element.scrollLeft = 0; });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("network-experience-rows.png"), fullPage: true, animations: "disabled" });
-  await view.getByRole("button", { name: "View experience history for Front door camera (192.0.2.20)", exact: true }).click();
-  const history = page.getByRole("region", { name: "Selected host experience history", exact: true });
-  await expect(history.locator(".apexcharts-canvas")).toBeVisible();
+  const link = view.getByRole("link", { name: "View experience history for 192.0.2.20", exact: true });
+  await expect(link).toHaveAttribute("href", "/diagnostics/network-experience/192.0.2.20");
+  expect(await link.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("none");
+  await link.click();
+  await expect(page).toHaveURL(/\/diagnostics\/network-experience\/192\.0\.2\.20$/);
+  const history = page.getByRole("region", { name: "Host experience replay", exact: true });
+  await expect(history.locator(".apexcharts-canvas")).toHaveCount(4);
+  await expect(history.locator(".apexcharts-canvas").first()).toBeVisible();
   await expect(history.locator(".apexcharts-marker").first()).toBeVisible();
-  await expect(history).toContainText("Incomplete coverage");
+  await expect(history.getByRole("region", { name: "Selected interval host signal map" })).toBeVisible();
+  await expect(history).toContainText("1/360 Observed");
   expect(historyRequests).toEqual(["192.0.2.20"]);
-  await history.locator(".history-metric .v-field").click();
-  await page.getByRole("option", { name: "Passive timing (ms)", exact: true }).click();
-  await expect(history).toContainText("Remote-path ACK p95");
-  await expect(history).toContainText("Host-path ACK p95");
+  const slider = history.getByRole("slider", { name: "Host replay interval" });
+  await expect(slider).toHaveValue("359");
+  await slider.focus(); await slider.press("ArrowLeft");
+  await expect(slider).toHaveValue("358");
+  await expect(history).toContainText("No sample was collected here");
+  await expect(history.locator('[data-host-metric="download"]')).toContainText("Unavailable");
+  await slider.press("ArrowRight");
+  await expect(history.locator('[data-host-metric="download"]')).toContainText("400.00 Kbps");
   await page.screenshot({ path: testInfo.outputPath("network-experience-history.png"), fullPage: true, animations: "disabled" });
-  await history.getByRole("button", { name: "Close host history" }).click();
+  await history.getByRole("link", { name: "Network Experience", exact: true }).click();
+  await expect(page).toHaveURL(/\/diagnostics\/network-experience$/);
   await expect(history).toHaveCount(0);
   expect(backend.writes).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
