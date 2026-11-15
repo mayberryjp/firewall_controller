@@ -20,7 +20,7 @@ const rows = computed<Row[]>(() => props.service === "ntp"
 const blocked = computed(() => Boolean(store.readOnlyReason) || !editing.value);
 const status = computed(() => store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === props.service));
 const sampleAvailable = computed(() => !store.runtime.stale && !status.value?.retrying && !status.value?.error && status.value?.sample_status === "available");
-const statColumns = 5;
+const statColumns = 6;
 const syslogCounters = [
   { key: "received_records", title: "Logs read", color: "info" },
   { key: "forwarded_deliveries", title: "Remote sends", color: "primary" },
@@ -187,6 +187,9 @@ function remove(index: number): void {
               Status
             </th>
             <th scope="col">
+              Server time ({{ timeZone }})
+            </th>
+            <th scope="col">
               Offset
             </th>
             <th scope="col">
@@ -244,6 +247,15 @@ function remove(index: number): void {
                   </v-chip>
                 </td>
                 <template v-if="sampleAvailable">
+                  <td>
+                    <time
+                      v-if="status?.server_time"
+                      :datetime="status.server_time"
+                    >{{ formatTimestamp(status.server_time, '-') }}</time>
+                    <template v-else>
+                      -
+                    </template>
+                  </td>
                   <td>
                     <v-chip
                       size="small"

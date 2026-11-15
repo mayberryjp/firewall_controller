@@ -150,6 +150,55 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.find('[title*="Last failure: collector.example: disconnected"]').exists()).toBe(true);
     wrapper.unmount();
   });
+  it.each(["available", "failed"])("shows NTP server-returned time only for a fresh matching sample after pending reads (%s)", async outcome => {
+    const store = useControllerStore();
+    const serverTime = "2026-01-02T03:04:05.987+02:00";
+    store.state.data!.desired.ntp = { enabled: true, servers: ["other.example", "clock.example"] };
+    store.state.data!.desired.system = { hostname: "", domain: "", timezone: "America/Los_Angeles" };
+    store.runtime.data = null;
+    store.runtime.loading = true;
+    store.runtime.stale = false;
+    const wrapper = await render(NTPView, "/services/ntp");
+    try {
+      expect(wrapper.find("time").exists()).toBe(false);
+      const sample = {
+        name: "ntp", scope: "host", state: outcome === "available" ? "running" : "error",
+        sample_status: "available", server: "clock.example", server_time: serverTime,
+        error: outcome === "failed" ? "NTP read failed" : null,
+      };
+      store.runtime.loading = false;
+      store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [sample] });
+      await flushPromises();
+      if (outcome === "failed") {
+        expect(wrapper.find("time").exists()).toBe(false);
+        expect(wrapper.find('[title*="NTP read failed"]').exists()).toBe(true);
+        return;
+      }
+      expect(wrapper.get("thead").text()).toContain("Server time (America/Los_Angeles)");
+      expect(wrapper.findAll("tbody tr")[0]!.find("time").exists()).toBe(false);
+      expect(wrapper.findAll("tbody tr")[1]!.get("time").text()).toBe("2026-01-01 17:04:05");
+      expect(wrapper.get("time").attributes("datetime")).toBe(serverTime);
+      store.draft = cloneConfig(store.state.data!.desired);
+      store.draft.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
+      await flushPromises();
+      expect(wrapper.get("time").text()).toBe("2026-01-01 17:04:05");
+      store.state.data!.desired.system.timezone = "Asia/Kolkata";
+      await flushPromises();
+      expect(wrapper.get("time").text()).toBe("2026-01-02 06:34:05");
+      store.state.data!.desired.system.timezone = "";
+      await flushPromises();
+      expect(wrapper.get("thead").text()).toContain("Server time (UTC)");
+      expect(wrapper.get("time").text()).toBe("2026-01-02 01:04:05");
+      store.runtime.stale = true;
+      await flushPromises();
+      expect(wrapper.find("time").exists()).toBe(false);
+      store.runtime.stale = false;
+      store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{ ...sample, server_time: null }] });
+      await flushPromises();
+      expect(wrapper.find("time").exists()).toBe(false);
+      expect(wrapper.findAll("tbody tr")[1]!.findAll("td")[2]!.text()).toBe("-");
+    } finally { wrapper.unmount(); }
+  });
   it("shows NTP recovery without displaying retained measurements as fresh", async () => {
     const store = useControllerStore();
     store.state.data!.desired.ntp = { enabled: true, servers: ["clock.example"] };
@@ -157,10 +206,12 @@ describe("October 17 frontend workflows", () => {
     store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{
       name: "ntp", scope: "host", state: "error", retrying: true, restart_count: 2,
       last_error: "Clock permission denied", sample_status: "available", offset_ms: 17.2,
+      server_time: "2026-01-02T03:04:05.987Z",
     }] });
     const wrapper = await render(NTPView, "/services/ntp");
     expect(wrapper.text()).toContain("Recovering");
     expect(wrapper.text()).not.toContain("17.2 ms");
+    expect(wrapper.find("time").exists()).toBe(false);
     expect(wrapper.find('[title*="Clock permission denied"]').exists()).toBe(true);
     expect(store.readOnlyReason).toBe("");
     wrapper.unmount();

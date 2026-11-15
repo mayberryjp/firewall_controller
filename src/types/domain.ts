@@ -465,6 +465,7 @@ export const applianceStatusSchema = z.object({
   pid: integer.optional(), started_at: timestamp.nullable().optional(),
   database_directory: optionalText, source: optionalText, host_source: optionalText, error: optionalText,
   sample_status: optionalText, server: z.string().nullable().optional(),
+  server_time: timestamp.nullable().optional(),
   offset_ms: z.number().finite().nullable().optional(), delay_ms: z.number().finite().nullable().optional(),
   requested_slew_ms: z.number().finite().nullable().optional(),
   uncorrected_offset_ms: z.number().finite().nullable().optional(),

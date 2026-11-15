@@ -2340,6 +2340,10 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
 
 #### Appliance NTP, syslog and vnStat
 
+- The NTP server row displays the backend's `server_time` in the saved system
+  timezone (UTC when unconfigured), preserving the original timestamp in HTML
+  `datetime`. It is the returned sample, not a live browser clock; stale or
+  failed samples are not displayed as fresh, and missing values remain a dash.
 - NTP/syslog accept 0..8 unique destinations disabled and 1..8 enabled.
   Hosts are canonical unicast/private/ULA/loopback IPs or lowercase ASCII DNS
   labels (1..63 characters each, total <=253), without URIs, embedded ports,
