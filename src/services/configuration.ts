@@ -24,6 +24,13 @@ export function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function usableSubnetHost(address: ipaddr.IPv4 | ipaddr.IPv6, length: number): boolean {
+  if (length >= 31) return true;
+  const value = address.toByteArray().reduce((total, byte) => total * 256 + byte, 0);
+  const size = 2 ** (32 - length);
+  return value % size !== 0 && value % size !== size - 1;
+}
+
 export function normalize(config: Config): Config {
   const parsed = configSchema.safeParse(config);
   const result = cloneConfig(parsed.success ? parsed.data : config);
@@ -453,6 +460,8 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
       if (!validName(peer.name) || peerNames.has(peer.name)) issue(`${path}.name`, "Use a unique peer name, 1..15 letters, digits, dot, underscore or hyphen", page);
       peerNames.add(peer.name);
       if (!validASN(peer.remote_asn)) issue(`${path}.remote_asn`, "Use ASN 1..4294967294, excluding 23456 and 65535", page);
+      bound(peer.multihop_ttl, 1, 255, `${path}.multihop_ttl`, page);
+      if (peer.allowed_next_hops.length > 32) issue(`${path}.allowed_next_hops`, "At most 32 allowed next hops per neighbor", page);
       check(path, page, () => {
         const remote = ipv4(peer.address); ipv4(peer.local_address);
         if (peerAddresses.has(peer.address) || peer.address === peer.local_address) throw new Error("Peer address must be unique and different from the local address");
@@ -460,14 +469,40 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
         const link = interfaces.get(peer.interface);
         if (!link?.up) throw new Error("Select an up configured interface");
         if (!link.addresses.some(address => address.split("/")[0] === peer.local_address)) throw new Error("Select a static local IPv4 address on the interface");
-        const contains = (cidr: string) => { const network = ipaddr.parseCIDR(cidr); return network[0].kind() === "ipv4" && remote.match(network); };
+        const covers = (prefixes: string[], address: ipaddr.IPv4 | ipaddr.IPv6) => prefixes.some(cidr => {
+          const network = ipaddr.parseCIDR(cidr);
+          return network[0].kind() === "ipv4" && address.match(network);
+        });
+        const onLink = (address: ipaddr.IPv4 | ipaddr.IPv6) => link.addresses.some(cidr => {
+          const network = ipaddr.parseCIDR(cidr);
+          return network[0].kind() === "ipv4" && address.match(network) && usableSubnetHost(address, network[1]);
+        });
         if (link.kind === "wireguard") {
           const wg = link.wireguard.peers.find(item => item.enabled !== false && item.public_key === peer.wireguard_public_key);
-          if (!wg || !wg.allowed_ips.some(contains)) throw new Error("Select an enabled WireGuard peer whose static AllowedIPs cover the BGP address");
+          if (!wg || !covers(wg.allowed_ips, remote)) throw new Error("Select an enabled WireGuard peer whose static AllowedIPs cover the BGP address");
+          for (const text of peer.allowed_next_hops) {
+            const gateway = ipv4(text);
+            if (!covers(wg.allowed_ips, gateway)) throw new Error(`Allowed next hop ${text} must be covered by the selected WireGuard peer's static AllowedIPs`);
+            if (link.wireguard.peers.some(other => other.enabled !== false && other.public_key !== peer.wireguard_public_key && covers(other.allowed_ips, gateway))) {
+              throw new Error(`Allowed next hop ${text} overlaps another enabled WireGuard peer's static AllowedIPs`);
+            }
+          }
           const key = `${link.name}/${peer.wireguard_public_key}`;
           if (peerKeys.has(key)) throw new Error("Only one BGP neighbor per WireGuard peer");
           peerKeys.add(key);
-        } else if (peer.wireguard_public_key || !link.addresses.some(contains)) throw new Error("Non-WireGuard peers must be directly connected and have no WireGuard key");
+        } else {
+          if (peer.wireguard_public_key) throw new Error("Non-WireGuard peers must have no WireGuard key");
+          if (!onLink(remote) && peer.multihop_ttl <= 1) throw new Error("Routed BGP speakers require multihop TTL greater than 1");
+          if (!onLink(remote) && !peer.allowed_next_hops.length) throw new Error("Routed BGP speakers require explicit on-link allowed next hops");
+        }
+        const gateways = new Set<string>();
+        for (const text of peer.allowed_next_hops) {
+          const gateway = ipv4(text);
+          if (gateways.has(text)) throw new Error("Allowed next hops must be unique");
+          gateways.add(text);
+          if (link.kind !== "wireguard" && !onLink(gateway)) throw new Error("Allowed next hops must be usable on-link addresses, not subnet network or broadcast addresses");
+          if (config.interfaces.some(item => item.addresses.some(address => address.split("/")[0] === text))) throw new Error("Allowed next hops must not be a firewall address");
+        }
       });
     });
   }
@@ -747,12 +782,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     if (config.interfaces.some(link => link.addresses.some(address => address.split("/")[0] === rule.target_address))) throw new Error("The target must be another device, not a firewall address");
     const subnets = lan.addresses.map(address => ipaddr.parseCIDR(address)).filter(network => network[0].kind() === family && target.match(network));
     if (!subnets.length) throw new Error("Target must be inside a static subnet on the selected LAN");
-    if (family === "ipv4" && !subnets.some(network => {
-      if (network[1] >= 31) return true;
-      const address = target.toByteArray().reduce((total, byte) => total * 256 + byte, 0);
-      const size = 2 ** (32 - network[1]);
-      return address % size !== 0 && address % size !== size - 1;
-    })) throw new Error("Target cannot be the subnet network or broadcast address");
+    if (family === "ipv4" && !subnets.some(network => usableSubnetHost(target, network[1]))) throw new Error("Target cannot be the subnet network or broadcast address");
     const key = `${wan.name}/${rule.protocol}/${rule.destination_port}/${family}`;
     if (rewriteKeys.has(key)) throw new Error("Duplicate WAN/protocol/port/family match");
     rewriteKeys.add(key);

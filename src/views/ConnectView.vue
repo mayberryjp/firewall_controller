@@ -146,7 +146,9 @@ async function signOut(): Promise<void> {
       <div>
         <v-form @submit.prevent="signIn">
           <v-text-field
+            id="registry-password"
             v-model="registryPassword"
+            name="password"
             :type="registryPasswordVisible ? 'text' : 'password'"
             label="Registry admin password"
             autocomplete="current-password"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bgpSchema, bgpStatusSchema, bgpRoutesSchema, bgpAdvertisedRoutesSchema, configSchema, destinationRewriteSchema, stateSchema, transactionSchema, runtimeSchema, interfaceSchema } from "@/types/domain";
+import { bgpSchema, bgpNeighborSchema, bgpStatusSchema, bgpRoutesSchema, bgpAdvertisedRoutesSchema, configSchema, destinationRewriteSchema, stateSchema, transactionSchema, runtimeSchema, interfaceSchema } from "@/types/domain";
 import { differenceContext, differences, equalConfig, importConfig, normalize, requiredPermissions, serviceRepairPermissions, validateConfig } from "@/services/configuration";
 import { bgpPeerStatus } from "@/services/bgp";
 import { processRestartTarget } from "@/services/operations";
@@ -18,6 +18,7 @@ describe("BGP and DNAT configuration contracts", () => {
   });
   it("preserves BGP, DNAT, metadata and unrelated settings across state, import, normalization, and transaction parsing", () => {
     const candidate = bgpConfig();
+    Object.assign(candidate.bgp!.neighbors[0]!, { enabled: false, address: "198.51.100.22", multihop_ttl: 8, allowed_next_hops: ["192.0.2.1"] });
     candidate.bgp!.metadata = { display_name: "Router", description: "BGP identity" };
     candidate.bgp!.neighbors[0]!.metadata = { display_name: "Transit", description: "Trusted link" };
     candidate.firewall.nat.destination_rewrite = [{ ...dnatRule(), metadata: { display_name: "DNS", description: "Routed replies" } }];
@@ -64,6 +65,53 @@ describe("BGP and DNAT configuration contracts", () => {
     expect(issues.some(issue => issue.path === "bgp.local_asn")).toBe(true);
     expect(issues.some(issue => issue.path.endsWith("remote_asn"))).toBe(true);
   });
+  it("requires explicit TTL and gateways for routed speakers, preserving BGP review permissions", () => {
+    const before = bgpConfig(), candidate = bgpConfig(), peer = candidate.bgp!.neighbors[0]!;
+    peer.address = "198.51.100.22";
+    expect(validateConfig(candidate).some(issue => issue.message.includes("TTL greater than 1"))).toBe(true);
+    peer.multihop_ttl = 8;
+    expect(validateConfig(candidate).some(issue => issue.message.includes("explicit on-link"))).toBe(true);
+    peer.allowed_next_hops = ["192.0.2.1"];
+    expect(validateConfig(candidate)).toEqual([]);
+    expect(requiredPermissions(differences(before, candidate))).toEqual(["transactions.write", "bgp.write"]);
+    peer.multihop_ttl = 255;
+    peer.allowed_next_hops = Array.from({ length: 32 }, (_, index) => `192.0.2.${index + 20}`);
+    expect(validateConfig(candidate)).toEqual([]);
+    peer.allowed_next_hops.push("192.0.2.100");
+    expect(validateConfig(candidate).some(issue => issue.path.endsWith("allowed_next_hops"))).toBe(true);
+  });
+  it.each([
+    ["192.0.2.10"], ["203.0.113.1"], ["192.0.2.0"], ["192.0.2.255"],
+    ["198.51.100.1"], ["127.0.0.1"], ["224.0.0.1"], ["0.0.0.0"], ["::1"], ["192.0.2.1", "192.0.2.1"],
+  ])("rejects invalid authorized gateways %j", (...gateways) => {
+    const candidate = bgpConfig();
+    candidate.bgp!.neighbors[0]!.allowed_next_hops = gateways;
+    expect(validateConfig(candidate).some(issue => issue.path.startsWith("bgp.neighbors"))).toBe(true);
+  });
+  it("accepts /31 gateway hosts but not off-link gateways on a /32", () => {
+    const candidate = bgpConfig(), peer = candidate.bgp!.neighbors[0]!;
+    candidate.interfaces[0]!.addresses = ["192.0.2.0/31"];
+    Object.assign(peer, { address: "198.51.100.22", local_address: "192.0.2.0", multihop_ttl: 8, allowed_next_hops: ["192.0.2.1"] });
+    expect(validateConfig(candidate)).toEqual([]);
+    candidate.interfaces[0]!.addresses = ["192.0.2.0/32"];
+    expect(validateConfig(candidate).some(issue => issue.message.includes("on-link"))).toBe(true);
+  });
+  it("defaults omitted neighbor fields but rejects nulls, invalid TTL and malformed gateway collections", () => {
+    const peer = { name: "remote", address: "192.0.2.2", local_address: "192.0.2.10", interface: "lab0", remote_asn: 65002 };
+    expect(bgpNeighborSchema.parse(peer)).toMatchObject({ enabled: true, multihop_ttl: 1, allowed_next_hops: [] });
+    for (const enabled of [null, "false", 0]) expect(bgpNeighborSchema.safeParse({ ...peer, enabled }).success).toBe(false);
+    for (const ttl of [0, 256, 1.5, "8", null]) expect(bgpNeighborSchema.safeParse({ ...peer, multihop_ttl: ttl }).success).toBe(false);
+    for (const gateways of [null, "192.0.2.1", [1]]) expect(bgpNeighborSchema.safeParse({ ...peer, allowed_next_hops: gateways }).success).toBe(false);
+  });
+  it("retains latest rejection context in status and runtime without changing session state", () => {
+    const observed = bgpStatus(), rejection = { prefix: "203.0.113.0/24", next_hop: "192.0.2.3", reason: "next_hop_not_allowed" };
+    observed.neighbors![0]!.last_rejection = rejection;
+    expect(bgpStatusSchema.parse(observed).neighbors![0]).toMatchObject({ state: "established", last_rejection: rejection });
+    expect(runtimeSchema.parse({ ...runtime(), bgp: observed }).bgp?.neighbors![0]!.last_rejection).toEqual(rejection);
+    observed.neighbors![0]!.last_rejection = null;
+    expect(bgpStatusSchema.parse(observed).neighbors![0]!.last_rejection).toBeNull();
+    expect(bgpStatusSchema.safeParse({ ...observed, neighbors: [{ ...observed.neighbors![0], last_rejection: { prefix: rejection.prefix } }] }).success).toBe(false);
+  });
   it("validates identity, neighbor uniqueness, peering interface, local address, timers and global limits", () => {
     const candidate = bgpConfig(), bgp = candidate.bgp!;
     bgp.router_id = "::1"; bgp.keepalive_seconds = 31; bgp.hold_seconds = 2; bgp.max_prefixes = 16385;
@@ -101,6 +149,19 @@ describe("BGP and DNAT configuration contracts", () => {
     const component = processHealthSnapshot().process_health!.components[0]!;
     expect(processRestartTarget({ ...component, component: "appliance_services", resource: "bgp" }, bgpConfig())).toBe("bgp");
   });
+  it("keeps administrative peer disable independent of process health and still validates disabled peers", () => {
+    const candidate = bgpConfig(), peer = candidate.bgp!.neighbors[0]!;
+    peer.enabled = false;
+    expect(validateConfig(candidate)).toEqual([]);
+    expect(bgpPeerStatus(peer, true, bgpStatus(), true)).toMatchObject({ label: "Disabled", color: "default" });
+    expect(bgpPeerStatus(peer, true, null, false)).toMatchObject({ label: "Disabled", color: "default" });
+    const observed = bgpStatus();
+    Object.assign(observed.neighbors![0]!, { enabled: false, state: "disabled", received_prefixes: null, advertised_prefixes: null, last_rejection: null });
+    expect(bgpStatusSchema.parse(observed).neighbors![0]).toMatchObject({ enabled: false, state: "disabled", received_prefixes: null });
+    expect(requiredPermissions(differences(bgpConfig(), candidate))).toEqual(["transactions.write", "bgp.write"]);
+    candidate.interfaces[0]!.up = false;
+    expect(validateConfig(candidate).some(issue => issue.path.startsWith("bgp.neighbors"))).toBe(true);
+  });
   it("accepts native BGP runtime service rows without inventing a host/managed scope", () => {
     const native = { ...runtime(), bgp: bgpStatus(), appliance_services: [...runtime().appliance_services, bgpStatus()] };
     const parsed = runtimeSchema.parse(native);
@@ -124,6 +185,31 @@ describe("BGP and DNAT configuration contracts", () => {
     candidate.firewall.nat.destination_rewrite.push({ ...dnatRule(), destination_port: 257 });
     expect(validateConfig(candidate).some(issue => issue.message.includes("At most 256"))).toBe(true);
   });
+  it("validates WireGuard gateway ownership independently of speaker bootstrap and tunnel subnet", () => {
+    const candidate = bgpConfig(), publicKey = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+    const wg = interfaceSchema.parse({
+      ...candidate.interfaces[0], kind: "wireguard",
+      wireguard: { key_ref: "a".repeat(32), listen_port: 51820, peers: [{
+        public_key: publicKey, enabled: true, allowed_ips: ["198.51.100.22/32", "2001:db8::/32"], persistent_keepalive_seconds: 25,
+      }] },
+    });
+    if (wg.kind !== "wireguard") throw new Error("Expected WireGuard fixture");
+    candidate.interfaces[0] = wg;
+    const peer = candidate.bgp!.neighbors[0]!, forwarding = wg.wireguard.peers[0]!;
+    Object.assign(peer, { address: "198.51.100.22", multihop_ttl: 8, wireguard_public_key: publicKey, allowed_next_hops: ["198.51.100.1"] });
+    expect(validateConfig(candidate).some(issue => issue.message.includes("198.51.100.1 must be covered"))).toBe(true);
+    forwarding.allowed_ips.push("198.51.100.1/32");
+    expect(validateConfig(candidate)).toEqual([]);
+    wg.wireguard.peers.push({ ...forwarding, public_key: btoa("\x03".repeat(32)), allowed_ips: ["198.51.100.0/24"] });
+    expect(validateConfig(candidate).some(issue => issue.message.includes("198.51.100.1 overlaps another enabled"))).toBe(true);
+    wg.wireguard.peers[1]!.enabled = false;
+    expect(validateConfig(candidate)).toEqual([]);
+    forwarding.allowed_ips = ["198.51.100.1/32"];
+    expect(validateConfig(candidate).some(issue => issue.message.includes("cover the BGP address"))).toBe(true);
+    forwarding.allowed_ips = ["198.51.100.22/32"];
+    peer.allowed_next_hops = [];
+    expect(validateConfig(candidate)).toEqual([]);
+  });
   it("requires WireGuard bootstrap AllowedIPs, an enabled referenced peer, and one neighbor per peer", () => {
     const candidate = bgpConfig(), publicKey = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
     const wg = interfaceSchema.parse({
@@ -132,6 +218,13 @@ describe("BGP and DNAT configuration contracts", () => {
     });
     candidate.interfaces[0] = wg; candidate.bgp!.neighbors[0]!.wireguard_public_key = publicKey;
     expect(validateConfig(candidate)).toEqual([]);
+    candidate.bgp!.neighbors[0]!.allowed_next_hops = ["192.0.2.1"];
+    expect(validateConfig(candidate)).toEqual([]);
+    for (const gateways of [["::1"], ["127.0.0.1"], ["224.0.0.1"], ["192.0.2.10"], ["192.0.2.1", "192.0.2.1"]]) {
+      candidate.bgp!.neighbors[0]!.allowed_next_hops = gateways;
+      expect(validateConfig(candidate).some(issue => issue.path.startsWith("bgp.neighbors"))).toBe(true);
+    }
+    candidate.bgp!.neighbors[0]!.allowed_next_hops = [];
     if (wg.kind !== "wireguard") throw new Error("Expected WireGuard fixture");
     wg.wireguard.peers[0]!.enabled = false;
     expect(validateConfig(candidate).some(issue => issue.message.includes("enabled WireGuard peer"))).toBe(true);

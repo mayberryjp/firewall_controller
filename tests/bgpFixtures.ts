@@ -13,7 +13,7 @@ export function bgpConfig() {
 export function bgpStatus(): BGPStatus {
   return {
     name: "bgp", state: "running", health: "up", error: null, local_asn: 65001, router_id: "192.0.2.10",
-    neighbors: [{ name: "remote", address: "192.0.2.2", interface: "lab0", state: "established", received_prefixes: 1, advertised_prefixes: 2, rejected_prefixes: 0, error: null }],
+    neighbors: [{ name: "remote", enabled: true, address: "192.0.2.2", interface: "lab0", state: "established", received_prefixes: 1, advertised_prefixes: 2, rejected_prefixes: 0, error: null }],
   };
 }
 export function bgpRoutes(): BGPRoutes {

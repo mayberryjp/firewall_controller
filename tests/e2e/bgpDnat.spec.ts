@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { bgpConfig } from "../bgpFixtures";
 import { navigationSections } from "../../src/constants/navigation";
-import type { PackageRequest } from "../../src/types/domain";
+import { interfaceSchema, type PackageRequest } from "../../src/types/domain";
 
 async function navigate(page: Page, title: string) {
   const section = navigationSections.find(group => group.pages.some(entry => entry.title === title));
@@ -24,6 +24,97 @@ async function select(page: Page, label: string, value: string) {
   await page.locator(".v-select").filter({ has: page.getByRole("combobox", { name: label, exact: true }) }).click();
   await page.getByRole("option", { name: value, exact: true }).click();
 }
+test("WireGuard BGP next hops accept keyboard input and survive staging", async ({ page }, testInfo) => {
+  const initialConfig = bgpConfig(), publicKey = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+  initialConfig.interfaces.push(interfaceSchema.parse({
+    name: "wg0", kind: "wireguard", role: "lan", up: true, mtu: 1420, addresses: ["10.0.0.1/24"],
+    wireguard: { key_ref: "a".repeat(32), listen_port: 51820, peers: [{ public_key: publicKey, enabled: true, allowed_ips: ["10.0.0.2/32", "198.51.100.0/24"], persistent_keepalive_seconds: 25 }] },
+  }));
+  Object.assign(initialConfig.bgp!.neighbors[0]!, { interface: "wg0", address: "10.0.0.2", local_address: "10.0.0.1", wireguard_public_key: publicKey });
+  const backend = await mockBackend(page, { initialConfig });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await navigate(page, "BGP PEERS");
+  await page.getByRole("button", { name: "Edit BGP peer remote", exact: true }).click();
+  const editor = page.getByRole("group", { name: "BGP peer editor", exact: true });
+  await expect(editor).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Sent routes", exact: true })).toHaveCount(0);
+  expect(await editor.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const fieldHeights = await editor.locator(".v-text-field:not(.v-textarea) .v-field").evaluateAll(fields => fields.map(field => field.getBoundingClientRect().height));
+  expect(Math.max(...fieldHeights) - Math.min(...fieldHeights)).toBeLessThanOrEqual(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const gateways = page.getByLabel("Allowed next hops", { exact: true });
+  await expect(gateways).toBeEnabled();
+  await gateways.fill("203.0.113.5");
+  await page.getByRole("button", { name: "Save peer", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "203.0.113.5 must be covered" })).toBeVisible();
+  await expect(editor).toBeVisible();
+  expect(backend.writes).toEqual([]);
+  await gateways.fill("");
+  await gateways.click();
+  await expect(gateways).toBeFocused();
+  await gateways.pressSequentially("198.51.100.3");
+  await gateways.press("Enter");
+  await gateways.pressSequentially("198.51.100.4");
+  await expect(gateways).toHaveValue("198.51.100.3\n198.51.100.4");
+  await editor.screenshot({ path: testInfo.outputPath("bgp-peer-editor.png"), animations: "disabled" });
+  await page.getByRole("button", { name: "Save peer", exact: true }).click();
+  await expect(gateways).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Sent routes", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Edit BGP peer remote", exact: true }).click();
+  await expect(gateways).toBeEnabled();
+  await expect(gateways).toHaveValue("198.51.100.3\n198.51.100.4");
+  expect(backend.writes).toEqual([]);
+});
+
+test("BGP peer enable switches stage beside Actions and persist through confirmed apply", async ({ page }) => {
+  const initialConfig = bgpConfig(), backend = await mockBackend(page, { initialConfig });
+  const dialogs: string[] = [];
+  page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await navigate(page, "BGP PEERS");
+  const peers = page.getByRole("region", { name: "BGP peers", exact: true });
+  const toggle = peers.getByRole("checkbox", { name: "BGP peer enabled for remote", exact: true });
+  await expect(toggle).toBeChecked();
+  await expect(peers.locator("thead th").nth(9)).toHaveText("Enabled");
+  await expect(peers.locator("thead th").nth(10)).toHaveText("Actions");
+  await expect(peers.locator("tbody tr").first().getByRole("cell").nth(9).getByRole("checkbox")).toBeChecked();
+  for (const enabled of [false, true]) {
+    const writesBefore = backend.writes.length;
+    await toggle.setChecked(enabled);
+    await expect(peers).toContainText("Not applied");
+    expect(backend.writes).toHaveLength(writesBefore);
+    expect(dialogs).toEqual([]);
+    await navigate(page, "SAVE");
+    const review = page.getByRole("region", { name: "SAVE", exact: true });
+    await expect(review.locator(".diff-warnings")).toContainText("restart the whole BGP worker");
+    await review.getByRole("button", { name: "Commit & push", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("bgp.write");
+    await dialog.getByRole("button", { name: "Push changes", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "Confirm changes", exact: true })).toBeEnabled();
+    await dialog.getByRole("button", { name: "Confirm changes", exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    const submitted = backend.writes.filter(write => write.path === "/transactions").at(-1)!.body as PackageRequest;
+    expect(submitted.config.bgp!.neighbors[0]).toEqual({ ...initialConfig.bgp!.neighbors[0], enabled });
+    expect(submitted.config.bgp!.enabled).toBe(true);
+    expect(submitted.config.interfaces).toEqual(initialConfig.interfaces);
+    expect(submitted.config.routes).toEqual(initialConfig.routes);
+    await page.reload(); await navigate(page, "BGP PEERS");
+    await expect(toggle).toBeChecked({ checked: enabled });
+    await expect(peers.locator(".v-chip")).toHaveText(enabled ? "Established" : "Disabled");
+    await expect(peers.locator(".v-chip")).not.toHaveClass(/text-error/);
+    await navigate(page, "BGP ROUTES");
+    await expect(page.getByRole("cell", { name: "198.51.100.0/24", exact: true })).toHaveCount(enabled ? 1 : 0);
+    await navigate(page, "BGP PEERS");
+  }
+});
+
 test("BGP overview distributes peer details across the full card width", async ({ page, isMobile }, testInfo) => {
   await mockBackend(page, { initialConfig: bgpConfig() });
   await page.goto("/connect");
@@ -98,9 +189,12 @@ test("BGP peers and DNAT stage inline, preserve the complete package, and surviv
   await expect(bgp.getByLabel("Local ASN", { exact: true })).toHaveCount(0);
   await bgp.getByRole("button", { name: "Add BGP peer", exact: true }).click();
   await bgp.getByLabel("Peer name", { exact: true }).fill("second");
-  await bgp.getByLabel("Peer address", { exact: true }).fill("192.0.2.3");
+  await bgp.getByLabel("Peer address", { exact: true }).fill("198.51.100.22");
   await select(page, "Peer interface", "LAB0");
   await select(page, "Local address", "192.0.2.10");
+  await bgp.getByLabel("Multihop TTL", { exact: true }).fill("8");
+  await bgp.getByLabel("Allowed next hops", { exact: true }).fill("192.0.2.1,\n192.0.2.3");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await bgp.getByRole("button", { name: "Save peer", exact: true }).click();
   await expect(bgp).toContainText("second");
   await expect(bgp).toContainText("Not applied");
@@ -128,12 +222,19 @@ test("BGP peers and DNAT stage inline, preserve the complete package, and surviv
   await expect(dialog).not.toBeVisible();
   const submitted = backend.writes.find(write => write.path === "/transactions")!.body as PackageRequest;
   expect(submitted.config.bgp!.neighbors).toHaveLength(2);
+  expect(submitted.config.bgp!.neighbors.find(peer => peer.name === "second")).toMatchObject({
+    address: "198.51.100.22", local_address: "192.0.2.10", multihop_ttl: 8, allowed_next_hops: ["192.0.2.1", "192.0.2.3"],
+  });
   expect(submitted.config.firewall.nat.destination_rewrite).toEqual([{ origin: "manual", import_source: null, out_interface: "wan0", protocol: "udp", destination_port: 53, target_interface: "lab0", target_address: "192.0.2.53" }]);
   expect(submitted.config.firewall.nat.masquerade).toEqual(initialConfig.firewall.nat.masquerade);
   expect(submitted.config.routes).toEqual(initialConfig.routes);
   expect(submitted.config.interfaces).toEqual(initialConfig.interfaces);
   await page.reload(); await navigate(page, "BGP PEERS");
   await expect(page.getByRole("region", { name: "BGP peers", exact: true })).toContainText("second");
+  await page.getByRole("button", { name: "Edit BGP peer second", exact: true }).click();
+  await expect(page.getByLabel("Multihop TTL", { exact: true })).toHaveValue("8");
+  await expect(page.getByLabel("Allowed next hops", { exact: true })).toHaveValue("192.0.2.1\n192.0.2.3");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await navigate(page, "DNAT");
   await expect(page.getByRole("region", { name: "DNAT", exact: true })).toContainText("192.0.2.53");
 });

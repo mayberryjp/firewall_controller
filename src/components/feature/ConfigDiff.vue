@@ -85,7 +85,7 @@ const totals = computed(() => files.value.reduce((total, file) => ({
       variant="tonal"
       class="mb-4"
     >
-      BGP changes withdraw and relearn routes. All live-up connected IPv4 networks are exported; static and learned routes are not redistributed. Default-route import is opt-in. Learned WireGuard AllowedIPs also authorize incoming source addresses: trust the selected peer. Keep static bootstrap routes/AllowedIPs and explicit trusted-peer TCP 179 input permits; none are automatically created.
+      BGP changes restart the whole BGP worker: other enabled peers may briefly reconnect, counters and diagnostics reset, and routes are withdrawn and relearned. Re-enabling or rolling back starts fresh sessions rather than restoring old session state. Disabling a BGP peer preserves its settings, WireGuard transport and static AllowedIPs/routes. All live-up connected IPv4 networks are exported; static and learned routes are not redistributed. Default-route import is opt-in. Learned WireGuard AllowedIPs also authorize incoming source addresses: trust the selected peer. Keep static bootstrap routes/AllowedIPs and explicit trusted-peer TCP 179 input permits; none are automatically created.
     </v-alert>
     <v-alert
       v-if="changes.some(item => item.area === 'mdns')"

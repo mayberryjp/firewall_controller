@@ -275,6 +275,20 @@ The exact endpoint is also suggested in API Explorer.
 Routing > **BGP PROCESS** (`/routing/bgp`) stages the local ASN/router ID, enable
 switch, timers, and global prefix limit, with all options visible. Routing >
 **BGP PEERS** (`/routing/bgp/peers`) owns inline peer add/edit/delete controls.
+Adding or editing a peer replaces the status table with a responsive configuration
+form; saving or canceling restores the peer statuses and route counts.
+Each peer row has an **Enabled** switch immediately before **Actions**. It stages
+only that peer's administrative state, with no popup; use the existing SAVE/apply,
+confirmation and rollback flow. Omitted neighbor `enabled` defaults to true.
+Deploy the backend from
+[handoff 2026-11-16-03](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-16.md#2026-11-16-03-per-neighbor-bgp-enable-toggle)
+before submitting peer toggles. Disabled peers retain all settings and still
+require valid interfaces, peer selection and bootstrap coverage. Global BGP and
+WireGuard enablement are independent; all BGP peers may be disabled.
+Applying BGP changes restarts the whole worker, so other enabled peers may
+reconnect and counters/diagnostics reset. Disabled peers lose learned forwarding
+additions, not static routes or WireGuard configuration. Re-enabling/rollback
+starts fresh sessions and relearns routes; the SAVE review includes this warning.
 For initial setup, save the process identity
 while disabled, add a peer, then enable BGP. Peer rows show colored applied session
 states and sent/received route counts; uncommitted changes show Not applied, and
@@ -291,6 +305,32 @@ stale, unavailable and stopped-worker results do not retain exports as current.
 Both reads use `state.read`; deploy the matching Unreleased backend before
 using Advertised. Learned routes and WireGuard AllowedIPs are never copied into
 desired configuration.
+
+The [November 16 routed-BGP handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-16.md)
+adds per-neighbor **Multihop TTL** (1-255, default 1) and **Allowed next hops**
+(up to 32 unique IPv4 addresses). Deploy that backend before submitting these
+fields. TTL is a transmit hop budget, not inbound TTL security. An empty gateway
+list authorizes only the speaker address; a nonempty list replaces that implicit
+authorization. Listed forwarding gateways must be unique unicast IPv4 addresses,
+not firewall addresses. For non-WireGuard interfaces they must also be usable hosts
+on the selected interface's static subnets; `/31` hosts are supported.
+Routed non-WireGuard speakers require TTL greater than 1 and a nonempty list.
+WireGuard gateway lists remain editable and are preserved when changing interfaces.
+Deploy a backend that removes the WireGuard empty-list restriction before applying
+these lists, as described in the
+[WireGuard correction](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-16.md#2026-11-16-02-wireguard-separate-speaker-and-next-hop-correction).
+Each listed WireGuard gateway must be covered by the selected enabled peer's
+static AllowedIPs, with no coverage by another enabled peer on the same interface.
+Off-subnet tunnel gateways are valid; no Ethernet subnet restriction applies.
+The speaker's bootstrap address must independently remain statically covered.
+Learned traffic uses device-only routes and destination AllowedIPs on that same
+peer; the advertised next hop is preserved in route details.
+Provision independent bootstrap and return routes, TCP/179 permits, and a gateway
+that forwards advertised destinations; never bootstrap a session over itself.
+Peer rows show the latest rejection's prefix, next hop and reason alongside the
+rejection count, separately from session and installation errors. This historical
+diagnostic survives reconnects/successful updates and resets on worker restart;
+it does not indicate an installed route or a failed session.
 
 WireGuard peer details label configured Allowed IPs separately from read-only
 BGP-learned additions. These use successfully installed, selected received routes,

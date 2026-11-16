@@ -36,8 +36,11 @@ export const destinationRewriteSchema = z.object({
 export type DestinationRewrite = z.infer<typeof destinationRewriteSchema>;
 export const bgpNeighborSchema = z.object({
   ...annotation,
+  enabled: z.boolean().default(true),
   name: z.string(), address: z.string(), interface: z.string(), local_address: z.string(),
   remote_asn: integer.min(1).max(4294967294), wireguard_public_key: z.string().default(""),
+  multihop_ttl: integer.min(1).max(255).default(1),
+  allowed_next_hops: z.array(z.string()).max(32).default([]),
   accept_default: z.boolean().default(false),
 }).strict();
 export const bgpSchema = z.object({
@@ -56,8 +59,10 @@ export const bgpStatusSchema = z.object({
   connected_prefixes: z.array(z.string()).optional(), installed_prefixes: bgpCount,
   neighbors: z.array(z.object({
     name: z.string(), address: z.string(), interface: z.string(), state: z.string(),
+    enabled: z.boolean().optional(),
     received_prefixes: bgpCount, advertised_prefixes: bgpCount, rejected_prefixes: bgpCount,
     negotiated_hold_seconds: bgpCount, remote_router_id: z.string().nullable().optional(),
+    last_rejection: z.object({ prefix: z.string(), next_hop: z.string(), reason: z.string() }).nullable().optional(),
     error: z.string().nullable().optional(),
   })).optional(),
 });

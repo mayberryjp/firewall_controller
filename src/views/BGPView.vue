@@ -15,7 +15,13 @@ const selected = computed(() => store.draft ?? store.state.data?.desired);
 const rows = computed(() => selected.value?.bgp?.neighbors ?? []);
 const settings = ref(bgpSchema.parse({})), baseline = ref(""), settingsStart = ref(stableJson(settings.value));
 const editing = ref<number | null>(null), error = ref(""), formStart = ref("");
-const form = ref<BGPNeighbor>({ name: "", address: "", interface: "", local_address: "", remote_asn: 65002, wireguard_public_key: "", accept_default: false });
+const form = ref<BGPNeighbor>(bgpNeighborSchema.parse({ name: "", address: "", interface: "", local_address: "", remote_asn: 65002 }));
+const nextHopsText = ref("");
+const toggleVersions = ref<Record<string, number>>({});
+const rejectionReasons: Record<string, string> = {
+  as_path: "AS path rejected", next_hop_not_allowed: "Next hop not allowed",
+  default_not_allowed: "Default route not allowed", invalid_prefix: "Invalid prefix", connected_route: "Connected route",
+};
 const blocked = computed(() => Boolean(store.readOnlyReason) || !selected.value || store.bgpUnsupported);
 const processStatus = computed(() => {
   const state = store.bgpStatusCurrent ? store.bgpStatus.data?.error ? "error" : store.bgpStatus.data?.state : undefined;
@@ -23,7 +29,7 @@ const processStatus = computed(() => {
   return { label: state ? labels[state] ?? "Unknown" : "Unknown", color: state === "running" ? "success" : state === "error" ? "error" : "default" };
 });
 const settingsDirty = computed(() => stableJson(settings.value) !== settingsStart.value);
-const formValue = () => stableJson(form.value);
+const formValue = () => stableJson({ ...form.value, allowed_next_hops: nextHopsText.value });
 const formDirty = computed(() => editing.value !== null && formValue() !== formStart.value);
 watch([settingsDirty, formDirty], () => { store.editorDirty = settingsDirty.value || formDirty.value; }, { flush: "sync" });
 function sync(): void {
@@ -37,11 +43,14 @@ const interfaces = computed(() => selected.value?.interfaces.filter(link => link
 const link = computed(() => interfaces.value.find(item => item.name === form.value.interface));
 const addresses = computed(() => link.value?.addresses.filter(address => !address.includes(":")).map(address => address.split("/")[0]!) ?? []);
 const keys = computed(() => link.value?.kind === "wireguard" ? link.value.wireguard.peers.filter(peer => peer.enabled !== false).map(peer => peer.public_key) : []);
-function changeInterface(): void { form.value.local_address = ""; form.value.wireguard_public_key = ""; }
+function changeInterface(): void {
+  form.value.local_address = ""; form.value.wireguard_public_key = "";
+}
 function open(index: number): void {
   error.value = ""; editing.value = index;
   const row = rows.value[index];
-  form.value = row ? { ...row } : { name: "", address: "", interface: "", local_address: "", remote_asn: 65002, wireguard_public_key: "", accept_default: false };
+  form.value = bgpNeighborSchema.parse(row ?? { name: "", address: "", interface: "", local_address: "", remote_asn: 65002 });
+  nextHopsText.value = form.value.allowed_next_hops.join("\n");
   formStart.value = formValue();
 }
 function close(): void { editing.value = null; store.editorDirty = settingsDirty.value; }
@@ -60,7 +69,7 @@ function message(failure: unknown): string {
 function savePeer(): void {
   error.value = "";
   try {
-    const peer = bgpNeighborSchema.parse({ ...form.value, accept_default: false });
+    const peer = bgpNeighborSchema.parse({ ...form.value, allowed_next_hops: nextHopsText.value.trim() ? nextHopsText.value.trim().split(/[\s,]+/) : [], accept_default: false });
     const peers = [...rows.value];
     if (editing.value === -1) peers.push(peer);
     else if (editing.value !== null) peers[editing.value] = peer;
@@ -70,6 +79,12 @@ function savePeer(): void {
 }
 function saveSettings(): void { error.value = ""; try { commit([...rows.value]); } catch (failure) { error.value = message(failure); } }
 function remove(index: number): void { error.value = ""; try { commit(rows.value.filter((_, position) => position !== index)); } catch (failure) { error.value = message(failure); } }
+function toggle(peer: BGPNeighbor, enabled: boolean): void {
+  error.value = "";
+  try { commit(rows.value.map(row => row.name === peer.name ? { ...row, enabled } : row)); }
+  catch (failure) { error.value = message(failure); }
+  toggleVersions.value[peer.name] = (toggleVersions.value[peer.name] ?? 0) + 1;
+}
 function cancelSettings(): void { close(); sync(); error.value = ""; }
 function status(peer: BGPNeighbor) {
   const applied = (store.state.data?.active_transaction?.candidate ?? store.state.data?.desired)?.bgp;
@@ -233,136 +248,199 @@ onMounted(() => { if (store.connected) void store.refreshBGPStatus(); });
       >
         {{ store.bgpStatus.data.error }}
       </p>
-      <v-table class="inline-table">
-        <thead><tr><th>Peer</th><th>Address</th><th>Interface</th><th>Local address</th><th>Remote ASN</th><th>Status</th><th>Sent routes</th><th>Received routes</th><th>Rejected prefixes</th><th>Actions</th></tr></thead>
+      <v-table
+        v-if="editing === null"
+        class="inline-table"
+      >
+        <thead><tr><th>Peer</th><th>Speaker address</th><th>Interface</th><th>Local address</th><th>Remote ASN</th><th>Status</th><th>Sent routes</th><th>Received routes</th><th>Rejected prefixes</th><th>Enabled</th><th>Actions</th></tr></thead>
         <tbody>
-          <template
-            v-for="(peer, index) in [...rows, ...(editing === -1 ? [null] : [])]"
+          <tr
+            v-for="(peer, index) in rows"
             :key="index"
           >
-            <tr v-if="editing === index || editing === -1 && index === rows.length">
-              <td>
-                <v-text-field
-                  v-model="form.name"
-                  label="Peer name"
-                  density="compact"
-                  hide-details
-                  :disabled="blocked"
-                />
-              </td>
-              <td>
-                <v-text-field
-                  v-model="form.address"
-                  label="Peer address"
-                  density="compact"
-                  hide-details
-                  :disabled="blocked"
-                />
-              </td>
-              <td>
-                <v-select
-                  v-model="form.interface"
-                  :items="interfaceChoices(interfaces)"
-                  label="Peer interface"
-                  density="compact"
-                  hide-details
-                  :disabled="blocked"
-                  @update:model-value="changeInterface"
-                />
-              </td>
-              <td>
-                <v-select
-                  v-model="form.local_address"
-                  :items="addresses"
-                  label="Local address"
-                  density="compact"
-                  hide-details
-                  :disabled="blocked"
-                />
-                <v-select
-                  v-if="link?.kind === 'wireguard'"
-                  v-model="form.wireguard_public_key"
-                  :items="keys"
-                  label="WireGuard peer"
-                  density="compact"
-                  hide-details
-                  :disabled="blocked"
-                />
-              </td>
-              <td>
-                <v-text-field
-                  v-model.number="form.remote_asn"
-                  label="Remote ASN"
-                  type="number"
-                  density="compact"
-                  hide-details
-                  :disabled="blocked"
-                />
-              </td>
-              <td colspan="4" />
-              <td>
-                <v-btn
-                  color="primary"
-                  size="small"
-                  :disabled="blocked"
-                  @click="savePeer"
-                >
-                  Save peer
-                </v-btn><v-btn
-                  variant="text"
-                  size="small"
-                  @click="close"
-                >
-                  Cancel
-                </v-btn>
-              </td>
-            </tr>
-            <tr v-else-if="peer">
-              <td :title="peer.metadata?.description">
-                {{ peer.metadata?.display_name || peer.name }}
-              </td>
-              <td>{{ peer.address }}</td><td>{{ formatInterfaceName(peer.interface) }}</td><td>{{ peer.local_address }}</td><td>{{ peer.remote_asn }}</td>
-              <td>
-                <v-chip
-                  size="small"
-                  variant="tonal"
-                  :color="status(peer).color"
-                  :title="status(peer).observation?.error ?? undefined"
-                >
-                  {{ status(peer).label }}
-                </v-chip>
-              </td>
-              <td>{{ status(peer).observation?.advertised_prefixes ?? 'Unknown' }}</td>
-              <td>{{ status(peer).observation?.received_prefixes ?? 'Unknown' }}</td>
-              <td>{{ status(peer).observation?.rejected_prefixes ?? 'Unknown' }}</td>
-              <td>
-                <v-btn
-                  icon="mdi-pencil-outline"
-                  size="x-small"
-                  variant="text"
-                  :aria-label="`Edit BGP peer ${peer.name}`"
-                  :disabled="blocked || editing !== null"
-                  @click="open(index)"
-                />
-                <v-btn
-                  icon="mdi-delete-outline"
-                  size="x-small"
-                  variant="text"
-                  color="error"
-                  :aria-label="`Delete BGP peer ${peer.name}`"
-                  :disabled="blocked || editing !== null"
-                  @click="remove(index)"
-                />
-              </td>
-            </tr>
-          </template>
+            <td :title="peer.metadata?.description">
+              {{ peer.metadata?.display_name || peer.name }}
+            </td>
+            <td>{{ peer.address }}</td><td>{{ formatInterfaceName(peer.interface) }}</td><td>{{ peer.local_address }}</td><td>{{ peer.remote_asn }}</td>
+            <td>
+              <v-chip
+                size="small"
+                variant="tonal"
+                :color="status(peer).color"
+                :title="status(peer).observation?.error ?? undefined"
+              >
+                {{ status(peer).label }}
+              </v-chip>
+            </td>
+            <td>{{ status(peer).observation?.advertised_prefixes ?? 'Unknown' }}</td>
+            <td>{{ status(peer).observation?.received_prefixes ?? 'Unknown' }}</td>
+            <td>
+              {{ status(peer).observation?.rejected_prefixes ?? 'Unknown' }}
+              <div
+                v-if="status(peer).observation?.last_rejection"
+                class="text-caption"
+                title="Latest rejected prefix, not a session failure or installed route. Retained until another rejection or worker restart."
+              >
+                Last rejection: {{ status(peer).observation!.last_rejection!.prefix }}
+                via {{ status(peer).observation!.last_rejection!.next_hop }}:
+                {{ rejectionReasons[status(peer).observation!.last_rejection!.reason] ?? status(peer).observation!.last_rejection!.reason }}
+              </div>
+            </td>
+            <td>
+              <v-switch
+                :key="toggleVersions[peer.name] ?? 0"
+                :model-value="peer.enabled"
+                :aria-label="`BGP peer enabled for ${peer.name}`"
+                :title="peer.enabled ? 'Enabled' : 'Disabled'"
+                :disabled="blocked"
+                density="compact"
+                hide-details
+                color="primary"
+                @update:model-value="toggle(peer, Boolean($event))"
+              />
+            </td>
+            <td>
+              <v-btn
+                icon="mdi-pencil-outline"
+                size="x-small"
+                variant="text"
+                :aria-label="`Edit BGP peer ${peer.name}`"
+                :disabled="blocked || editing !== null"
+                @click="open(index)"
+              />
+              <v-btn
+                icon="mdi-delete-outline"
+                size="x-small"
+                variant="text"
+                color="error"
+                :aria-label="`Delete BGP peer ${peer.name}`"
+                :disabled="blocked || editing !== null"
+                @click="remove(index)"
+              />
+            </td>
+          </tr>
           <tr v-if="!rows.length && editing === null">
-            <td colspan="10">
+            <td colspan="11">
               No BGP peers.
             </td>
           </tr>
         </tbody>
       </v-table>
+      <div
+        v-else
+        class="peer-editor"
+        role="group"
+        aria-label="BGP peer editor"
+      >
+        <v-text-field
+          v-model="form.name"
+          label="Peer name"
+          density="compact"
+          hide-details
+          :disabled="blocked"
+        />
+        <v-text-field
+          v-model="form.address"
+          label="Peer address"
+          title="Remote BGP speaker's session address, not necessarily the forwarding gateway"
+          density="compact"
+          hide-details
+          :disabled="blocked"
+        />
+        <v-select
+          v-model="form.interface"
+          :items="interfaceChoices(interfaces)"
+          label="Peer interface"
+          density="compact"
+          hide-details
+          :disabled="blocked"
+          @update:model-value="changeInterface"
+        />
+        <div class="d-flex flex-column ga-2">
+          <v-select
+            v-model="form.local_address"
+            :items="addresses"
+            label="Local address"
+            density="compact"
+            hide-details
+            :disabled="blocked"
+          />
+          <v-select
+            v-if="link?.kind === 'wireguard'"
+            v-model="form.wireguard_public_key"
+            :items="keys"
+            label="WireGuard peer"
+            density="compact"
+            hide-details
+            :disabled="blocked"
+          />
+        </div>
+        <v-text-field
+          v-model.number="form.remote_asn"
+          label="Remote ASN"
+          type="number"
+          density="compact"
+          hide-details
+          :disabled="blocked"
+        />
+        <div>
+          <v-text-field
+            v-model.number="form.multihop_ttl"
+            label="Multihop TTL"
+            type="number"
+            min="1"
+            max="255"
+            density="compact"
+            hide-details
+            :disabled="blocked"
+          />
+          <p class="text-caption">
+            Transmit hop budget (1-255), not inbound TTL security.
+          </p>
+        </div>
+        <div class="peer-editor-wide">
+          <v-textarea
+            v-model="nextHopsText"
+            label="Allowed next hops"
+            rows="2"
+            density="compact"
+            hide-details
+            :disabled="blocked"
+          />
+          <p class="text-caption">
+            Empty: peer address only. Otherwise only listed forwarding gateways are authorized (up to 32 IPv4 addresses, separated by commas or newlines).
+          </p>
+          <p
+            v-if="link?.kind === 'wireguard'"
+            class="text-caption"
+          >
+            The speaker and gateways need the selected peer's static AllowedIPs coverage; gateways must not belong to another enabled peer. Gateways can be outside the local tunnel subnet; learned traffic uses the selected peer directly.
+          </p>
+          <p
+            v-else
+            class="text-caption"
+          >
+            Routed speakers need TTL &gt;1, listed gateways, independent bootstrap/return routes and TCP/179 permits.
+          </p>
+        </div>
+        <div class="peer-editor-wide d-flex flex-wrap ga-2">
+          <v-btn
+            color="primary"
+            size="small"
+            :disabled="blocked"
+            @click="savePeer"
+          >
+            Save peer
+          </v-btn>
+          <v-btn
+            variant="text"
+            size="small"
+            @click="close"
+          >
+            Cancel
+          </v-btn>
+        </div>
+      </div>
     </template>
     <p
       v-if="error"
@@ -383,7 +461,15 @@ onMounted(() => { if (store.connected) void store.refreshBGPStatus(); });
   .setting-name { padding-top: 0; }
 }
 .inline-table :deep(th), .inline-table :deep(td) { padding: 2px 6px; }
-.inline-table :deep(.v-input) { min-width: 140px; }
 .inline-table :deep(th), .inline-table :deep(td) { white-space: nowrap; }
 .inline-table :deep(td) { vertical-align: top; }
+.peer-editor { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.peer-editor > * { min-width: 0; }
+.peer-editor-wide { grid-column: 1 / -1; }
+@media (max-width: 900px) {
+  .peer-editor { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .peer-editor { grid-template-columns: minmax(0, 1fr); }
+}
 </style>

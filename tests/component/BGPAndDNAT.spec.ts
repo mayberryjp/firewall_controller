@@ -8,6 +8,7 @@ import OverviewBGP from "@/components/feature/OverviewBGP.vue";
 import { useControllerStore } from "@/stores/controller";
 import * as api from "@/services/netcontrol";
 import { ApiFailure } from "@/services/api";
+import { interfaceSchema, type BGPStatus } from "@/types/domain";
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
 import { state } from "../fixtures";
 import { dragRule } from "../dragRule";
@@ -19,7 +20,9 @@ const field = {
 const stubs = {
   VTable: { template: "<table><slot /></table>" },
   VBtn: { props: ["disabled"], template: '<button :disabled="disabled"><slot /></button>' },
-  VTextField: field, VTextarea: field, VSelect: field,
+  VTextField: field, VTextarea: {
+    ...field, template: '<textarea :aria-label="label" :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+  }, VSelect: field,
   VTabs: { props: ["modelValue"], emits: ["update:modelValue"], template: '<div><slot /><button @click="$emit(\'update:modelValue\', \'advertised\')">Show advertised routes</button><button @click="$emit(\'update:modelValue\', \'received\')">Show received routes</button></div>' },
   VTab: { template: "<span><slot /></span>" },
   VDivider: true,
@@ -39,8 +42,147 @@ beforeEach(() => {
 });
 afterEach(() => { wrapper?.unmount(); useControllerStore().$dispose(); vi.useRealTimers(); });
 const button = (text: string) => wrapper.findAll("button").find(row => row.text() === text)!;
-const input = (label: string) => wrapper.get(`input[aria-label="${label}"]`);
+const input = (label: string) => wrapper.get(`input[aria-label="${label}"], textarea[aria-label="${label}"]`);
 describe("focused inline BGP and DNAT management", () => {
+  it("stages peer on/off directly before Actions without changing other settings or applied status", async () => {
+    const store = useControllerStore(), confirm = vi.spyOn(window, "confirm"), alert = vi.spyOn(window, "alert");
+    const peer = store.state.data!.desired.bgp!.neighbors[0]!;
+    Object.assign(peer, { metadata: { display_name: "Transit", description: "Preserve labels" }, accept_default: true, multihop_ttl: 8, allowed_next_hops: ["192.0.2.1"] });
+    const before = JSON.parse(JSON.stringify(store.state.data!.desired));
+    wrapper = mount(BGPView, { props: { mode: "peers" }, global: { stubs } }); await flushPromises();
+    const toggle = () => input("BGP peer enabled for remote");
+    expect(wrapper.findAll("thead th").slice(-2).map(header => header.text())).toEqual(["Enabled", "Actions"]);
+    expect(wrapper.findAll("tbody td")[9]!.find('input[type="checkbox"]').exists()).toBe(true);
+    expect(toggle().element).toHaveProperty("checked", true);
+    await toggle().setValue(false); await flushPromises();
+    expect(store.draft).toEqual({ ...before, bgp: { ...before.bgp, neighbors: [{ ...before.bgp.neighbors[0], enabled: false }] } });
+    expect(store.state.data!.desired).toEqual(before);
+    expect(store.draft!.bgp!.enabled).toBe(true);
+    expect(store.validation).toEqual([]);
+    expect(wrapper.get(".chip").text()).toBe("Not applied");
+    wrapper.unmount();
+    wrapper = mount(OverviewBGP, { global: { stubs } }); await flushPromises();
+    expect(wrapper.get(".chip").text()).toBe("Established");
+    wrapper.unmount();
+    wrapper = mount(BGPView, { props: { mode: "peers" }, global: { stubs } }); await flushPromises();
+    expect(toggle().element).toHaveProperty("checked", false);
+    await wrapper.get('[aria-label="Edit BGP peer remote"]').trigger("click");
+    await button("Save peer").trigger("click"); await flushPromises();
+    expect(store.draft!.bgp!.neighbors[0]!.enabled).toBe(false);
+    await toggle().setValue(true); await flushPromises();
+    expect(store.draft!.bgp!.neighbors[0]!.enabled).toBe(true);
+    expect(confirm).not.toHaveBeenCalled(); expect(alert).not.toHaveBeenCalled();
+  });
+  it("restores the peer toggle and reports a staging denial inline without changing configuration", async () => {
+    const store = useControllerStore();
+    wrapper = mount(BGPView, { props: { mode: "peers" }, global: { stubs } }); await flushPromises();
+    vi.spyOn(store, "stage").mockImplementation(() => { throw new Error("Permission denied"); });
+    await input("BGP peer enabled for remote").setValue(false); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toBe("Permission denied");
+    expect(input("BGP peer enabled for remote").element).toHaveProperty("checked", true);
+    expect(store.draft).toBeNull(); expect(store.state.data!.desired.bgp!.neighbors[0]!.enabled).toBe(true);
+  });
+  it.each(["add", "edit"])("hides peer telemetry during %s and restores the table on cancel", async action => {
+    wrapper = mount(BGPView, { props: { mode: "peers" }, global: { stubs } }); await flushPromises();
+    expect(wrapper.findAll("thead th").map(header => header.text())).toContain("Sent routes");
+    if (action === "add") await button("Add BGP peer").trigger("click");
+    else await wrapper.get('[aria-label="Edit BGP peer remote"]').trigger("click");
+    expect(wrapper.find("table").exists()).toBe(false);
+    expect(wrapper.find('[aria-label="BGP peer editor"]').exists()).toBe(true);
+    expect(input("Peer name").isVisible()).toBe(true);
+    expect(input("Allowed next hops").isVisible()).toBe(true);
+    expect(wrapper.find(".chip").exists()).toBe(false);
+    await button("Cancel").trigger("click");
+    expect(wrapper.find('[aria-label="BGP peer editor"]').exists()).toBe(false);
+    expect(wrapper.findAll("thead th").map(header => header.text())).toEqual([
+      "Peer", "Speaker address", "Interface", "Local address", "Remote ASN", "Status", "Sent routes", "Received routes", "Rejected prefixes", "Enabled", "Actions",
+    ]);
+    expect(wrapper.get(".chip").text()).toBe("Established");
+  });
+  it("stages routed speakers with TTL and gateway lists, validates inline, and cancels without mutating saved lists", async () => {
+    const store = useControllerStore(), confirm = vi.spyOn(window, "confirm");
+    wrapper = mount(BGPView, { props: { mode: "peers" }, global: { stubs } }); await flushPromises();
+    await wrapper.get('[aria-label="Edit BGP peer remote"]').trigger("click");
+    await input("Peer address").setValue("198.51.100.22");
+    await input("Multihop TTL").setValue("256"); await button("Save peer").trigger("click");
+    expect(wrapper.get('[role="alert"]').text()).toContain("multihop_ttl");
+    await input("Multihop TTL").setValue("8");
+    await button("Save peer").trigger("click");
+    expect(wrapper.get('[role="alert"]').text()).toContain("explicit on-link");
+    await input("Allowed next hops").setValue("192.0.2.1,\n192.0.2.3");
+    await button("Save peer").trigger("click"); await flushPromises();
+    expect(wrapper.find("table").exists()).toBe(true);
+    expect(wrapper.find('[aria-label="BGP peer editor"]').exists()).toBe(false);
+    expect(store.draft!.bgp!.neighbors[0]).toMatchObject({ address: "198.51.100.22", multihop_ttl: 8, allowed_next_hops: ["192.0.2.1", "192.0.2.3"] });
+    expect(store.validation).toEqual([]);
+    await wrapper.get('[aria-label="Edit BGP peer remote"]').trigger("click");
+    await input("Allowed next hops").setValue("192.0.2.4");
+    expect(store.editorDirty).toBe(true);
+    await button("Cancel").trigger("click");
+    expect(store.draft!.bgp!.neighbors[0]!.allowed_next_hops).toEqual(["192.0.2.1", "192.0.2.3"]);
+    expect(store.state.data!.desired.bgp!.neighbors[0]!.allowed_next_hops).toEqual([]);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+  it("keeps listed gateways editable when choosing WireGuard and preserves them through staging and reopening", async () => {
+    const store = useControllerStore(), candidate = store.state.data!.desired;
+    const publicKey = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+    candidate.interfaces.push(interfaceSchema.parse({
+      name: "wg0", kind: "wireguard", role: "lan", up: true, mtu: 1420, addresses: ["10.0.0.1/24"],
+      wireguard: { key_ref: "a".repeat(32), listen_port: 51820, peers: [{ public_key: publicKey, enabled: true, allowed_ips: ["10.0.0.0/24"], persistent_keepalive_seconds: 25 }] },
+    }));
+    wrapper = mount(BGPView, { props: { mode: "peers" }, global: { stubs } }); await flushPromises();
+    await wrapper.get('[aria-label="Edit BGP peer remote"]').trigger("click");
+    await input("Allowed next hops").setValue("10.0.0.3");
+    await input("Peer interface").setValue("wg0");
+    expect(input("Allowed next hops").element).toHaveProperty("disabled", false);
+    expect(input("Allowed next hops").element).toHaveProperty("value", "10.0.0.3");
+    await input("Allowed next hops").setValue("10.0.0.3,\n10.0.0.4");
+    await input("Local address").setValue("10.0.0.1");
+    await input("Peer address").setValue("10.0.0.2");
+    await input("WireGuard peer").setValue(publicKey);
+    await input("Allowed next hops").setValue("198.51.100.1");
+    await button("Save peer").trigger("click"); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("198.51.100.1 must be covered");
+    expect(input("Allowed next hops").element).toHaveProperty("value", "198.51.100.1");
+    expect(store.draft).toBeNull(); expect(store.editorDirty).toBe(true);
+    const tunnel = candidate.interfaces.find(link => link.name === "wg0");
+    if (tunnel?.kind !== "wireguard") throw new Error("Expected WireGuard fixture");
+    tunnel.wireguard.peers.push({ ...tunnel.wireguard.peers[0]!, public_key: btoa("\x03".repeat(32)), allowed_ips: ["10.0.0.4/32"] });
+    await input("Allowed next hops").setValue("10.0.0.3,\n10.0.0.4");
+    await button("Save peer").trigger("click"); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("10.0.0.4 overlaps another enabled");
+    expect(store.draft).toBeNull();
+    tunnel.wireguard.peers[1]!.enabled = false;
+    await button("Save peer").trigger("click"); await flushPromises();
+    expect(store.draft!.bgp!.neighbors[0]).toMatchObject({ interface: "wg0", allowed_next_hops: ["10.0.0.3", "10.0.0.4"], wireguard_public_key: publicKey });
+    await wrapper.get('[aria-label="Edit BGP peer remote"]').trigger("click");
+    expect(input("Allowed next hops").element).toHaveProperty("value", "10.0.0.3\n10.0.0.4");
+    expect(wrapper.text()).not.toContain("listed gateways are not supported");
+  });
+  it.each(["success", "failure"])("keeps rejection diagnostics neutral during initial loading and handles %s", async outcome => {
+    const store = useControllerStore();
+    let resolve!: (value: BGPStatus) => void, reject!: (error: Error) => void;
+    vi.mocked(api.getBGPStatus).mockReturnValue(new Promise<BGPStatus>((done, fail) => { resolve = done; reject = fail; }));
+    wrapper = mount(BGPView, { props: { mode: "peers" }, global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).not.toContain("Last rejection:");
+    expect(wrapper.text()).not.toContain("unavailable");
+    expect(wrapper.get(".chip").text()).toBe("Unknown");
+    if (outcome === "failure") {
+      reject(new ApiFailure("BGP unavailable", 503)); await flushPromises();
+      expect(store.bgpStatus.error).toContain("BGP unavailable");
+      expect(wrapper.text()).not.toContain("Last rejection:");
+      expect(wrapper.get(".chip").text()).toBe("Unknown");
+    } else {
+      const observed = bgpStatus();
+      observed.neighbors![0]!.last_rejection = { prefix: "203.0.113.0/24", next_hop: "192.0.2.3", reason: "next_hop_not_allowed" };
+      resolve(observed); await flushPromises();
+      expect(wrapper.get(".chip").text()).toBe("Established");
+      expect(wrapper.findAll("tbody td")[8]!.text()).toContain("Last rejection: 203.0.113.0/24 via 192.0.2.3: Next hop not allowed");
+      expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+      store.bgpStatus.stale = true; await flushPromises();
+      expect(wrapper.text()).not.toContain("Last rejection:");
+    }
+  });
   it("shows observed process status independently of draft settings and neutralizes stale status", async () => {
     const store = useControllerStore();
     wrapper = mount(BGPView, { global: { stubs } }); await flushPromises();
@@ -65,7 +207,7 @@ describe("focused inline BGP and DNAT management", () => {
     expect(wrapper.find(".chip").attributes("data-color")).toBe("success");
     expect(wrapper.find('input[aria-label="Local ASN"]').exists()).toBe(false);
     expect(wrapper.findAll("tbody td").slice(6, 8).map(cell => cell.text())).toEqual(["2", "1"]);
-    expect(wrapper.findAll("thead th").slice(8).map(cell => cell.text())).toEqual(["Rejected prefixes", "Actions"]);
+    expect(wrapper.findAll("thead th").slice(8).map(cell => cell.text())).toEqual(["Rejected prefixes", "Enabled", "Actions"]);
     expect(wrapper.findAll("tbody td")[8]!.text()).toBe("10");
     store.bgpStatus.data = { ...observed, neighbors: observed.neighbors?.map(peer => ({ ...peer, rejected_prefixes: 0, remote_router_id: null, negotiated_hold_seconds: null })) };
     await flushPromises();

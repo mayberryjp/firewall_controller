@@ -29,9 +29,12 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       ...bgpStatus(), state: settings?.enabled ? "running" : "disabled",
       neighbors: settings?.enabled ? settings.neighbors.map(peer => ({
         ...bgpStatus().neighbors![0]!, name: peer.name, address: peer.address, interface: peer.interface,
+        enabled: peer.enabled !== false,
+        ...(peer.enabled === false ? { state: "disabled", received_prefixes: 0, advertised_prefixes: 0, rejected_prefixes: 0, negotiated_hold_seconds: null, remote_router_id: null, error: null, last_rejection: null } : {}),
       })) : [],
     };
   };
+  const bgpRouteEnabled = (row: { neighbor: string }) => !activeConfig().bgp?.neighbors.some(peer => peer.name === row.neighbor && peer.enabled === false);
   const discoveryStatus = () => {
     const settings = activeConfig().mdns;
     return {
@@ -132,8 +135,8 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       if (path === "/services/udp-broadcast-relay/status") return reply({ instances: relayStatus(), error: "" });
       if (path === "/services/bgp") return reply(activeConfig().bgp ?? bgpSchema.parse({}));
       if (path === "/services/bgp/status") return reply(routingStatus());
-      if (path === "/routes/bgp") return reply({ ...bgpRoutes(), state: routingStatus().state, routes: activeConfig().bgp?.enabled ? bgpRoutes().routes : [] });
-      if (path === "/routes/bgp/advertised") return reply({ ...bgpAdvertisedRoutes(), state: routingStatus().state, routes: activeConfig().bgp?.enabled ? bgpAdvertisedRoutes().routes : [] });
+      if (path === "/routes/bgp") return reply({ ...bgpRoutes(), state: routingStatus().state, routes: activeConfig().bgp?.enabled ? bgpRoutes().routes.filter(bgpRouteEnabled) : [] });
+      if (path === "/routes/bgp/advertised") return reply({ ...bgpAdvertisedRoutes(), state: routingStatus().state, routes: activeConfig().bgp?.enabled ? bgpAdvertisedRoutes().routes.filter(bgpRouteEnabled) : [] });
       if (path === "/platform/status") return reply({
         process_health: { status: "healthy", healthy: true, stale: false, collected_at: "2026-10-27T01:02:03.987Z", components: [] },
         active_alerts: [],
