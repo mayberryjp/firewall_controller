@@ -15,9 +15,23 @@ import { resourceTitles } from "@/services/resourceCollections";
 const PollingHost = defineComponent({ setup() { usePolling(); return () => null; } });
 
 describe("routed navigation sections", () => {
-  it("places SANDO IMPORT and ADVANCED at the end of Settings", () => {
+  it("keeps the remaining Settings pages in order", () => {
     const settings = navigationSections.find(section => section.name === "settings-section");
-    expect(settings?.pages.map(page => page.name)).toEqual(["settings-general", "settings-notifications", "remote-dns", "settings-mqtt-streaming", "settings-dynamic-dns", "settings-conntrack-tuning", "settings-sando", "settings-advanced"]);
+    expect(settings?.pages.map(page => page.name)).toEqual(["settings-general", "settings-notifications", "remote-dns", "settings-mqtt-streaming", "settings-conntrack-tuning", "settings-advanced"]);
+  });
+  it.each([
+    { title: "Dynamic DNS", name: "settings-dynamic-dns", section: "services-section", path: "/services/dynamic-dns", oldPath: "/settings/dynamic-dns" },
+    { title: "SANDO IMPORT", name: "settings-sando", section: "firewall-section", path: "/firewall/sando", oldPath: "/settings/sando" },
+  ])("moves $title to its new section and redirects Settings bookmarks", async ({ title, name, section, path, oldPath }) => {
+    expect(navigationSections.find(item => item.name === section)?.pages.find(page => page.name === name))
+      .toMatchObject({ title, path });
+    expect(navigationSections.find(item => item.name === "settings-section")?.pages.some(page => page.name === name)).toBe(false);
+    const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });
+    await router.push(`${oldPath}?source=bookmark#entries`);
+    expect(router.currentRoute.value.fullPath).toBe(`${path}?source=bookmark#entries`);
+    expect(router.currentRoute.value.name).toBe(name);
+    expect(router.currentRoute.value.matched[0]?.name).toBe(section);
+    expect(router.currentRoute.value.meta.authenticated).toBe(true);
   });
   it("routes CONNTRACK TUNING under Settings", () => {
     const settings = navigationSections.find(section => section.name === "settings-section");
@@ -98,12 +112,12 @@ describe("routed navigation sections", () => {
     expect(router.resolve("/routes").name).toBe("routes");
   });
   it("keeps Config routable without a duplicate primary navigation entry", () => {
-    expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]);
+    expect(primaryNavigationSections.map(section => section.title)).toEqual(["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "System"]);
     expect(navigationSections.find(section => section.name === "networking-section")?.pages.map(page => page.name)).toEqual(["interfaces", "vlans", "loopbacks", "blackhole", "tunnels", "interface-capabilities", "rss-irq", "rps-configuration", "nic-offloads"]);
     expect(navigationSections.find(section => section.name === "routing-section")?.pages.map(page => page.name)).toEqual(["routes", "routing-table", "gateway-monitors", "bgp", "bgp-peers", "bgp-routes"]);
     expect(navigationSections.find(section => section.name === "config-section")?.path).toBe("/config");
     expect(navigationSections.find(section => section.name === "overview-section")?.path).toBe("/overview");
-    expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall-ingress", "firewall", "firewall-input", "connections", "nat", "dnat"]);
+    expect(navigationSections.find(section => section.name === "firewall-section")?.pages.map(page => page.name)).toEqual(["firewall-ingress", "firewall", "firewall-input", "connections", "nat", "dnat", "settings-sando"]);
     expect(navigationSections.find(section => section.name === "vpn-section")?.pages.map(page => page.name)).toEqual(["wireguard"]);
   });
   it("includes Download config in Diagnostics", () => {
@@ -225,6 +239,24 @@ describe("page-scoped polling", () => {
     vi.spyOn(api, "getPlatformStatus").mockResolvedValue({ process_health: {
       status: "unknown", healthy: null, collected_at: null, stale: true, components: [],
     }, active_alerts: [] });
+  });
+  it("polls Dynamic DNS on its Services page and stops after leaving", async () => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    vi.spyOn(store, "refreshRuntime").mockResolvedValue();
+    const read = vi.spyOn(store, "refreshDynamicDnsStatus").mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push("/services/dynamic-dns");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(read).toHaveBeenCalledTimes(3);
+      await router.push("/settings/general");
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(read).toHaveBeenCalledTimes(3);
+    } finally { wrapper.unmount(); store.$dispose(); visibility.mockRestore(); vi.useRealTimers(); }
   });
   it.each(["received", "advertised"] as const)("polls %s BGP routes under Routing and stops on navigation", async direction => {
     vi.useFakeTimers();

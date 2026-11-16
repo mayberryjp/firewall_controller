@@ -566,7 +566,7 @@ test("top navigation opens routed sections in the black reference theme", async 
   await navigate(page, "Physical interfaces");
   await openNavigation(page);
   await expect(navigation.getByRole("link")).toHaveCount(7);
-  for (const title of ["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "Settings"]) {
+  for (const title of ["Interfaces", "Routing", "Firewall/NAT", "VPN", "Services", "Diagnostics", "System"]) {
     await expect(navigation.getByRole("link", { name: title, exact: true })).toBeVisible();
   }
   await expect(navigation.getByRole("link", { name: "Interfaces", exact: true })).toHaveAttribute("aria-current", "page");
@@ -675,7 +675,7 @@ test("connected bubble displays its icon inside the green circle", async ({ page
   await expect(bubble).toHaveText("");
 });
 
-test("connection bubble stays bottom-right and settings uses the gear without a profile button", async ({ page, isMobile }, testInfo) => {
+test("connection bubble stays bottom-right and System uses a labeled gear without a profile button", async ({ page, isMobile }, testInfo) => {
   await mockBackend(page);
   await page.goto("/connect");
   const tooltip = page.getByRole("tooltip").filter({ has: page.locator(".v-overlay__content:visible") });
@@ -715,10 +715,12 @@ test("connection bubble stays bottom-right and settings uses the gear without a 
   const nav = page.getByRole("navigation", { name: "Main navigation" });
   await expect(nav.getByRole("link", { name: "Routing", exact: true }).locator(".mdi-transit-connection-variant")).toBeVisible();
   await expect(nav.getByRole("link", { name: "Firewall/NAT", exact: true }).locator(".mdi-wall")).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Settings", exact: true }).locator(".mdi-cog-outline")).toBeVisible();
-  await nav.getByRole("link", { name: "Settings", exact: true }).click();
+  const system = nav.getByRole("link", { name: "System", exact: true });
+  await expect(system.locator(".mdi-cog-outline")).toBeVisible();
+  await expect(system).toHaveText("System");
+  await system.click();
   await expect(page.getByRole("heading", { name: "General settings", exact: true })).toBeVisible();
-  const settingsPages = page.getByRole("navigation", { name: "Settings pages", exact: true });
+  const settingsPages = page.getByRole("navigation", { name: "System pages", exact: true });
   await expect(settingsPages.getByRole("tab", { name: "General", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(settingsPages.getByRole("tablist")).toHaveAttribute("aria-orientation", isMobile ? "horizontal" : "vertical");
   const settings = page.getByRole("region", { name: "General settings", exact: true });

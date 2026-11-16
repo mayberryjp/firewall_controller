@@ -415,7 +415,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   if (config.sando) {
     const parsed = sandoSchema.safeParse(config.sando);
     if (!parsed.success) for (const error of parsed.error.issues) issues.push({
-      path: `sando.${error.path.join(".")}`, message: error.message, page: "/settings/sando",
+      path: `sando.${error.path.join(".")}`, message: error.message, page: "/firewall/sando",
     });
   }
   const issue = (path: string, message: string, page: string) => issues.push({ path, message, page });
@@ -536,7 +536,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     }
   }
   if (config.dynamic_dns?.length) {
-    const page = "/settings/dynamic-dns", targets = new Set<string>(), uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const page = "/services/dynamic-dns", targets = new Set<string>(), uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (config.dynamic_dns.length > 32) issue("dynamic_dns", "At most 32 Dynamic DNS entries", page);
     config.dynamic_dns.forEach((entry, index) => {
       const path = `dynamic_dns.${index}`;

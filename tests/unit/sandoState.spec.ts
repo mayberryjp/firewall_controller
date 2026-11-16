@@ -42,7 +42,7 @@ describe("saved Sando contract", () => {
     expect(sandoImportReportSchema.parse(report())).toEqual(report());
     expect(sandoImportReportSchema.safeParse({ ...report(), status: "partial", imported_count: 1, skipped_count: 1 }).success).toBe(true);
     const candidate = config(); candidate.sando = { api_url: "bad", sync_enabled: false, hosts_import: null, rules_import: null };
-    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ page: "/settings/sando", path: "sando.api_url" }));
+    expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ page: "/firewall/sando", path: "sando.api_url" }));
   });
   it.each([null, "true", 1])("rejects a non-boolean sync flag %j", sync_enabled => {
     expect(sandoSchema.safeParse({ api_url: "https://sando.example", sync_enabled }).success).toBe(false);
@@ -55,6 +55,6 @@ describe("saved Sando contract", () => {
     expect(cloneConfig(after).sando!.sync_enabled).toBe(true);
     expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "sando.write"]);
     after.sando!.api_url = "";
-    expect(validateConfig(after)).toContainEqual(expect.objectContaining({ page: "/settings/sando", path: "sando.api_url" }));
+    expect(validateConfig(after)).toContainEqual(expect.objectContaining({ page: "/firewall/sando", path: "sando.api_url" }));
   });
 });

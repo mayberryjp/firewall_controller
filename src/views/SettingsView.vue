@@ -138,6 +138,8 @@ function stage(): void {
             class="setting-desc"
           >
             Lowercase letters, digits and hyphens. Leave empty to stop managing the host name; the current name is kept.
+            Host name and time zone are applied at startup and after confirmed changes, not continuously enforced.
+            Later external changes are not undone automatically.
           </p>
         </div>
       </div>

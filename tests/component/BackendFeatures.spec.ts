@@ -923,7 +923,7 @@ describe("October 17 frontend workflows", () => {
     const store = useControllerStore();
     vi.spyOn(api, "getDynamicDnsStatus").mockResolvedValue({ entries: [] });
     const upload = vi.spyOn(api, "uploadDynamicDnsSecret").mockResolvedValue({ secret_ref: "b".repeat(32) });
-    const wrapper = await render(DynamicDnsView, "/settings/dynamic-dns");
+    const wrapper = await render(DynamicDnsView, "/services/dynamic-dns");
     await wrapper.findAll("button").find(button => button.text() === "Add entry")!.trigger("click");
     const set = (label: string, value: unknown) => wrapper.findAllComponents({ name: "VTextField" }).find(item => item.attributes("label") === label)!.vm.$emit("update:modelValue", value);
     set("Name", "azure-wan"); set("Tenant ID", "11111111-1111-4111-8111-111111111111"); set("Client ID", "22222222-2222-4222-8222-222222222222");
@@ -2898,6 +2898,10 @@ describe("October 17 frontend workflows", () => {
     await flushPromises();
     const labels = wrapper.findAll("label.setting-name").map(label => label.text());
     expect(labels.slice(0, 4)).toEqual(["Host name", "Domain name", "Time zone", "Enable IPv6"]);
+    expect(wrapper.get("#general-hostname-description").text()).toContain("applied at startup and after confirmed changes, not continuously enforced");
+    expect(wrapper.get("#general-hostname-description").text()).toContain("Later external changes are not undone automatically");
+    expect(wrapper.get("#general-hostname-description").text()).toContain("the current name is kept");
+    expect(wrapper.get("#general-timezone-description").text()).toContain("the current zone is kept");
     const hostname = wrapper.findAllComponents({ name: "VTextField" }).find(input => input.attributes("id") === "general-hostname")!;
     const domain = wrapper.findAllComponents({ name: "VTextField" }).find(input => input.attributes("id") === "general-domain")!;
     hostname.vm.$emit("update:modelValue", "fw-1");

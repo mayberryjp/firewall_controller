@@ -37,6 +37,8 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/nat", name: "nat", component: () => import("@/views/NATView.vue") },
     { path: "/firewall/nat", redirect: { name: "nat" } },
     { path: "/firewall/nat/dnat", name: "dnat", component: () => import("@/views/DNATView.vue") },
+    { path: "/firewall/sando", name: "settings-sando", component: () => import("@/views/SandoView.vue") },
+    { path: "/settings/sando", redirect: { name: "settings-sando" } },
   ],
   "vpn-section": [
     { path: "/wireguard", name: "wireguard", component: () => import("@/views/WireGuardView.vue") },
@@ -51,6 +53,8 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/services/ntp", name: "ntp", component: () => import("@/views/NTPView.vue") },
     { path: "/services/syslog", name: "syslog", component: () => import("@/views/SyslogView.vue") },
     { path: "/services/vnstat", name: "vnstat", component: () => import("@/views/VnStatView.vue") },
+    { path: "/services/dynamic-dns", name: "settings-dynamic-dns", component: () => import("@/views/DynamicDnsView.vue") },
+    { path: "/settings/dynamic-dns", redirect: { name: "settings-dynamic-dns" } },
     { path: "/services/maintenance", name: "service-maintenance", component: () => import("@/views/ServiceMaintenanceView.vue") },
   ],
   "diagnostics-section": [
@@ -79,12 +83,10 @@ const sectionPages: Record<string, RouteRecordRaw[]> = {
     { path: "/settings/conntrack-tuning", name: "settings-conntrack-tuning", component: () => import("@/views/ConntrackTuningView.vue") },
     { path: "/settings/remote-dns", name: "remote-dns", component: () => import("@/views/RemoteDnsView.vue") },
     { path: "/services/remote-dns", redirect: { name: "remote-dns" } },
-    { path: "/settings/sando", name: "settings-sando", component: () => import("@/views/SandoView.vue") },
     { path: "/settings/advanced", name: "settings-advanced", component: () => import("@/views/AdvancedSettingsView.vue") },
     { path: "/settings/upgrade", name: "settings-upgrade", redirect: { name: "config-upgrade" } },
     { path: "/settings/mqtt-streaming", name: "settings-mqtt-streaming", component: () => import("@/views/HomeAssistantView.vue") },
     { path: "/settings/home-assistant", redirect: { name: "settings-mqtt-streaming" } },
-    { path: "/settings/dynamic-dns", name: "settings-dynamic-dns", component: () => import("@/views/DynamicDnsView.vue") },
   ],
   "config-section": [
     { path: "/config/upgrade", name: "config-upgrade", component: () => import("@/views/UpgradeView.vue") },

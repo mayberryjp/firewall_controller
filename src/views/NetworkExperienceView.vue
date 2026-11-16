@@ -41,6 +41,18 @@ const sortColumn = ref<SortColumn>("total_connections"), sortDescending = ref(tr
 const textOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const levels = ["excellent", "good", "fair", "poor"] as const;
 function summary(host: ExperienceSummaryHost): Summary | null { return expired.value ? null : host.summary; }
+function predominantLevel(host: ExperienceSummaryHost): typeof levels[number] | null {
+  const experience = summary(host)?.experience;
+  let selected: typeof levels[number] | null = null, longest = 0;
+  for (const level of levels) {
+    const seconds = experience?.rated_levels[level].seconds ?? 0;
+    if (seconds > 0 && seconds >= longest) {
+      selected = level;
+      longest = seconds;
+    }
+  }
+  return selected;
+}
 function ipOrder(host: ExperienceSummaryHost): bigint {
   const bytes = numericAddress(host.ip_address).toByteArray();
   return (BigInt(bytes.length) << 128n) + bytes.reduce((value, byte) => (value << 8n) + BigInt(byte), 0n);
@@ -51,7 +63,10 @@ function sortValue(host: ExperienceSummaryHost): string | number | bigint | null
     case "ip": return ipOrder(host);
     case "description": return host.metadata.classification || null;
     case "network": return host.interface?.name ?? null;
-    case "experience": return value?.experience.worst_rated_level ? levels.indexOf(value.experience.worst_rated_level) : null;
+    case "experience": {
+      const level = predominantLevel(host);
+      return level === null ? null : levels.indexOf(level);
+    }
     case "throughput": {
       const received = value?.traffic.received_bps, sent = value?.traffic.sent_bps;
       return received == null || sent == null ? null : received + sent;
@@ -152,10 +167,10 @@ function experienceTitle(host: ExperienceSummaryHost): string {
   const value = summary(host);
   if (!value) return "Retained observations have expired.";
   return [
-    "Worst rated experience in the observed hour; not a current or averaged score.",
+    "Predominant experience in the observed hour: the level with the most rated time; ties use the worse level. Unrated time is excluded; not a current or averaged score.",
     lastRatedTitle(host), coverageTitle(host),
     ...(value.identity_changed ? ["Hourly IP totals span identities or attachments; metadata describes the current host only."] : []),
-    ...levels.filter(level => value.experience.rated_levels[level].slots)
+    ...levels.filter(level => value.experience.rated_levels[level].seconds > 0)
       .map(level => `${experienceLabel(level)}: ${value.experience.rated_levels[level].seconds}s`),
     ...(["idle", "insufficient_data", "incomplete", "unavailable", "missing"] as const)
       .filter(state => value.experience[state].slots)
@@ -295,7 +310,7 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
           v-for="host in hosts"
           :key="host.ip_address"
           :data-host-address="host.ip_address"
-          :class="{ 'host-not-rated': !expired && host.summary.experience.worst_rated_level === null }"
+          :class="{ 'host-not-rated': !expired && predominantLevel(host) === null }"
         >
           <td class="pinned-host">
             <RouterLink
@@ -338,10 +353,10 @@ function averageConnectionsTitle(host: ExperienceSummaryHost): string {
               v-if="!expired"
               size="small"
               variant="tonal"
-              :color="historical || expired ? 'default' : experienceColors[host.summary.experience.worst_rated_level ?? 'unknown']"
+              :color="historical || expired ? 'default' : experienceColors[predominantLevel(host) ?? 'unknown']"
               :title="experienceTitle(host)"
             >
-              {{ host.summary.experience.worst_rated_level ? experienceLabel(host.summary.experience.worst_rated_level) : "Not Rated" }}
+              {{ experienceLabel(predominantLevel(host) ?? "Not Rated") }}
             </v-chip>
             <span
               v-else

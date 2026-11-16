@@ -61,7 +61,7 @@ export function usePolling(): void {
     schedule(store.refreshHostHealth, () => 3000, () => Boolean(store.hostHealth.error));
     schedule(store.refreshMqttStatus, () => 7500, () => Boolean(store.mqttStatus.error), () => route.path === "/settings/mqtt-streaming", true);
     schedule(store.refreshVnStatReporting, () => 15000, () => Boolean(store.vnstatReporting.error), () => route.path === "/services/vnstat", true);
-    schedule(store.refreshDynamicDnsStatus, () => 7500, () => Boolean(store.dynamicDnsStatus.error), () => route.path === "/settings/dynamic-dns", true);
+    schedule(store.refreshDynamicDnsStatus, () => 7500, () => Boolean(store.dynamicDnsStatus.error), () => route.path === "/services/dynamic-dns", true);
     schedule(store.refreshMDNSStatus, () => 3000, () => Boolean(store.mdnsStatus.error), () => route.path === "/services/mdns", true, 5000);
     schedule(store.refreshUDPRelayStatus, () => 3000, () => Boolean(store.udpRelayStatus.error), () => route.path === "/services/udp-broadcast-relay", true, 5000);
     schedule(store.refreshUpgrade, () => store.upgradeActive || store.upgradeUncertain ? 2000 : 15000,

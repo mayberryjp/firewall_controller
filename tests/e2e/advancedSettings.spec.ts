@@ -10,7 +10,7 @@ async function connect(page: Page) {
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await page.goto("/settings/general");
-  await page.getByRole("navigation", { name: "Settings pages", exact: true })
+  await page.getByRole("navigation", { name: "System pages", exact: true })
     .getByRole("tab", { name: "ADVANCED", exact: true }).click();
   await expect(page).toHaveURL(/\/settings\/advanced$/);
 }
@@ -30,7 +30,7 @@ for (const outcome of ["confirm", "rollback"] as const) {
     initialConfig.firewall.input = { policy: "drop", interfaces: [] };
     const backend = await mockBackend(page, { initialConfig });
     await connect(page);
-    const navigation = page.getByRole("navigation", { name: "Settings pages", exact: true });
+    const navigation = page.getByRole("navigation", { name: "System pages", exact: true });
     await expect(navigation.locator(".v-tab--selected")).toHaveCount(1);
     const view = page.getByRole("region", { name: "Advanced settings", exact: true });
     await expect(view.getByRole("button")).toHaveCount(1);

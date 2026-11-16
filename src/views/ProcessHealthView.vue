@@ -148,7 +148,7 @@ onMounted(() => {
       role="status"
       class="text-warning mb-3"
     >
-      Native runtime could not be collected. Native component states are last-known observations.
+      Cached native health could not be collected. Native component states are last-known observations.
     </p>
     <p
       v-if="!health && (store.platformUnsupported || !isInitialLoad(store.platform))"
@@ -248,6 +248,12 @@ onMounted(() => {
           <p>Restarts this managed worker, not arbitrary OS processes. Requires system.restart. Desired configuration, revisions and accounting databases remain intact; your draft is preserved.</p>
           <p class="mt-3">
             Selected caches, counters and monitor baselines may reset. DHCP lease reacquisition can affect connectivity, and syslog deliveries may be missed. Restart does not verify upstream health.
+          </p>
+          <p
+            v-if="restartSelection?.target === 'system'"
+            class="mt-3"
+          >
+            Reapplies the saved host name and time zone, not pending draft values. Host observations reflect the last application/verification, not continuous live measurements. Later external changes are not undone automatically. Empty saved values remain unmanaged and do not restore earlier host values.
           </p>
           <p
             v-if="restartSelection?.target === 'bgp'"

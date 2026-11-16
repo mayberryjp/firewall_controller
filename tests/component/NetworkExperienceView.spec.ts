@@ -44,10 +44,64 @@ async function render() {
   wrapper = mount(NetworkExperienceView, { global: { stubs, plugins: [router] } }); await flushPromises();
 }
 describe("Network experience hourly summaries", () => {
+  it.each([
+    { seconds: [2400, 900, 0, 300], label: "Excellent", color: "success" },
+    { seconds: [10, 40, 20, 10], label: "Good", color: "light-green" },
+    { seconds: [10, 20, 40, 10], label: "Fair", color: "warning" },
+    { seconds: [10, 20, 10, 40], label: "Poor", color: "error" },
+    { seconds: [0, 30, 30, 10], label: "Fair", color: "warning" },
+    { seconds: [10, 10, 10, 10], label: "Poor", color: "error" },
+    { seconds: [0, 0, 0, 0], label: "Not Rated", color: "default" },
+  ])("shows $label from rated durations $seconds, excluding unrated time", async ({ seconds, label, color }) => {
+    const data = experienceSummary(), value = data.hosts[0]!.summary.experience;
+    const levels = ["excellent", "good", "fair", "poor"] as const;
+    levels.forEach((level, index) => {
+      value.rated_levels[level] = { slots: seconds[index]! / 10, seconds: seconds[index]! };
+    });
+    const rated = seconds.reduce((sum, duration) => sum + duration, 0);
+    value.rated = { slots: rated / 10, seconds: rated };
+    value.idle = { slots: (3600 - rated) / 10, seconds: 3600 - rated };
+    value.missing = { slots: 0, seconds: 0 };
+    value.worst_rated_level = rated ? "poor" : null;
+    if (!rated) value.last_rated = null;
+    vi.mocked(getNetworkExperienceSummary).mockResolvedValueOnce(data);
+    await render();
+    const chip = wrapper!.get('[data-metric="experience"] .chip');
+    expect(chip.text()).toBe(label);
+    expect(chip.attributes("data-color")).toBe(color);
+    expect(chip.attributes("title")).toContain("ties use the worse level");
+    levels.forEach((level, index) => {
+      if (seconds[index]) expect(chip.attributes("title")).toContain(`${level[0]!.toUpperCase()}${level.slice(1)}: ${seconds[index]}s`);
+    });
+  });
+  it("sorts by predominant rating in both directions and keeps unrated hosts last", async () => {
+    const data = experienceSummary(), poor = data.hosts[0]!, excellent = structuredClone(poor), unrated = structuredClone(poor);
+    poor.summary.experience.rated_levels.poor = { slots: 2, seconds: 20 };
+    poor.summary.experience.worst_rated_level = "poor";
+    excellent.ip_address = "192.0.2.21";
+    excellent.summary.experience.rated_levels.poor = { slots: 1, seconds: 10 };
+    excellent.summary.experience.rated_levels.excellent = { slots: 2, seconds: 20 };
+    excellent.summary.experience.worst_rated_level = "poor";
+    unrated.ip_address = "192.0.2.22";
+    unrated.summary.experience.rated_levels.excellent = { slots: 0, seconds: 0 };
+    unrated.summary.experience.worst_rated_level = null;
+    unrated.summary.experience.last_rated = null;
+    data.hosts.push(excellent, unrated);
+    vi.mocked(getNetworkExperienceSummary).mockResolvedValueOnce(data);
+    await render();
+    const header = wrapper!.findAll("thead button").find(button => button.text() === "Experience")!;
+    const addresses = () => wrapper!.findAll("tbody tr").map(row => row.attributes("data-host-address"));
+    await header.trigger("click");
+    expect(addresses()).toEqual(["192.0.2.21", "192.0.2.20", "192.0.2.22"]);
+    await header.trigger("click");
+    expect(addresses()).toEqual(["192.0.2.20", "192.0.2.21", "192.0.2.22"]);
+  });
   it("strongly fades only Not Rated hosts without disabling their history links", async () => {
     const data = experienceSummary(), unrated = structuredClone(data.hosts[0]!);
     unrated.ip_address = "192.0.2.21";
     unrated.summary.experience.worst_rated_level = null;
+    unrated.summary.experience.rated_levels.excellent = { slots: 0, seconds: 0 };
+    unrated.summary.experience.rated = { slots: 0, seconds: 0 };
     unrated.summary.experience.last_rated = null;
     data.hosts.push(unrated);
     vi.mocked(getNetworkExperienceSummary).mockResolvedValueOnce(data);
@@ -76,7 +130,7 @@ describe("Network experience hourly summaries", () => {
     expect(wrapper!.get('[data-metric="experience"]').text()).toBe("Excellent");
     expect(wrapper!.get('[data-metric="experience"]').findAll(".chip")).toHaveLength(1);
     expect(wrapper!.get('[data-metric="experience"] .chip').attributes("title")).toContain("1/360 observed");
-    expect(wrapper!.get('[data-metric="experience"] .chip').attributes("title")).toContain("Worst rated experience");
+    expect(wrapper!.get('[data-metric="experience"] .chip').attributes("title")).toContain("Predominant experience");
     expect(wrapper!.get('[data-metric="experience"]').text()).not.toContain("Last Rated");
     expect(wrapper!.findAll("tbody td .text-caption")).toHaveLength(0);
     expect(wrapper!.get('[data-metric="throughput"]').text()).toContain("↓ 400 Kbps");

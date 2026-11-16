@@ -20,22 +20,31 @@ async function render() {
   await router.push("/overview");
   await router.isReady();
   return mount(AppHeader, { global: { plugins: [router], stubs: {
-    VAppBar: { template: "<header><slot /></header>" }, VBtn: true, VIcon: true, VSpacer: true,
+    VAppBar: { template: "<header><slot /></header>" }, VBtn: { name: "VBtn", props: ["prependIcon", "icon"], template: "<button><slot /></button>" }, VIcon: true, VSpacer: true,
     ConnectionStatus: true, MobileCategoryMenu: true,
   } } });
 }
 
 describe("navbar configuration status", () => {
+  it("shows System with a leading icon like the other navigation items", async () => {
+    const wrapper = await render();
+    try {
+      const system = wrapper.findAllComponents({ name: "VBtn" }).find(button => button.attributes("aria-label") === "System");
+      expect(system?.text()).toBe("System");
+      expect(system?.props("prependIcon")).toBe("mdi-cog-outline");
+      expect(system?.props("icon")).toBeUndefined();
+    } finally { wrapper.unmount(); }
+  });
   it.each([
     ["fw-1", "example.test", "fw-1.example.test"],
     ["fw-1", "", "fw-1"],
     ["", "example.test", "example.test"],
     ["", "", undefined],
-  ])("shows committed identity in the Settings gear tooltip (%j, %j)", async (hostname, domain, expected) => {
+  ])("shows committed identity in the System tooltip (%j, %j)", async (hostname, domain, expected) => {
     useControllerStore().state.data!.desired.system = { hostname, domain, timezone: "" };
     const wrapper = await render();
     try {
-      const settings = wrapper.find('[aria-label="Settings"]');
+      const settings = wrapper.find('[aria-label="System"]');
       expect(settings.attributes("title")).toBe(expected);
       expect(wrapper.findAll("[title]")).toHaveLength(expected ? 2 : 1);
     } finally { wrapper.unmount(); }
@@ -64,7 +73,7 @@ describe("navbar configuration status", () => {
     const wrapper = await render();
     try {
       expect(wrapper.find(".device-name").exists()).toBe(false);
-      expect(wrapper.find('[aria-label="Settings"]').attributes("title")).toBe("fw-1.example.test");
+      expect(wrapper.find('[aria-label="System"]').attributes("title")).toBe("fw-1.example.test");
       const committed = cloneConfig(store.state.data!.desired);
       committed.system!.domain = "committed.test";
       store.state.data = { ...store.state.data!, desired: committed };
@@ -73,18 +82,18 @@ describe("navbar configuration status", () => {
       expect(wrapper.text()).not.toContain("fw-1");
       expect(wrapper.text()).not.toContain("committed.test");
       expect(wrapper.text()).not.toContain("pending.test");
-      expect(wrapper.find('[aria-label="Settings"]').attributes("title")).toBe("fw-1.committed.test");
+      expect(wrapper.find('[aria-label="System"]').attributes("title")).toBe("fw-1.committed.test");
       store.connected = false;
       await flushPromises();
       expect(wrapper.find(".device-name").exists()).toBe(false);
-      expect(wrapper.find('[aria-label="Settings"]').exists()).toBe(false);
+      expect(wrapper.find('[aria-label="System"]').exists()).toBe(false);
     } finally { wrapper.unmount(); }
   });
   it("does not show a device label without committed configuration", async () => {
     useControllerStore().state.data = null;
     const wrapper = await render();
     expect(wrapper.find(".device-name").exists()).toBe(false);
-    expect(wrapper.find('[aria-label="Settings"]').attributes("title")).toBeUndefined();
+    expect(wrapper.find('[aria-label="System"]').attributes("title")).toBeUndefined();
     wrapper.unmount();
   });
 });

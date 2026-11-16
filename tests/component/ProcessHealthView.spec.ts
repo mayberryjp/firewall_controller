@@ -174,7 +174,7 @@ describe("Process health diagnostics", () => {
   it("keeps retained native failures explicit when runtime observation fails", () => {
     useControllerStore().platform.data!.process_health.runtime_available = false;
     render();
-    expect(wrapper.text()).toContain("Native runtime could not be collected");
+    expect(wrapper.text()).toContain("Cached native health could not be collected");
     expect(row("ntp").text()).toContain("Unhealthy");
     expect(wrapper.text()).toContain("NTP worker is unavailable");
   });
@@ -229,6 +229,32 @@ describe("Process health diagnostics", () => {
     expect(wrapper.text()).toContain("restart requested, not completed");
     expect(store.draft).toEqual(draft);
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
+  });
+  it("explains saved-value reapplication for a system restart without applying the pending draft", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.system = { hostname: "saved-fw", domain: "", timezone: "UTC" };
+    const candidate = cloneConfig(store.state.data!.desired);
+    candidate.system!.hostname = "draft-fw";
+    store.stage(candidate);
+    store.platform.data!.process_health.components.push({
+      id: "system", component: "managed_processes", resource: "system",
+      state: "running", healthy: true, retrying: false, collected_at: null,
+    });
+    const restart = vi.spyOn(api, "restartProcess").mockResolvedValue({ target: "system", status: "restart_requested" });
+    const submit = vi.spyOn(api, "submitPackage");
+    render();
+    await wrapper.get('button[aria-label="Restart system"]').trigger("click");
+    const dialog = wrapper.get('[role="dialog"]');
+    expect(dialog.text()).toContain("Reapplies the saved host name and time zone, not pending draft values");
+    expect(dialog.text()).toContain("last application/verification, not continuous live measurements");
+    expect(dialog.text()).toContain("Empty saved values remain unmanaged");
+    expect(restart).not.toHaveBeenCalled();
+    await wrapper.findAll("button").find(button => button.text() === "Confirm restart")!.trigger("click");
+    await flushPromises();
+    expect(restart).toHaveBeenCalledExactlyOnceWith("system");
+    expect(submit).not.toHaveBeenCalled();
+    expect(store.draft).toEqual(candidate);
+    expect(store.state.data!.desired.system.hostname).toBe("saved-fw");
   });
   it("disables inactive and unsupported observations and requires supervised daemon restart", async () => {
     const store = useControllerStore();

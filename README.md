@@ -504,7 +504,7 @@ no automatic reset or deletion of saved configurations is performed.
 
 ### Notifications
 
-Settings > **Notifications** opens **Firewall drop notifications**, providing Discord first-seen firewall-drop alerts in the
+System > **Notifications** opens **Firewall drop notifications**, providing Discord first-seen firewall-drop alerts in the
 General Settings row layout. Save privately uploads a new/replacement webhook,
 clears the full-width password-style webhook input, and stages only its device-local reference.
 Only committed settings send. Configuration, revisions and exports never contain the URL.
@@ -556,7 +556,7 @@ responses remain explicit, without falling back to live or per-host history read
 
 Each protected IP on a managed LAN occupies one compact row: small device icon,
 configured IP, original-case current local description, current network,
-one experience chip showing the worst rated level in the observed hour,
+one experience chip showing the predominant rated level in the observed hour,
 combined download/upload observed-hour rates, DNS p50 response time,
 observed-hour sent firewall drops, current total
 connections and one-hour average together as Current/Avg chips in one Connections
@@ -565,7 +565,10 @@ RTT Median column, download/upload TCP repeat totals, and last seen.
 Rows stay single-line: coverage, identity changes, state durations, the timestamped
 last rating, and pooled ratios/denominators are in metric tooltips rather than
 extra columns, stacked chips or subtitles. The experience chip is not an hourly
-average or current score; no rated evidence shows Not Rated.
+average or current score: it uses the level occupying the most rated seconds,
+breaking ties toward the worse level. Idle, missing, insufficient-data, incomplete,
+and unavailable time are excluded. The tooltip retains the per-level time
+distribution so shorter poor periods remain discoverable; no rated time shows Not Rated.
 Not Rated rows fade to 18% opacity, returning to full opacity on hover or
 keyboard focus; host replay links remain usable.
 Hourly IP totals can span owners/attachments; current metadata does not relabel historical evidence.
@@ -655,7 +658,7 @@ Frontend mock tests do not establish native collection or appliance acceptance.
 
 ### Conntrack tuning
 
-Settings > **CONNTRACK TUNING** edits capacity and timeouts through the existing
+System > **CONNTRACK TUNING** edits capacity and timeouts through the existing
 `kernel.host` and `kernel.namespace` string maps. Controls, scopes and inclusive
 bounds come from `GET /api/v1/kernel/tunables/catalog`; an older backend, failed
 read or stale catalog cannot enable submissions. The accepting backend must be
@@ -709,6 +712,12 @@ backoff (eight checks, each bounded to five seconds). Connectivity does not prov
 completed restart. Unknown outcomes and exhausted reconnect attempts remain explicit.
 Restart may reset caches/counters, reacquire DHCP leases or interrupt syslog delivery;
 desired configuration, revisions and persistent accounting databases are unchanged.
+Restarting the `system` manager explicitly reapplies the saved host name and time
+zone, not pending draft values. Empty saved values remain unmanaged.
+Platform `runtime_available` describes cached native health collection, not a live
+runtime diagnostic read. Stale or contended collection remains explicitly unknown
+or unavailable; it does not block transaction deadline progression. Existing
+frontend polling and packet/link diagnostics remain unchanged.
 
 Interface lists and interface selectors are ordered alphabetically (case-insensitive)
 and show interface names in uppercase. This is presentation only: saved interface
@@ -716,7 +725,7 @@ names, selector values, API requests, route/query values and exported configurat
 retain their original case. Ordered firewall/NAT rules and peer precedence are not
 reordered.
 
-Settings > Remote DNS has **Domain**, **Test**, **RTT**, and **Result** columns on each server
+System > Remote DNS has **Domain**, **Test**, **RTT**, and **Result** columns on each server
 row. Enter an ASCII domain and press Test (or Enter) to measure that server's DNS
 RTT, displayed as whole milliseconds with no decimals (rounded, not truncated).
 API timing values retain full precision. The request sends that server's IP, an
@@ -866,7 +875,8 @@ or appliance acceptance.
 | `/firewall` | PROTECTED HOSTS: searchable host navigation beside ordered outbound rules/default action; legacy forwarding editor when host policies are absent |
 | `/firewall/ingress` | INTERFACE RULES: first Firewall/NAT page, with an interface selector and ordered ingress override rules |
 | `/settings`, `/settings/general` | Host name, domain label, time zone, global IPv6 policy, IPv4 ICMP exception, and one DHCP DNS override control for all currently configured interfaces; settings join the shared draft |
-| `/settings/sando` | Sando endpoint, automatic host/threat-score sync toggle, and one-time host and approved-connection imports into the shared draft |
+| `/firewall/sando` | Firewall/NAT > SANDO IMPORT: Sando endpoint, automatic host/threat-score sync toggle, and one-time host and approved-connection imports into the shared draft; old `/settings/sando` links redirect here |
+| `/services/dynamic-dns` | Services > Dynamic DNS: Azure DNS entries and status; old `/settings/dynamic-dns` links redirect here |
 | `/config/upgrade` | Current version, update availability, Check for upgrade and last checked; old `/settings/upgrade` links redirect here |
 | `/settings/mqtt-streaming` | MQTT STREAMING (old `/settings/home-assistant` redirects here): MQTT broker, source interface, publish interval and write-only password replacement; shared draft and confirmed publisher status |
 | `/connections` | Live conntrack snapshots, filters/paging, exact nullable counters and explicitly confirmed state deletion |
@@ -1219,8 +1229,9 @@ decisions. It reads `/runtime`; absent/null receipts add no display. Incomplete
 or failed receipts direct recovery to the console, with no browser retry action.
 Stale receipts remain last-known observations, not proof of connectivity.
 
-The top navbar selects Interfaces, Routing, Firewall, VPN, Services, Diagnostics, or the Settings
-gear. Hover over the Settings gear to see the committed hostname.domain; when only
+The top navbar selects Interfaces, Routing, Firewall, VPN, Services, Diagnostics, or System.
+System uses a gear icon and text label like the other sections, including in the mobile menu.
+Hover over System to see the committed hostname.domain; when only
 one is configured, the tooltip shows that value. Routing uses a classic
 network-diagram router symbol; Firewall uses a brick wall.
 Connection health appears in an icon-only floating bottom-right bubble; hover or
@@ -1301,6 +1312,17 @@ configuration controls in General settings; the navigation bar shows only
 `R<revision>` without a CONFIG prefix or hostname/domain line. The revision label stays unchanged
 when edits are pending, pulsing from orange to bright yellow over four seconds.
 Reduced-motion preferences disable the pulse while keeping the orange highlight.
+The [November 17 host-policy handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-17.md)
+applies and verifies host name/time zone at startup and after confirmed value
+changes. Successful unchanged values are not continuously enforced; later external
+changes are left alone. Failed applications retry after 30 seconds; restarting the
+`system` manager explicitly reapplies saved values. Clearing a value stops managing
+it without restoring an earlier host value. Avoid competing hostname/timezone writers.
+For API consumers, `/api/v1/system/status` reports cached last-applied/verified
+observations: `current` means the last application verified a match, not a live
+measurement. Its states are `unmanaged|current|error|paused|simulated|unavailable`,
+without `applying`. General settings remains configuration-only, with no new status
+panel or polling.
 General settings owns the single **Ignore DHCP-provided DNS servers** control.
 Changing it and saving writes `dns[interface].override_dhcp_dns` for every currently
 configured interface, including down and unassigned links, without changing servers
@@ -1382,7 +1404,7 @@ different traffic paths.
 
 ### Advanced settings
 
-Settings > ADVANCED provides one compact solid red **Delete all firewall hosts and
+System > ADVANCED provides one compact solid red **Delete all firewall hosts and
 forwarding rules** button, matching the backend's combined
 `DELETE /api/v1/firewall/hosts-and-rules` operation. Its Vue dialog previews the
 removed and preserved scope, warns about connectivity and broader access, and
@@ -1400,7 +1422,7 @@ metadata and are not automatically reimported.
 
 ### Sando synchronization and one-time imports
 
-Settings > SANDO IMPORT accepts an HTTP(S) server URL or `/api` base URL. The browser
+Firewall/NAT > SANDO IMPORT accepts an HTTP(S) server URL or `/api` base URL. The browser
 calls Sando directly, with no registry/firewall credentials. Sando must be reachable
 from the browser, allow its origin through CORS, and use HTTPS when required by
 the frontend's HTTPS origin. The base URL is staged as `config.sando.api_url`
@@ -1818,7 +1840,7 @@ still reject unknown keys, and wrong types, missing fields and the retired
 
 `config.dynamic_dns` (Azure public DNS A records) is decoded strictly, preserved
 through drafts, imports, history and restores, and needs `dynamic_dns.write` in
-addition to `transactions.write`. Settings > Dynamic DNS lists entries with an inline
+addition to `transactions.write`. Services > Dynamic DNS lists entries with an inline
 Status toggle and an add/edit form. The Azure client secret is uploaded once via
 `/services/dynamic-dns/secrets`; only the returned reference enters the draft, the
 field is cleared after save, error or dismissal, and uploads are never retried
@@ -1992,18 +2014,20 @@ Linux attempts to reboot ten seconds after a genuine kernel panic. This applies
 on install, restart, boot and upgrades that start that daemon, including binary-only
 self-upgrades. It requires writable host procfs and a trusted root-owned
 `/etc/sysctl.d`, verifies the live value, and persists
-`/etc/sysctl.d/99-netcontrol-panic.conf`. A worker reclaims live-value and owned-file
-drift every second. Initial takeover failures abort startup; later failures are
-logged, retried and reported through existing platform health/alerts without
-blocking unrelated valid configuration writes.
+`/etc/sysctl.d/99-netcontrol-panic.conf` at startup only. Application, verification
+or persistence failures abort startup. There is no enforcement worker, drift
+polling, recovery/retry state or later external-change reclamation.
 
 There is no editable setting or original-value restoration. Stopping the daemon
-leaves the live value and boot file in place but stops reclamation; configuration
+leaves the live value and boot file in place; configuration
 rollback does not undo the policy. Competing privileged writers can change the
-value between checks, and foreign boot settings can override it until daemon
+value afterward without automatic correction, and foreign boot settings can override it until daemon
 startup. Simulator and native lab mode do not manage this host-global setting.
 Panic triggers and hardware watchdog policy are unchanged, and some catastrophic
 failures cannot execute the reboot path.
+`GET /api/v1/runtime` no longer returns `kernel_panic`, and state/runtime/platform
+health no longer includes a `kernel_panic` host worker or alert row. Policy
+configuration is not evidence that a panic or crash occurred.
 
 Deployment requires console access and explicit operator acceptance of automatic
 reboot after genuine panics. Inspect live/boot settings and health on a disposable,

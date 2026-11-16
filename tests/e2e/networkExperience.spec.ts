@@ -6,6 +6,13 @@ import { encodeJson } from "../../src/services/json";
 test("NETWORK EXPERIENCE opens a coordinated host replay without changing link styling or making writes", async ({ page, isMobile }, testInfo) => {
   const backend = await mockBackend(page);
   const data = experienceSummary(), second = structuredClone(data.hosts[0]!);
+  const experience = data.hosts[0]!.summary.experience;
+  experience.rated_levels.excellent = { slots: 240, seconds: 2400 };
+  experience.rated_levels.good = { slots: 90, seconds: 900 };
+  experience.rated_levels.poor = { slots: 30, seconds: 300 };
+  experience.rated = { slots: 360, seconds: 3600 };
+  experience.missing = { slots: 0, seconds: 0 };
+  experience.worst_rated_level = "poor";
   data.hosts[0]!.summary.dns.response_time_p50_ms = 12;
   data.hosts[0]!.summary.dns.timing_unavailable_reason = null;
   data.hosts[0]!.summary.tcp.rtt_host.p50_ms = 2;
@@ -53,6 +60,7 @@ test("NETWORK EXPERIENCE opens a coordinated host replay without changing link s
   await expect(view.locator("tbody tr").first()).toContainText("Front Door Camera");
   await expect(view.locator("tbody tr").first()).toContainText("Excellent");
   await expect(view.locator("tbody tr").first().locator(".v-chip").filter({ hasText: /^Excellent$/ })).toHaveClass(/text-success/);
+  await expect(view.locator('[data-metric="experience"] .v-chip').first()).toHaveAttribute("title", /Predominant experience.*Excellent: 2400s.*Poor: 300s/);
   await expect(view.locator(".host-icon").first()).toHaveAttribute("data-device-icon", "IP_CAMERA");
   await expect(view.locator(".host-icon").nth(1)).toHaveAttribute("data-device-icon", "DEFAULT");
   const icon = await view.locator(".host-icon").first().boundingBox();

@@ -28,7 +28,7 @@ for (const enabled of [true, false]) {
   });
 }
 
-test("Remote DNS is accessible under Settings and stages resolver settings without backend writes", async ({ page }) => {
+test("Remote DNS is accessible under System and stages resolver settings without backend writes", async ({ page }) => {
   const initial = config();
   initial.interfaces.push({ ...initial.interfaces[0]!, name: "wan0", role: "wan", kind: "ethernet" });
   const backend = await mockBackend(page, { initialConfig: initial });
@@ -42,8 +42,8 @@ test("Remote DNS is accessible under Settings and stages resolver settings witho
   await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Services", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "Services pages" }).getByRole("tab", { name: "Remote DNS", exact: true })).toHaveCount(0);
   if (await hamburger.isVisible()) await hamburger.click();
-  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "Settings", exact: true }).click();
-  const pages = page.getByRole("navigation", { name: "Settings pages" });
+  await page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: "System", exact: true }).click();
+  const pages = page.getByRole("navigation", { name: "System pages" });
   const expand = pages.getByRole("button", { name: /^Expand .* navigation$/ });
   if (await expand.isVisible()) await expand.click();
   await pages.getByRole("tab", { name: "Remote DNS", exact: true }).click();
@@ -67,6 +67,6 @@ test("Remote DNS is accessible under Settings and stages resolver settings witho
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.goto("/services/remote-dns");
   await expect(page).toHaveURL(/\/settings\/remote-dns$/);
-  await expect(page.getByRole("navigation", { name: "Settings pages" }).getByRole("tab", { name: "Remote DNS", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("navigation", { name: "System pages" }).getByRole("tab", { name: "Remote DNS", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(view).toBeVisible();
 });

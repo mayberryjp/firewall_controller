@@ -56,18 +56,13 @@ const deviceName = computed(() => {
         class="navigation-trigger mx-2"
         :class="{ 'is-active': route.matched.some(record => record.name === section.name) }"
         :color="route.matched.some(record => record.name === section.name) ? 'rose' : undefined"
-        :icon="section.name === 'settings-section' ? true : undefined"
-        :prepend-icon="section.name === 'settings-section' ? undefined : section.icon"
+        :prepend-icon="section.icon"
         :aria-label="section.title"
         :title="section.name === 'settings-section' ? deviceName : undefined"
         variant="text"
         rounded
       >
-        <v-icon
-          v-if="section.name === 'settings-section'"
-          :icon="section.icon"
-        />
-        <span v-else>{{ section.title }}</span>
+        <span>{{ section.title }}</span>
       </v-btn>
     </nav>
     <div class="header-status d-flex align-center mr-2">

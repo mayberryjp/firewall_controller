@@ -43,6 +43,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "Connections", name: "connections", path: "/connections", icon: "mdi-transit-connection-variant" },
     { title: "NAT masquerading", name: "nat", path: "/nat", icon: "mdi-swap-horizontal" },
     { title: "DNAT", name: "dnat", path: "/firewall/nat/dnat", icon: "mdi-swap-horizontal" },
+    { title: "SANDO IMPORT", name: "settings-sando", path: "/firewall/sando", icon: "mdi-import" },
   ] },
   { title: "VPN", name: "vpn-section", path: "/vpn", icon: "mdi-wan", pages: [
     { title: "WireGuard peers", name: "wireguard", path: "/wireguard", icon: "mdi-wan" },
@@ -55,6 +56,7 @@ export const navigationSections: NavigationSection[] = [
     { title: "NTP", name: "ntp", path: "/services/ntp", icon: "mdi-clock-outline" },
     { title: "Syslog", name: "syslog", path: "/services/syslog", icon: "mdi-text-box-outline" },
     { title: "vnStat", name: "vnstat", path: "/services/vnstat", icon: "mdi-chart-bar" },
+    { title: "Dynamic DNS", name: "settings-dynamic-dns", path: "/services/dynamic-dns", icon: "mdi-dns-outline" },
   ] },
   { title: "Diagnostics", name: "diagnostics-section", path: "/diagnostics", icon: "mdi-chart-line", pages: [
     { title: "SYSTEM OVERVIEW", name: "system-overview", path: "/diagnostics/system-overview", icon: "mdi-view-dashboard-outline" },
@@ -73,14 +75,12 @@ export const navigationSections: NavigationSection[] = [
     { title: "API explorer", name: "api-explorer", path: "/diagnostics/api", icon: "mdi-api" },
     { title: "Download config", name: "download-config", path: "/diagnostics/download-config", icon: "mdi-download" },
   ] },
-  { title: "Settings", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
+  { title: "System", name: "settings-section", path: "/settings", icon: "mdi-cog-outline", pages: [
     { title: "General", name: "settings-general", path: "/settings/general", icon: "mdi-cog-outline" },
     { title: "Notifications", name: "settings-notifications", path: "/settings/notifications", icon: "mdi-bell-outline" },
     { title: "Remote DNS", name: "remote-dns", path: "/settings/remote-dns", icon: "mdi-dns-outline" },
     { title: "MQTT STREAMING", name: "settings-mqtt-streaming", path: "/settings/mqtt-streaming", icon: "mdi-home-assistant" },
-    { title: "Dynamic DNS", name: "settings-dynamic-dns", path: "/settings/dynamic-dns", icon: "mdi-dns-outline" },
     { title: "CONNTRACK TUNING", name: "settings-conntrack-tuning", path: "/settings/conntrack-tuning", icon: "mdi-tune" },
-    { title: "SANDO IMPORT", name: "settings-sando", path: "/settings/sando", icon: "mdi-import" },
     { title: "ADVANCED", name: "settings-advanced", path: "/settings/advanced", icon: "mdi-cog-alert-outline" },
   ] },
   { title: "Config", name: "config-section", path: "/config", icon: "mdi-history", pages: [
