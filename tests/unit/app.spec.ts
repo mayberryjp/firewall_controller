@@ -122,7 +122,9 @@ describe("routed navigation sections", () => {
   });
   it("includes Download config in Diagnostics", () => {
     const diagnostics = navigationSections.find(section => section.name === "diagnostics-section");
-    expect(diagnostics?.pages.map(page => page.name)).toEqual(["system-overview", "network-experience", "firewall-drops", "possible-missing-rules", "dhcp-relay-logs", "syslog-logs", "real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "path-tests", "api-explorer", "download-config"]);
+    expect(diagnostics?.pages.map(page => page.name)).toEqual(["system-overview", "network-experience", "experience-log", "firewall-drops", "possible-missing-rules", "dhcp-relay-logs", "syslog-logs", "real-time-traffic", "process-health", "interface-drops", "qdiscs", "tcp-windowing", "capture-details", "path-tests", "api-explorer", "download-config"]);
+    expect(diagnostics?.pages.find(page => page.name === "experience-log")).toMatchObject({ title: "EXPERIENCE LOG", path: "/diagnostics/experience-log" });
+    expect(diagnostics?.pages.find(page => page.name === "syslog-logs")?.title).toBe("SYSTEM LOGGING");
     expect(diagnostics?.pages.find(page => page.name === "system-overview")).toMatchObject({ title: "SYSTEM OVERVIEW", path: "/diagnostics/system-overview" });
     expect(diagnostics?.pages.find(page => page.name === "possible-missing-rules")).toMatchObject({ title: "POSSIBLE MISSING RULES", path: "/diagnostics/possible-missing-rules" });
     const router = createRouter({ history: createMemoryHistory(), routes: privateRoutes });

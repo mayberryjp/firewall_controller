@@ -9,7 +9,7 @@ const source = ref<LogSource>("syslog");
 <template>
   <section aria-label="Persistent logs">
     <h1 class="text-h6 mb-4">
-      Syslog
+      SYSTEM LOGGING
     </h1>
     <div
       role="tablist"

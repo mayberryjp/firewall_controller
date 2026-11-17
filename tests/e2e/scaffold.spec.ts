@@ -2047,7 +2047,7 @@ test("operational pages keep content compact with readable details", async ({ pa
     const hasPageHeading = (entry.path !== "/settings/remote-dns" &&
       /^\/(settings|connections|config\/(upgrade|editor))/.test(entry.path)) ||
       ["/diagnostics/dhcp-relay-logs", "/diagnostics/syslog", "/diagnostics/rss-irq",
-        "/firewall/sando", "/services/dynamic-dns"].includes(entry.path);
+        "/firewall/sando", "/services/dynamic-dns", "/diagnostics/experience-log"].includes(entry.path);
     await expect(main.getByRole("heading", { level: 1 }), entry.path).toHaveCount(hasPageHeading ? 1 : 0);
     await expect(main.locator("pre")).toHaveCount(0);
     await expect(main).not.toContainText("Operator prerequisites");

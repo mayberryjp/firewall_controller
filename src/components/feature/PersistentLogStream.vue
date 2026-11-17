@@ -12,7 +12,20 @@ const { data, loading, error, stale } = useLogHistory(async (cursor, signal) => 
   const page = await getPersistentLog(props.source, { cursor, limit: 100 }, signal);
   return { page, entries: page.entries };
 }, 3000, () => `${props.source}:${mode.value}`, () => props.active, () => startCursor.value);
-const displayedEntries = computed(() => [...(data.value?.entries ?? [])].reverse());
+function observedAt(message: string): string | null {
+  let value: unknown;
+  try { value = JSON.parse(message); }
+  catch (failure) {
+    if (failure instanceof SyntaxError) return null;
+    throw failure;
+  }
+  return value !== null && typeof value === "object" &&
+    "schema" in value && value.schema === "netcontrol-performance/v1" &&
+    "observed_at" in value && typeof value.observed_at === "string" ? value.observed_at : null;
+}
+const displayedEntries = computed(() => [...(data.value?.entries ?? [])].reverse().map(entry => ({
+  ...entry, displayTime: props.source === "performance" ? observedAt(entry.message) : entry.timestamp,
+})));
 const { formatTimestamp, timeZone } = useTimestamps();
 function changeMode(value: string): void {
   startCursor.value = value === "history" ? data.value?.page.oldest_cursor ?? undefined : undefined;
@@ -87,14 +100,17 @@ function changeMode(value: string): void {
         density="compact"
         class="persistent-log-table"
       >
-        <thead><tr><th>Time ({{ timeZone }})</th><th>Message</th></tr></thead>
+        <thead><tr><th>{{ source === 'performance' ? 'Observed' : 'Time' }} ({{ timeZone }})</th><th>Message</th></tr></thead>
         <tbody>
           <tr
             v-for="entry in displayedEntries"
             :key="entry.sequence"
           >
             <td class="log-time">
-              <time :datetime="entry.timestamp">{{ formatTimestamp(entry.timestamp) }}</time>
+              <time
+                :datetime="entry.displayTime ?? undefined"
+                :title="source === 'performance' ? `Persisted (${timeZone}): ${formatTimestamp(entry.timestamp)}` : undefined"
+              >{{ formatTimestamp(entry.displayTime) }}</time>
             </td>
             <td class="log-message">
               {{ entry.message }}
@@ -107,6 +123,12 @@ function changeMode(value: string): void {
           </tr>
         </tbody>
       </v-table>
+      <p
+        v-if="source === 'performance'"
+        class="text-caption text-medium-emphasis mt-2"
+      >
+        Retention: 8 MiB, volume-based. A running log sink or empty history does not establish uninterrupted traffic or detector health.
+      </p>
     </template>
   </section>
 </template>

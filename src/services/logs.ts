@@ -3,7 +3,7 @@ import { uint64Schema } from "@/services/counters";
 import { logCursorSchema } from "@/services/dhcpDiagnostics";
 import { utf8Size } from "@/services/json";
 
-export const logSourceSchema = z.enum(["syslog", "netcontrol"]);
+export const logSourceSchema = z.enum(["syslog", "netcontrol", "performance"]);
 export const persistentLogQuerySchema = z.object({
   limit: z.number().int().min(1).max(500).optional(), cursor: logCursorSchema.optional(),
 }).strict();

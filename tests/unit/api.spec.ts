@@ -59,7 +59,7 @@ describe("controller-proxied API boundary", () => {
     expect(captured?.url).toBe(`/services/dhcp-relay/log?limit=100&interface=vlan10&cursor=${telemetryEpoch}%3A0`);
     expect(captured?.data).toBeUndefined();
   });
-  it.each(["syslog", "netcontrol"] as const)("reads the %s persistent stream without sharing source identities", async source => {
+  it.each(["syslog", "netcontrol", "performance"] as const)("reads the %s persistent stream without sharing source identities", async source => {
     body = encodeJson(persistentLog(source));
     expect(await net.getPersistentLog(source)).toEqual(persistentLog(source));
     expect(captured).toMatchObject({ method: "get", url: `/logs/${source}` });

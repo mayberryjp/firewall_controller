@@ -31,8 +31,12 @@ async function connect(page: Page, { physicalInterface = false } = {}) {
       if (url.searchParams.has("cursor")) result.events = [];
       return route.fulfill({ json: result });
     }
-    if (path.endsWith("/logs/syslog") || path.endsWith("/logs/netcontrol")) {
-      const result = persistentLog(path.endsWith("/logs/syslog") ? "syslog" : "netcontrol");
+    if (path.endsWith("/logs/syslog") || path.endsWith("/logs/netcontrol") || path.endsWith("/logs/performance")) {
+      const result = persistentLog(path.endsWith("/logs/performance") ? "performance" : path.endsWith("/logs/syslog") ? "syslog" : "netcontrol");
+      if (result.source === "performance") result.entries[0]!.message = JSON.stringify({
+        schema: "netcontrol-performance/v1", event: "gateway_probe_loss",
+        observed_at: "2026-11-17T01:00:01.987654Z", details: { newly_lost: 2 },
+      });
       if (url.searchParams.has("cursor")) result.entries = [];
       return route.fulfill({ json: result });
     }
@@ -77,10 +81,18 @@ test("new diagnostics are reachable and log streams remain separate", async ({ p
   await expect(page.getByRole("heading", { name: "DHCP relay logs", exact: true })).toBeVisible();
   await expect(page.getByText("Request forwarded", { exact: true })).toBeVisible();
   await page.goto("/diagnostics/syslog");
+  await expect(page.getByRole("heading", { name: "SYSTEM LOGGING", exact: true })).toBeVisible();
   await expect(page.getByText("syslog entry 1", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Netcontrol", exact: true }).click();
   await expect(page.getByText("netcontrol entry 1", { exact: true })).toBeVisible();
   await expect(page.getByText("syslog entry 1", { exact: true })).toBeHidden();
+  await page.goto("/diagnostics/experience-log");
+  await expect(page.getByRole("heading", { name: "EXPERIENCE LOG", exact: true })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Observed (UTC)", exact: true })).toBeVisible();
+  await expect(page.locator("time")).toHaveText("2026-11-17 01:00:01");
+  await expect(page.locator(".log-message")).toContainText('"newly_lost":2');
+  await expect(page.getByText("netcontrol entry 1", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.goto("/diagnostics/rss-irq");
   await expect(page.getByRole("heading", { name: "RSS / IRQ", exact: true })).toBeVisible();
   await expect(page.locator(".rss-irq-table").getByRole("rowheader", { name: "ENO1", exact: true })).toBeVisible();

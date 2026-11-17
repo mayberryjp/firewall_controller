@@ -7,6 +7,7 @@ import DHCPRelayView from "@/views/DHCPRelayView.vue";
 import DHCPRelayLogsView from "@/views/DHCPRelayLogsView.vue";
 import SyslogView from "@/views/SyslogView.vue";
 import SyslogLogsView from "@/views/SyslogLogsView.vue";
+import ExperienceLogView from "@/views/ExperienceLogView.vue";
 import ResourceTable from "@/components/feature/ResourceTable.vue";
 import RSSIRQView from "@/views/RSSIRQView.vue";
 import PersistentLogStream from "@/components/feature/PersistentLogStream.vue";
@@ -341,21 +342,25 @@ describe("diagnostic log pages", () => {
     expect(wrapper.text()).not.toContain("before reset");
     expect(wrapper.findAll("tbody tr")).toHaveLength(1);
   });
-  it.each(["success", "failure"] as const)("keeps pending persistent logs neutral until %s", async outcome => {
+  it.each([
+    ["syslog", "success"], ["syslog", "failure"], ["performance", "success"], ["performance", "failure"],
+  ] as const)("keeps pending %s logs neutral until %s", async (source, outcome) => {
     const pending = deferred<ReturnType<typeof persistentLog>>();
     vi.mocked(api.getPersistentLog).mockReturnValueOnce(pending.promise);
-    const wrapper = mount(PersistentLogStream, { props: { source: "syslog", active: true }, global: { stubs } });
+    const wrapper = mount(PersistentLogStream, { props: { source, active: true }, global: { stubs } });
     expect(wrapper.text()).toContain("Loading logs");
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     expect(wrapper.text()).not.toContain("No retained");
-    if (outcome === "success") pending.resolve(persistentLog());
+    if (outcome === "success") pending.resolve(persistentLog(source));
     else pending.reject(new ApiFailure("HTTP 403: Permission denied", 403));
     await flushPromises();
-    expect(wrapper.text()).toContain(outcome === "success" ? "syslog entry 1" : "logs.read");
+    expect(wrapper.text()).toContain(outcome === "success" ? `${source} entry 1` : "logs.read");
+    wrapper.unmount();
   });
   it.each([
     ["syslog", "recent"], ["netcontrol", "recent"],
     ["syslog", "history"], ["netcontrol", "history"],
+    ["performance", "recent"], ["performance", "history"],
   ] as const)("shows newest %s entries first in %s mode and prepends polled updates", async (source, mode) => {
     const first = persistentLog(source, "2");
     first.entries.unshift(...persistentLog(source, "1").entries);
@@ -402,6 +407,66 @@ describe("diagnostic log pages", () => {
     vi.mocked(api.getPersistentLog).mockResolvedValueOnce(persistentLog("syslog", "2"));
     await wrapper.get("#syslog-tab").trigger("click"); await flushPromises();
     expect(api.getPersistentLog).toHaveBeenLastCalledWith("syslog", { cursor: `${telemetryEpoch}:1`, limit: 100 }, expect.any(AbortSignal));
+  });
+  it("uses saved-zone observation times for performance evidence and retains unknown messages safely", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.system = { hostname: "", domain: "", timezone: "Asia/Tokyo" };
+    const page = persistentLog("performance", "4");
+    const message = JSON.stringify({
+      schema: "netcontrol-performance/v1", event: "future_event",
+      observed_at: "2026-01-02T03:04:05.987654Z", details: { text: "<img src=x onerror=alert(1)>" },
+    });
+    page.entries = [
+      { ...page.entries[0]!, sequence: "1", message },
+      { ...page.entries[0]!, sequence: "2", message: "opaque JSON {" },
+      { ...page.entries[0]!, sequence: "3", message: JSON.stringify({ schema: "future/v2", observed_at: "2026-01-02T03:04:05Z" }) },
+      { ...page.entries[0]!, sequence: "4", message: JSON.stringify({ schema: "netcontrol-performance/v1", observed_at: "invalid" }) },
+    ];
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(page);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } });
+    await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenLastCalledWith("performance", { cursor: undefined, limit: 100 }, expect.any(AbortSignal));
+    expect(wrapper.get("th").text()).toBe("Observed (Asia/Tokyo)");
+    const times = wrapper.findAll("time");
+    expect(times[1]!.text()).toBe("Unavailable");
+    expect(times[2]!.text()).toBe("Unavailable");
+    expect(times[3]!.text()).toBe("2026-01-02 12:04:05");
+    expect(times[3]!.attributes("datetime")).toBe("2026-01-02T03:04:05.987654Z");
+    expect(times[3]!.attributes("title")).toBe("Persisted (Asia/Tokyo): 2026-11-11 09:00:00");
+    expect(wrapper.findAll(".log-message").at(-1)!.text()).toBe(message);
+    expect(wrapper.find("img").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Retention: 8 MiB");
+    store.draft!.system = { hostname: "", domain: "", timezone: "UTC" };
+    await flushPromises();
+    expect(wrapper.get("th").text()).toBe("Observed (Asia/Tokyo)");
+    wrapper.unmount();
+  });
+  it("retains performance evidence and cursor through a storage failure, drains pages and pauses hidden reads", async () => {
+    const first = persistentLog("performance");
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(first);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } }); await flushPromises();
+    vi.mocked(api.getPersistentLog).mockRejectedValueOnce(new ApiFailure("HTTP 503: Storage unavailable", 503));
+    await vi.advanceTimersByTimeAsync(3000); await flushPromises();
+    expect(wrapper.text()).toContain("Last-known logs");
+    expect(wrapper.text()).toContain("performance entry 1");
+    expect(wrapper.text()).toContain("Storage unavailable");
+    const next = persistentLog("performance", "2"); next.has_more = true; next.gap = true;
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(next).mockResolvedValueOnce(persistentLog("performance", "3"));
+    await vi.advanceTimersByTimeAsync(5000); await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenNthCalledWith(3, "performance", { cursor: `${telemetryEpoch}:1`, limit: 100 }, expect.any(AbortSignal));
+    expect(wrapper.findAll(".log-message").map(cell => cell.text())).toEqual(["performance entry 3", "performance entry 2", "performance entry 1"]);
+    expect(wrapper.text()).toContain("Some retained log entries expired");
+    const calls = vi.mocked(api.getPersistentLog).mock.calls.length;
+    visibility = "hidden"; document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(api.getPersistentLog).toHaveBeenCalledTimes(calls);
+    visibility = "visible";
+    const reset = persistentLog("performance"); reset.reset = true;
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(reset);
+    document.dispatchEvent(new Event("visibilitychange")); await flushPromises();
+    expect(wrapper.text()).toContain("Log history restarted");
+    expect(wrapper.findAll(".log-message")).toHaveLength(1);
+    wrapper.unmount();
   });
   it("browses from oldest_cursor, safely renders text and retains history/cursor after read failure", async () => {
     const first = persistentLog(); first.entries[0]!.message = '<img src=x onerror="alert(1)"> opaque JSON {';

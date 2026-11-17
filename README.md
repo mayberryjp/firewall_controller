@@ -179,12 +179,12 @@ Successful sends are local transport writes, not collector acknowledgements.
 Captured counts advance after local append and synchronization; enabling forwarding
 does not replay retained history or missed destination sends.
 
-Diagnostics > **Syslog** (`/diagnostics/syslog`) has separate Syslog and Netcontrol
+Diagnostics > **SYSTEM LOGGING** (`/diagnostics/syslog`) has separate Syslog and Netcontrol
 tabs, with independent cursors and recent/live versus retained-history browsing.
 Both endpoints require `logs.read`, not merely `state.read` or `syslog.write`;
 scoped keys need an explicit grant. Potentially sensitive third-party messages are
 escaped text, without automatic redaction, export, browser persistence or analytics.
-Each backend stream retains four 2 MiB disk segments; provision at least 16 MiB
+Each backend stream retains four 2 MiB disk segments; provision at least 24 MiB for all three streams
 plus metadata and a temporary rotation segment per stream. Old private text logs
 are preserved but not imported into these APIs. Corrupt history/storage failures
 remain explicit; no automatic deletion or repair is performed.
@@ -196,6 +196,22 @@ reset, display eviction and capture failures remain compact inline notices.
 Cursor identity survives normal backend restart. The streams can overlap and
 are not summed or deduplicated. See the
 [persistent logging handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-05-persistent-socket-and-netcontrol-log-apis).
+
+Diagnostics > **EXPERIENCE LOG** (`/diagnostics/experience-log`), directly below
+NETWORK EXPERIENCE, uses the same log table and history controls for the separate
+`GET /api/v1/logs/performance` stream (`logs.read`). Requires the backend from the
+[performance log handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-17.md#2026-11-17-02-durable-performance-evidence-log);
+simulator/unsupported/storage errors remain inline without replacing retained evidence.
+Messages remain escaped raw JSON/text, including unknown events and malformed
+messages. The time column shows `observed_at` in the saved system timezone;
+its tooltip separately identifies persistence time. Missing/unrecognized observation
+times remain Unavailable rather than being replaced by persistence time.
+Gateway timeout counts are newly unanswered probes, not repeated rolling-window
+loss or proof of user/audio loss. TCP retransmissions are router-local, diagnostic
+capture drops mean missing coverage, and parent/child qdiscs are not summed.
+A running sink and empty history do not establish detector health or clean traffic.
+History and cursors stay separate from Syslog/Netcontrol, with the same visible-only
+three-second polling, page draining, history bounds and gap/reset/error notices.
 
 Services > **DHCPv4 relay** adds **Requests forwarded** and **Replies received**
 columns to its existing interface rows, without a separate counter table. Reads
