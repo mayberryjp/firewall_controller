@@ -35,7 +35,11 @@ async function connect(page: Page, { physicalInterface = false } = {}) {
       const result = persistentLog(path.endsWith("/logs/performance") ? "performance" : path.endsWith("/logs/syslog") ? "syslog" : "netcontrol");
       if (result.source === "performance") result.entries[0]!.message = JSON.stringify({
         schema: "netcontrol-performance/v1", event: "gateway_probe_loss",
-        observed_at: "2026-11-17T01:00:01.987654Z", details: { newly_lost: 2 },
+        observed_at: "2026-11-17T01:00:01.987654Z", details: {
+          name: "AZURE-PRIVATE", interface: "tun_wg0", target: "192.168.4.4",
+          newly_lost: 2, loss_timeout_ms: 2000,
+          window: { health: "up", lost: 9, loss_percent: 3.448275862, rtt_avg_ms: 20.534198607 },
+        },
       });
       if (url.searchParams.has("cursor")) result.entries = [];
       return route.fulfill({ json: result });
@@ -76,7 +80,7 @@ test("Syslog uses two shared counter columns in the server table", async ({ page
   await page.screenshot({ path: testInfo.outputPath("syslog-inline-counters.png"), fullPage: true, animations: "disabled" });
 });
 
-test("new diagnostics are reachable and log streams remain separate", async ({ page }) => {
+test("new diagnostics are reachable and log streams remain separate", async ({ page }, testInfo) => {
   await connect(page, { physicalInterface: true }); await page.goto("/diagnostics/dhcp-relay-logs");
   await expect(page.getByRole("heading", { name: "DHCP relay logs", exact: true })).toBeVisible();
   await expect(page.getByText("Request forwarded", { exact: true })).toBeVisible();
@@ -88,9 +92,19 @@ test("new diagnostics are reachable and log streams remain separate", async ({ p
   await expect(page.getByText("syslog entry 1", { exact: true })).toBeHidden();
   await page.goto("/diagnostics/experience-log");
   await expect(page.getByRole("heading", { name: "EXPERIENCE LOG", exact: true })).toBeVisible();
+  await expect(page.locator('[aria-label="performance log stream"]').getByRole("tablist")).toHaveCount(0);
+  await expect(page.getByRole("combobox")).toHaveCount(0);
+  await expect(page.getByRole("main")).not.toContainText("Probe timeouts are nonresponses");
+  await expect(page.getByRole("main")).not.toContainText("Retention:");
   await expect(page.getByRole("columnheader", { name: "Observed (UTC)", exact: true })).toBeVisible();
   await expect(page.locator("time")).toHaveText("2026-11-17 01:00:01");
-  await expect(page.locator(".log-message")).toContainText('"newly_lost":2');
+  await expect(page.locator(".evidence-event")).toHaveText("Probe timeout");
+  await expect(page.locator(".evidence-resource")).toHaveText("AZURE-PRIVATE");
+  await expect(page.locator(".evidence-metrics")).toContainText("New timeouts: 2");
+  await expect(page.locator(".evidence-metrics")).toContainText("Window loss: 3.45%");
+  await expect(page.getByRole("columnheader", { name: "Details", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("structured-experience-log.png"), fullPage: true, animations: "disabled" });
+  await expect(page.getByText("Raw record", { exact: true })).toHaveCount(0);
   await expect(page.getByText("netcontrol entry 1", { exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.goto("/diagnostics/rss-irq");
@@ -112,6 +126,46 @@ test("NetFlow adds just two counters to the existing export rows", async ({ page
     expect(nameColumn!.width).toBeLessThanOrEqual(104);
   }
   await page.screenshot({ path: testInfo.outputPath("netflow-inline-counters.png"), fullPage: true, animations: "disabled" });
+});
+
+test("experience log keeps one compact inline row per issue", async ({ page }, testInfo) => {
+  await connect(page);
+  await page.route("**/api/v1/**", async route => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.endsWith("/logs/performance")) return route.fallback();
+    const result = persistentLog("performance", "2");
+    const event = (name: string, details: Record<string, unknown>) => JSON.stringify({
+      schema: "netcontrol-performance/v1", event: name, observed_at: "2026-11-17T03:07:46.918008538Z", details,
+    });
+    result.entries = [
+      { ...result.entries[0]!, sequence: "1", message: event("link_observation", { evidence: [
+        { event: "qdisc_drops", qdisc: { name: "wan0", kind: "fq_codel", handle: 10, parent: 0, drops_delta: "2", queue: { drops: "12" } } },
+        { event: "diagnostic_capture_drops", drops_delta: "4", drops: "9" },
+      ] }) },
+      { ...result.entries[0]!, sequence: "2", message: event("gateway_health_change", {
+        name: "AZURE-PRIVATE", interface: "tun_wg0", target: "192.168.4.4", previous_health: "unknown", health: "up",
+        window: { loss_percent: 0, rtt_avg_ms: 20.534198607 },
+      }) },
+    ];
+    if (url.searchParams.has("cursor")) result.entries = [];
+    return route.fulfill({ json: result });
+  });
+  await page.goto("/diagnostics/experience-log");
+  const rows = page.locator(".persistent-log-table tbody tr");
+  await expect(rows).toHaveCount(3);
+  await expect(page.locator(".persistent-log-table thead th")).toHaveText([
+    "Observed (UTC)", "Event", "Resource", "Interface", "Target", "Evidence",
+  ]);
+  for (const row of await rows.all()) {
+    await expect(row.locator("td")).toHaveCount(6);
+    expect((await row.boundingBox())!.height).toBeLessThanOrEqual(48);
+    const heading = await row.locator(".evidence-event").boundingBox();
+    const metrics = await row.locator(".evidence-metrics").boundingBox();
+    expect(Math.abs(heading!.y + heading!.height / 2 - metrics!.y - metrics!.height / 2)).toBeLessThanOrEqual(2);
+    await expect(row.locator("details")).toHaveCount(0);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("experience-log-inline-rows.png"), fullPage: true, animations: "disabled" });
 });
 
 test("both persistent log tabs keep timestamps narrow with long messages", async ({ page }, testInfo) => {

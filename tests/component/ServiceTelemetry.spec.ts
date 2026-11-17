@@ -360,7 +360,7 @@ describe("diagnostic log pages", () => {
   it.each([
     ["syslog", "recent"], ["netcontrol", "recent"],
     ["syslog", "history"], ["netcontrol", "history"],
-    ["performance", "recent"], ["performance", "history"],
+    ["performance", "recent"],
   ] as const)("shows newest %s entries first in %s mode and prepends polled updates", async (source, mode) => {
     const first = persistentLog(source, "2");
     first.entries.unshift(...persistentLog(source, "1").entries);
@@ -368,7 +368,8 @@ describe("diagnostic log pages", () => {
     const wrapper = mount(PersistentLogStream, { props: { source, active: true }, global: { stubs } });
     await flushPromises();
     if (mode === "history") {
-      await wrapper.get("select").setValue(mode); await flushPromises();
+      await wrapper.get("select").setValue(mode);
+      await flushPromises();
       expect(api.getPersistentLog).toHaveBeenLastCalledWith(source, { cursor: `${telemetryEpoch}:0`, limit: 100 }, expect.any(AbortSignal));
     }
     const messages = () => wrapper.findAll("td.log-message").map(cell => cell.text());
@@ -385,6 +386,44 @@ describe("diagnostic log pages", () => {
     await vi.advanceTimersByTimeAsync(3000); await flushPromises();
     expect(api.getPersistentLog).toHaveBeenLastCalledWith(source, { cursor: `${telemetryEpoch}:3`, limit: 100 }, expect.any(AbortSignal));
     expect(messages()).toEqual([`${source} entry 3`, `${source} entry 2`, `${source} entry 1`]);
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+  it("combines older retained performance pages and live updates in one newest-first list", async () => {
+    const recent = persistentLog("performance", "3");
+    const oldest = persistentLog("performance"); oldest.has_more = true;
+    const remaining = persistentLog("performance", "3");
+    remaining.entries.unshift(...persistentLog("performance", "2").entries);
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(recent)
+      .mockResolvedValueOnce(oldest).mockResolvedValueOnce(remaining);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } }); await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenNthCalledWith(2, "performance", { cursor: `${telemetryEpoch}:0`, limit: 100 }, expect.any(AbortSignal));
+    expect(api.getPersistentLog).toHaveBeenNthCalledWith(3, "performance", { cursor: `${telemetryEpoch}:1`, limit: 100 }, expect.any(AbortSignal));
+    const messages = () => wrapper.findAll(".log-message").map(cell => cell.text());
+    expect(messages()).toEqual(["performance entry 3", "performance entry 2", "performance entry 1"]);
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false);
+    expect(wrapper.find("select").exists()).toBe(false);
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(persistentLog("performance", "4"));
+    await vi.advanceTimersByTimeAsync(3000); await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenLastCalledWith("performance", { cursor: `${telemetryEpoch}:3`, limit: 100 }, expect.any(AbortSignal));
+    expect(messages()).toEqual(["performance entry 4", "performance entry 3", "performance entry 2", "performance entry 1"]);
+    wrapper.unmount();
+  });
+  it("keeps retained performance initialization neutral and reports failures before retrying", async () => {
+    const pending = deferred<ReturnType<typeof persistentLog>>();
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(persistentLog("performance", "3"))
+      .mockReturnValueOnce(pending.promise);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } }); await flushPromises();
+    expect(wrapper.text()).toContain("Loading logs");
+    expect(wrapper.text()).not.toContain("No retained");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    pending.reject(new ApiFailure("HTTP 503: Storage unavailable", 503)); await flushPromises();
+    expect(wrapper.text()).toContain("Storage unavailable");
+    expect(wrapper.text()).not.toContain("No retained");
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(persistentLog("performance"));
+    await vi.advanceTimersByTimeAsync(5000); await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenLastCalledWith("performance", { cursor: undefined, limit: 100 }, expect.any(AbortSignal));
+    expect(wrapper.text()).toContain("performance entry 1");
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     wrapper.unmount();
   });
@@ -435,10 +474,39 @@ describe("diagnostic log pages", () => {
     expect(times[3]!.attributes("title")).toBe("Persisted (Asia/Tokyo): 2026-11-11 09:00:00");
     expect(wrapper.findAll(".log-message").at(-1)!.text()).toBe(message);
     expect(wrapper.find("img").exists()).toBe(false);
-    expect(wrapper.text()).toContain("Retention: 8 MiB");
+    expect(wrapper.text()).not.toContain("Retention:");
+    expect(wrapper.text()).not.toContain("Probe timeouts are nonresponses");
+    expect(wrapper.find("select").exists()).toBe(false);
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(false);
     store.draft!.system = { hostname: "", domain: "", timezone: "UTC" };
     await flushPromises();
     expect(wrapper.get("th").text()).toBe("Observed (Asia/Tokyo)");
+    wrapper.unmount();
+  });
+  it("renders each batched link issue as a separate table row without changing its original record", async () => {
+    const page = persistentLog("performance");
+    const message = JSON.stringify({
+      schema: "netcontrol-performance/v1", event: "link_observation", observed_at: "2026-11-17T03:07:46.918008538Z",
+      details: { evidence: [
+        { event: "qdisc_drops", qdisc: { name: "wan0", kind: "fq_codel", handle: 10, parent: 0, drops_delta: "2", queue: { drops: "12" } } },
+        { event: "diagnostic_capture_drops", drops_delta: "4", drops: "9" },
+      ] },
+    });
+    page.entries[0]!.message = message;
+    vi.mocked(api.getPersistentLog).mockResolvedValueOnce(page);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } }); await flushPromises();
+    const rows = wrapper.findAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.findAll("td")).toHaveLength(6);
+    expect(rows[0]!.get(".evidence-event").text()).toBe("Queue drops");
+    expect(rows[1]!.get(".evidence-event").text()).toBe("Monitoring coverage lost");
+    expect(rows.map(row => row.get("time").text())).toEqual(["2026-11-17 03:07:46", "2026-11-17 03:07:46"]);
+    for (const row of rows) {
+      expect(row.findAll("td")).toHaveLength(6);
+      expect(row.find("details").exists()).toBe(false);
+    }
+    expect(page.entries).toHaveLength(1);
+    expect(page.entries[0]!.message).toBe(message);
     wrapper.unmount();
   });
   it("retains performance evidence and cursor through a storage failure, drains pages and pauses hidden reads", async () => {

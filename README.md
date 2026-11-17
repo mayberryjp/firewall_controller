@@ -198,12 +198,27 @@ are not summed or deduplicated. See the
 [persistent logging handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-05-persistent-socket-and-netcontrol-log-apis).
 
 Diagnostics > **EXPERIENCE LOG** (`/diagnostics/experience-log`), directly below
-NETWORK EXPERIENCE, uses the same log table and history controls for the separate
+NETWORK EXPERIENCE, uses a single live-updating log table for the separate
 `GET /api/v1/logs/performance` stream (`logs.read`). Requires the backend from the
 [performance log handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-17.md#2026-11-17-02-durable-performance-evidence-log);
 simulator/unsupported/storage errors remain inline without replacing retained evidence.
-Messages remain escaped raw JSON/text, including unknown events and malformed
-messages. The time column shows `observed_at` in the saved system timezone;
+Retained history and incoming events share one newest-first list, without mode
+tabs or a dropdown. When older retained entries exist, the stream reads from
+the oldest retained cursor and continues forward into live updates.
+The page omits static description and retention captions; actionable errors,
+staleness, gaps, resets and display-eviction notices remain inline.
+Known events render compact colored chips for event meaning, gateway/interface
+identity, new-count evidence, health transitions and available timing/window metrics.
+Each issue occupies one table row, including individual evidence items from a
+batched link record. Columns are Observed, Event, Resource, Interface, Target,
+and Evidence. Event and evidence chips stay inline without wrapping;
+narrow displays scroll inside the table instead of stacking issue cards.
+Window loss is labeled separately from new probe timeouts; no rolling-window
+recount, queue summing or invented latency severity is added. Queue rows retain
+their handles/parents, and diagnostic-capture loss is labeled as monitoring coverage.
+There is no raw-record Details column; unknown events and malformed messages
+remain visible as escaped raw text in Evidence.
+The time column shows `observed_at` in the saved system timezone;
 its tooltip separately identifies persistence time. Missing/unrecognized observation
 times remain Unavailable rather than being replaced by persistence time.
 Gateway timeout counts are newly unanswered probes, not repeated rolling-window

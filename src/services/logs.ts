@@ -22,3 +22,19 @@ export const persistentLogPageSchema = z.object({
 export type LogSource = z.infer<typeof logSourceSchema>;
 export type PersistentLogPage = z.infer<typeof persistentLogPageSchema>;
 export type PersistentLogQuery = z.infer<typeof persistentLogQuerySchema>;
+
+const performanceEventSchema = z.object({
+  schema: z.literal("netcontrol-performance/v1"), observed_at: z.string(),
+  event: z.string().optional(), details: z.record(z.unknown()).optional(),
+});
+export type PerformanceLogEvent = z.infer<typeof performanceEventSchema>;
+export function parsePerformanceLog(message: string): PerformanceLogEvent | null {
+  let value: unknown;
+  try { value = JSON.parse(message); }
+  catch (failure) {
+    if (failure instanceof SyntaxError) return null;
+    throw failure;
+  }
+  const parsed = performanceEventSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
