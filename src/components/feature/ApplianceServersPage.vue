@@ -5,6 +5,7 @@ import { cloneConfig, validateConfig } from "@/services/configuration";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { isApplianceStatus, type Config } from "@/types/domain";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
+import FirewallClock from "@/components/feature/FirewallClock.vue";
 import { formatCount } from "@/services/counters";
 import { useDiagnosticRead } from "@/composables/useDiagnosticRead";
 import { getApplianceStatus } from "@/services/netcontrol";
@@ -39,7 +40,13 @@ const status = computed(() => props.service === "ntp" && syncTracking.value ? sy
 const statusStale = computed(() => props.service === "ntp" && syncTracking.value
   ? syncRead.stale.value || Boolean(syncRead.error.value) : store.runtime.stale);
 const sampleAvailable = computed(() => !statusStale.value && !status.value?.retrying && !status.value?.error && status.value?.sample_status === "available");
-const statColumns = 5;
+const statColumns = 4;
+const clockSampleKey = ref("");
+watch(() => sampleAvailable.value ? status.value : undefined, sample => {
+  if (sample?.server_time && sample.collected_at) {
+    clockSampleKey.value = JSON.stringify([sample.started_at, sample.collected_at, sample.server_time]);
+  }
+}, { immediate: true });
 const syslogCounters = [
   { key: "received_records", title: "Logs read", color: "info" },
   { key: "forwarded_deliveries", title: "Remote sends", color: "primary" },
@@ -80,6 +87,7 @@ const statusTitle = computed(() => {
   if (!current) return "";
   const parts = [`State: ${current.state}`, `Sample: ${(current.sample_status ?? "unavailable").replace("_", " ")}`];
   if (current.discipline) parts.push(`Discipline: ${current.discipline.replace("_", " ")}`);
+  if (current.server_time) parts.push(`Last sync server time (${timeZone.value}): ${formatTimestamp(current.server_time)}`);
   if (current.collected_at) parts.push(`Last sample (${timeZone.value}): ${formatTimestamp(current.collected_at)}`);
   if (current.started_at) parts.push(`Started (${timeZone.value}): ${formatTimestamp(current.started_at)}`);
   return parts.join("\n");
@@ -185,6 +193,10 @@ onBeforeUnmount(() => { disposed = true; });
         {{ service === 'ntp' ? 'Add NTP upstream server' : 'Add remote syslog server' }}
       </v-btn>
     </div>
+    <FirewallClock
+      v-if="service === 'ntp'"
+      :sample-key="clockSampleKey"
+    />
     <p
       v-if="service === 'syslog' && status"
       class="mb-3"
@@ -237,9 +249,6 @@ onBeforeUnmount(() => { disposed = true; });
           <template v-if="service === 'ntp'">
             <th scope="col">
               Status
-            </th>
-            <th scope="col">
-              Server time ({{ timeZone }})
             </th>
             <th scope="col">
               Offset
@@ -303,15 +312,6 @@ onBeforeUnmount(() => { disposed = true; });
                   </v-chip>
                 </td>
                 <template v-if="sampleAvailable">
-                  <td>
-                    <time
-                      v-if="status?.server_time"
-                      :datetime="status.server_time"
-                    >{{ formatTimestamp(status.server_time, '-') }}</time>
-                    <template v-else>
-                      -
-                    </template>
-                  </td>
                   <td>
                     <v-chip
                       size="small"

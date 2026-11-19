@@ -9,7 +9,7 @@ import { decodeJson, encodeJson } from "@/services/json";
 import { differences, normalize, requiredPermissions } from "@/services/configuration";
 import { ruleOwnershipEntries } from "@/services/ruleOwnership";
 import { gatewayMonitorSchema, upgradeVersionSchema, mdnsSchema, adoptVlanRequestSchema } from "@/types/domain";
-import { config, hostPolicyConfig, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus, vnstatReporting, mqttStatus } from "../fixtures";
+import { config, hostPolicyConfig, state, runtime, transaction, statistics, gatewayStatistics, connections, mdnsStatus, vnstatReporting, mqttStatus, systemStatus } from "../fixtures";
 import { dnsResponse, linkDiagnostics, interfaceCapabilitySnapshot, rpsDiagnostics } from "../diagnosticsFixtures";
 import { bgpConfig, bgpStatus, bgpRoutes, bgpAdvertisedRoutes, dnatRule } from "../bgpFixtures";
 import { firewallCounters, firewallDenyPage } from "../firewallTelemetryFixtures";
@@ -18,6 +18,8 @@ import { conntrackCatalog, conntrackSnapshot } from "../conntrackFixtures";
 import { discordStatus, webhookReference, webhookUrl } from "../discordFixtures";
 import { discordDefaults } from "@/services/discord";
 import { persistentLog, relayLog, relayStatistics, telemetryEpoch } from "../serviceTelemetryFixtures";
+import { getNetworkExperienceSummary } from "@/services/networkExperience";
+import { experienceSummary } from "../networkExperienceFixtures";
 
 const deviceId = "11111111-1111-4111-8111-111111111111";
 let status = 200, body = "{}", captured: InternalAxiosRequestConfig | undefined, responseHeaders = new AxiosHeaders();
@@ -31,6 +33,25 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("reads the live daemon clock with an authenticated, bodyless, queryless system-status GET", async () => {
+    const sample = systemStatus(), signal = new AbortController().signal;
+    body = encodeJson(sample);
+    expect(await net.getSystemStatus(signal)).toEqual(sample);
+    expect(captured).toMatchObject({ method: "get", url: "/system/status", signal });
+    expect(captured?.headers.get("Authorization")).toBe("Bearer registry-test-session");
+    expect(captured?.data).toBeUndefined();
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it.each([undefined, null, "", "2026-11-19 08:58:31", "2026-11-19T08:58:31+09:00", "2026-11-19T08:58:31.1234567890Z",
+    "2026-02-30T08:58:31Z"])("rejects missing or incompatible current_time %j without a fallback", async current_time => {
+    body = encodeJson({ ...systemStatus(), current_time });
+    await expect(net.getSystemStatus()).rejects.toMatchObject({ incompatible: true });
+  });
+  it.each([401, 403, 503])("surfaces system-status HTTP %s failures without retries", async code => {
+    status = code; body = encodeJson({ error: "system status unavailable", transaction: null });
+    await expect(net.getSystemStatus()).rejects.toMatchObject({ status: code });
+    expect(adapter).toHaveBeenCalledOnce();
+  });
   it("purges performance evidence with one authenticated bodyless, queryless DELETE", async () => {
     body = encodeJson({ source: "performance", purged: true });
     expect(await net.purgePerformanceLog()).toEqual({ source: "performance", purged: true });
@@ -645,9 +666,28 @@ describe("controller-proxied API boundary", () => {
     body = encodeJson(linkDiagnostics());
     const result = await net.getLinkDiagnostics();
     expect(captured?.method).toBe("get"); expect(captured?.url).toBe("/statistics/link-diagnostics");
-    expect(captured?.data).toBeUndefined(); expect(result.interfaces![0]!.drops).toBe("18446744073709551615");
+    expect(captured?.data).toBeUndefined(); expect(result.interfaces![0]!.rx_drops).toBe("18446744073709551615");
     status = 404; body = encodeJson({ error: "Unknown endpoint" });
     await expect(net.getLinkDiagnostics()).rejects.toThrow("HTTP 404");
+  });
+  it("rejects aggregate-only interface responses instead of fabricating directional counters", async () => {
+    body = encodeJson({ ...linkDiagnostics(), interfaces: [
+      { index: 2, name: "lab0", errors: "1", drops: "2", errors_delta: "0", drops_delta: null },
+    ] });
+    await expect(net.getLinkDiagnostics()).rejects.toMatchObject({ incompatible: true });
+  });
+  it("allows a dense 256-host summary the aggregation budget plus overhead without losing exact totals", async () => {
+    const sample = experienceSummary(), host = sample.hosts[0]!;
+    host.summary.traffic.sent_bytes.total = "18446744073709551616";
+    sample.eligible_hosts = 256;
+    sample.hosts = Array.from({ length: 256 }, (_, index) => ({ ...host, ip_address: `2001:db8::${index.toString(16)}` }));
+    body = encodeJson(sample);
+    const result = await getNetworkExperienceSummary();
+    expect(captured?.url).toBe("/statistics/host-experience/summary?limit=256");
+    expect(captured?.timeout).toBeGreaterThan(3600 + 5000);
+    expect(result.hosts).toHaveLength(256);
+    expect(result.hosts[255]!.summary.traffic.sent_bytes.total).toBe("18446744073709551616");
+    expect(adapter).toHaveBeenCalledOnce();
   });
   it("targets a specific DNS server and rejects fallback resolver results", async () => {
     body = encodeJson(dnsResponse("lab0"));

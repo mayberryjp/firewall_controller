@@ -89,7 +89,12 @@ export function linkDiagnostics(): LinkDiagnostics {
   return {
     schema: "netcontrol-link-diagnostics/v1", scope: "host:opaque", status: "available",
     collected_at: "2026-10-28T01:02:03.987654Z", age_ms: 0, interval_seconds: 1.25, error: null,
-    interfaces: [{ index: 2, name: "lab0", errors: "9007199254740993", drops: "18446744073709551615", errors_delta: null, drops_delta: "1" }],
+    interfaces: [{
+      index: 2, name: "lab0", rx_errors: "9007199254740993", tx_errors: "3",
+      rx_drops: "18446744073709551615", tx_drops: "0", rx_frame_errors: "9007199254740993", rx_length_errors: "0",
+      rx_errors_delta: null, tx_errors_delta: "0", rx_drops_delta: "1", tx_drops_delta: "0",
+      rx_frame_errors_delta: null, rx_length_errors_delta: "0",
+    }],
     queues: [
       { index: 2, name: "lab0", handle: 1, parent: 0, kind: "fq_codel", status: "available", queue: { qlen_packets: 2, backlog_bytes: 4096, drops: "9007199254740993", requeues: "7", overlimits: "8" }, drops_delta: "1", backlog_growth_bytes: "-256" },
       { index: 2, name: "lab0", handle: 2, parent: 1, kind: "noqueue", status: "unavailable", queue: null, drops_delta: null, backlog_growth_bytes: null },

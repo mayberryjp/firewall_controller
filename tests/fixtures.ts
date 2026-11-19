@@ -1,5 +1,13 @@
-import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus, PlatformStatus, SoftwareMetadata, VnStatReporting, WireGuardDNS, MqttStatus } from "@/types/domain";
+import type { Config, StateView, Transaction, RuntimeState, Statistics, ExplicitGatewayMonitor, GatewayStatistics, ConnectionsPage, MDNSStatus, PlatformStatus, SoftwareMetadata, VnStatReporting, WireGuardDNS, MqttStatus, SystemStatus } from "@/types/domain";
 import type { HostHealth } from "../src/services/hostHealth";
+export function systemStatus(currentTime = "2026-11-19T08:58:31.123456789Z"): SystemStatus {
+  return {
+    current_time: currentTime,
+    hostname: { configured: "", observed: null, state: "unmanaged", error: null },
+    timezone: { configured: "", observed: null, state: "unmanaged", error: null },
+    last_applied_at_unix: null,
+  };
+}
 export function vnstatReporting(): VnStatReporting {
   return {
     scope: "host", last_report_date: "2026-10-29", last_report_error: null,

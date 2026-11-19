@@ -44,7 +44,7 @@ import { useControllerStore } from "@/stores/controller";
 import { configSchema, dhcpClientSchema, runtimeSchema } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
 import { cloneConfig, differences, requiredPermissions, validateConfig } from "@/services/configuration";
-import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns, mqttStatus, processHealthSnapshot } from "../fixtures";
+import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns, mqttStatus, processHealthSnapshot, systemStatus } from "../fixtures";
 import type { Component } from "vue";
 import { bgpConfig, bgpRoutes } from "../bgpFixtures";
 import { dragRule } from "../dragRule";
@@ -70,6 +70,7 @@ beforeEach(() => {
   vi.spyOn(api, "getGatewayStatistics").mockResolvedValue({ sample: statistics().sample, monitors: [] });
   vi.spyOn(api, "getVnStatReporting").mockResolvedValue(vnstatReporting());
   vi.spyOn(api, "getSystemUpgrade").mockResolvedValue({ enabled: false, repository: null, job: null, last_successful_version: null });
+  vi.spyOn(api, "getSystemStatus").mockResolvedValue(systemStatus());
   vi.spyOn(api, "getDiscoveredInterfaces").mockImplementation(async () => (store.state.data?.desired.interfaces ?? []).map((link, index) => ({ name: link.name, kind: link.kind, index, mac: null, mtu: link.mtu, up: link.up, addresses: [...link.addresses], ownership: "managed" as const, role: null, addressing_type: null })));
 });
 async function render(component: Component, path: string, props: Record<string, unknown> = {}) {
@@ -150,7 +151,7 @@ describe("October 17 frontend workflows", () => {
     expect(wrapper.find('[title*="Last failure: collector.example: disconnected"]').exists()).toBe(true);
     wrapper.unmount();
   });
-  it.each(["available", "failed"])("shows NTP server-returned time only for a fresh matching sample after pending reads (%s)", async outcome => {
+  it.each(["available", "failed"])("keeps NTP sample time historical and independent of the current firewall clock (%s)", async outcome => {
     const store = useControllerStore();
     const serverTime = "2026-01-02T03:04:05.987+02:00";
     store.state.data!.desired.ntp = { enabled: true, servers: ["other.example", "clock.example"] };
@@ -174,25 +175,27 @@ describe("October 17 frontend workflows", () => {
         expect(wrapper.find('[title*="NTP read failed"]').exists()).toBe(true);
         return;
       }
-      expect(wrapper.get("thead").text()).toContain("Server time (America/Los_Angeles)");
-      expect(wrapper.findAll("tbody tr")[0]!.find("time").exists()).toBe(false);
-      expect(wrapper.findAll("tbody tr")[1]!.get("time").text()).toBe("2026-01-01 17:04:05");
-      expect(wrapper.get("time").attributes("datetime")).toBe(serverTime);
+      expect(wrapper.get("thead").text()).not.toContain("Server time");
+      expect(wrapper.findAll("tbody tr")[0]!.find('[title*="Last sync server time"]').exists()).toBe(false);
+      expect(wrapper.findAll("tbody tr")[1]!.get('[title*="Last sync server time"]').attributes("title"))
+        .toContain("Last sync server time (America/Los_Angeles): 2026-01-01 17:04:05");
+      expect(wrapper.get("output").text()).toBe("2026-11-19 00:58:31");
+      expect(store.runtime.data!.appliance_services[0]).toHaveProperty("server_time", serverTime);
       store.draft = cloneConfig(store.state.data!.desired);
       store.draft.system = { hostname: "", domain: "", timezone: "Asia/Kolkata" };
       await flushPromises();
-      expect(wrapper.get("time").text()).toBe("2026-01-01 17:04:05");
+      expect(wrapper.get("output").text()).toBe("2026-11-19 00:58:31");
       store.state.data = {
         ...store.state.data!, desired: { ...store.state.data!.desired, system: { hostname: "", domain: "", timezone: "Asia/Kolkata" } },
       };
       await flushPromises();
-      expect(wrapper.get("time").text()).toBe("2026-01-02 06:34:05");
+      expect(wrapper.get("output").text()).toBe("2026-11-19 14:28:31");
       store.state.data = {
         ...store.state.data, desired: { ...store.state.data.desired, system: { hostname: "", domain: "", timezone: "" } },
       };
       await flushPromises();
-      expect(wrapper.get("thead").text()).toContain("Server time (UTC)");
-      expect(wrapper.get("time").text()).toBe("2026-01-02 01:04:05");
+      expect(wrapper.get("output").attributes("aria-label")).toBe("Current firewall time (UTC)");
+      expect(wrapper.get("output").text()).toBe("2026-11-19 08:58:31");
       store.runtime.stale = true;
       await flushPromises();
       expect(wrapper.find("time").exists()).toBe(false);
@@ -200,7 +203,7 @@ describe("October 17 frontend workflows", () => {
       store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [{ ...sample, server_time: null }] });
       await flushPromises();
       expect(wrapper.find("time").exists()).toBe(false);
-      expect(wrapper.findAll("tbody tr")[1]!.findAll("td")[2]!.text()).toBe("-");
+      expect(wrapper.findAll("tbody tr")[1]!.find('[title*="Last sync server time"]').exists()).toBe(false);
     } finally { wrapper.unmount(); }
   });
   it("syncs from the saved server row and accepts a matching worker sample even when time moves backward", async () => {
@@ -243,11 +246,13 @@ describe("October 17 frontend workflows", () => {
       expect(wrapper.text()).toContain("Sync requested.");
       expect(wrapper.text()).not.toContain("Synchronized");
       expect(wrapper.find("time").exists()).toBe(false);
+      const clockReads = vi.mocked(api.getSystemStatus).mock.calls.length;
       read.mockResolvedValue({ instances: [newWorker], error: "" });
       await vi.advanceTimersByTimeAsync(3000); await flushPromises();
       expect(read).toHaveBeenCalledWith("ntp", expect.any(AbortSignal));
-      expect(wrapper.get("time").text()).toBe("2026-11-18 03:01:00");
-      expect(wrapper.get("time").attributes("datetime")).toBe(newWorker.server_time);
+      expect(wrapper.get('[title*="Last sync server time"]').attributes("title")).toContain("Last sync server time (UTC): 2026-11-18 03:01:00");
+      expect(api.getSystemStatus).toHaveBeenCalledTimes(clockReads + 1);
+      expect(store.runtime.data!.appliance_services[0]).toHaveProperty("server_time", previousWorker.server_time);
       expect(wrapper.get("thead").text()).toContain("Requested step");
       expect(wrapper.text()).toContain("-123.456 ms");
       expect(wrapper.text()).not.toContain("Requested slew");

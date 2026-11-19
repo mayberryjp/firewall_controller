@@ -17,7 +17,7 @@ import { firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema
 import { dnsLookupRequestSchema, dnsLookupSchema, restartResponseSchema, restartTargetSchema, type DNSLookupRequest } from "@/services/operations";
 import {
   adoptVlanRequestSchema, adoptVlanResponseSchema, type AdoptVlanRequest,
-  mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema, timezonesSchema,
+  mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema, timezonesSchema, systemStatusSchema,
   stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
   revisionSchema, revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
@@ -138,6 +138,7 @@ export const getDynamicDnsStatus = (signal?: AbortSignal) => request("GET", "/se
 export const getMDNSConfig = (signal?: AbortSignal) => request("GET", "/services/mdns", mdnsSchema, undefined, signal);
 export const getMDNSStatus = (signal?: AbortSignal) => request("GET", "/services/mdns/status", mdnsStatusPageSchema, undefined, signal);
 export const getTimezones = (signal?: AbortSignal) => request("GET", "/system/timezones", timezonesSchema, undefined, signal);
+export const getSystemStatus = (signal?: AbortSignal) => request("GET", "/system/status", systemStatusSchema, undefined, signal);
 export async function uploadDynamicDnsSecret(secret: string, signal?: AbortSignal) {
   if (!secret || secret.includes("\0") || new TextEncoder().encode(secret).length > 4096) throw new Error("Client secret must be 1..4096 UTF-8 bytes without NUL");
   try { return await request("POST", "/services/dynamic-dns/secrets", dynamicDnsSecretReferenceSchema, { client_secret: secret }, signal); }

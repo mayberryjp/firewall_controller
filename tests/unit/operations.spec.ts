@@ -12,12 +12,28 @@ import { dnsResponse, linkDiagnostics } from "../diagnosticsFixtures";
 describe("operational contracts", () => {
   it("accepts exact link counters, signed growth and missing simulator sections", () => {
     const sample = linkDiagnosticsSchema.parse(linkDiagnostics());
-    expect(sample.interfaces![0]!.drops).toBe("18446744073709551615");
+    expect(sample.interfaces![0]!.rx_drops).toBe("18446744073709551615");
     expect(sample.queues![0]!.backlog_growth_bytes).toBe("-256");
     expect(statisticsSchema.parse({ ...statistics(), link_diagnostics: sample }).link_diagnostics).toEqual(sample);
     expect(linkDiagnosticsSchema.parse({ ...sample, status: "simulated", age_ms: null, collected_at: null, interval_seconds: null, interfaces: null, queues: null, local_tcp: null, packet_headers: null, signals: [], coverage: undefined }).status).toBe("simulated");
-    expect(linkDiagnosticsSchema.safeParse({ ...sample, interfaces: [{ ...sample.interfaces![0], drops: 123 }] }).success).toBe(false);
+    expect(linkDiagnosticsSchema.safeParse({ ...sample, interfaces: [{ ...sample.interfaces![0], rx_drops: 123 }] }).success).toBe(false);
     expect(linkDiagnosticsSchema.safeParse({ ...sample, local_tcp: { ...sample.local_tcp, rtt_p50_ms: "1" } }).success).toBe(false);
+  });
+  it("requires exact directional strings and explicit nullable baselines instead of aggregate aliases", () => {
+    const sample = linkDiagnostics(), row = sample.interfaces![0]!;
+    expect(linkDiagnosticsSchema.parse(sample).interfaces![0]).toEqual(row);
+    for (const key of ["rx_errors", "tx_errors", "rx_drops", "tx_drops", "rx_frame_errors", "rx_length_errors"] as const) {
+      for (const invalid of [undefined, null, 9007199254740992, "-1", "01"]) {
+        expect(linkDiagnosticsSchema.safeParse({ ...sample, interfaces: [{ ...row, [key]: invalid }] }).success).toBe(false);
+      }
+      for (const delta of [null, "0", "9007199254740993"]) {
+        expect(linkDiagnosticsSchema.parse({ ...sample, interfaces: [{ ...row, [`${key}_delta`]: delta }] }).interfaces![0]![`${key}_delta`]).toBe(delta);
+      }
+      expect(linkDiagnosticsSchema.safeParse({ ...sample, interfaces: [{ ...row, [`${key}_delta`]: undefined }] }).success).toBe(false);
+    }
+    expect(linkDiagnosticsSchema.safeParse({ ...sample, interfaces: [
+      { index: 2, name: "lab0", errors: "1", drops: "2", errors_delta: null, drops_delta: "0" },
+    ] }).success).toBe(false);
   });
   it("validates strict DNS requests, defaults, normalization and boundary limits", () => {
     expect(dnsLookupRequestSchema.parse({ interface: "wan0", hostname: "Example.TEST." })).toEqual({ interface: "wan0", hostname: "example.test", record_type: "A", timeout_ms: 2000 });

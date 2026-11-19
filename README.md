@@ -216,6 +216,12 @@ narrow displays scroll inside the table instead of stacking issue cards.
 Window loss is labeled separately from new probe timeouts; no rolling-window
 recount, queue summing or invented latency severity is added. Queue rows retain
 their handles/parents, and diagnostic-capture loss is labeled as monitoring coverage.
+Interface evidence separates RX/TX errors and drops, with RX frame/length
+subcategories included in RX errors, not added to them. Counts remain exact
+decimal strings and null deltas show Unavailable rather than zero. Cumulative
+counts are available in chip tooltips. WireGuard RX frame errors do not establish
+an AllowedIPs mismatch or identify a peer. Older combined-counter records remain
+readable as escaped raw JSON instead of fabricated directional evidence.
 There is no raw-record Details column; unknown events and malformed messages
 remain visible as escaped raw text in Evidence.
 The time column shows `observed_at` in the saved system timezone;
@@ -592,6 +598,14 @@ the page identifies the loaded/eligible count; searching and sorting apply only
 to these at most 256 hosts. Deploy the backend supporting the
 November 15 pooled DNS/passive RTT percentiles handoff before using this view; unsupported/error
 responses remain explicit, without falling back to live or per-host history reads.
+The [November 19 summary-budget handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-19.md#2026-11-19-05-large-experience-summary-read-budget)
+allows up to 3.6 seconds of aggregation for 256 hosts, plus storage,
+serialization and transport overhead; this is not an end-to-end deadline.
+The existing 80-second browser read timeout and 95-second registry proxy
+timeout already accommodate that budget and are unchanged. Any separately
+deployed upstream proxy must also allow sufficient time. Live appliance/proxy
+latency remains to be verified; `429`/`503` errors stay visible without immediate
+retry loops, zero-filled results or healthy fallbacks.
 
 Each protected IP on a managed LAN occupies one compact row: small device icon,
 configured IP, original-case current local description, current network,
@@ -810,10 +824,17 @@ route selection or appliance deployment.
 
 Diagnostics provides four focused, compact tables with colored chips:
 
-- **Interface drops** (`/diagnostics/interface-drops`): RX + TX error/drop totals
-  and per-sample deltas. Error/drop counts use green chips for measured zero,
+- **Interface drops** (`/diagnostics/interface-drops`): separate RX/TX error/drop
+  totals and per-sample deltas. Expand RX error detail for frame/length counts
+  and their independent deltas; these are subcategories, not extra packet loss.
+  Error/drop counts use green chips for measured zero,
   amber for positive values, and neutral for unavailable/historical values.
   Cumulative totals are not current alarms; tooltips distinguish them from deltas.
+  This requires the [November 19 directional-counter backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-19.md#2026-11-19-06-directional-interface-error-and-drop-counters):
+  six decimal-string counters (`rx_errors`, `tx_errors`, `rx_drops`, `tx_drops`,
+  `rx_frame_errors`, `rx_length_errors`) and their nullable `_delta` fields replace
+  the old aggregates. Coordinate backend/client deployment; aggregate-only live
+  responses report incompatibility, without synthesizing directions or baselines.
 - **QDISCS** (`/diagnostics/qdiscs`): separate queue rows, sample availability,
   backlog/growth, drops, requeues and overlimits. Parent/child qdiscs must not be
   summed; backlog is occupancy, not delay, and overlimits do not necessarily mean loss.
@@ -2479,10 +2500,21 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
 
 #### Appliance NTP, syslog and vnStat
 
-- The NTP server row displays the backend's `server_time` in the saved system
-  timezone (UTC when unconfigured), preserving the original timestamp in HTML
-  `datetime`. It is the returned sample, not a live browser clock; stale or
-  failed samples are not displayed as fresh, and missing values remain a dash.
+- The NTP page shows **Current firewall time** from `GET /system/status`
+  (`state.read`), including when NTP is disabled or no servers are configured.
+  Requires the [November 19 live-clock backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-19.md#2026-11-19-07-live-firewall-clock)
+  with required UTC `current_time`; missing/invalid fields and read failures stay
+  explicit, without substituting the browser clock or last NTP sample.
+  The display uses the saved system timezone (UTC when unconfigured) and
+  `yyyy-mm-dd hh:mm:ss`. It advances locally from response receipt using a
+  monotonic timer, refreshing every 15 seconds while visible, on resume and
+  after a new accepted NTP sample. The tooltip identifies the locally advanced
+  estimate and request/network latency; it is not proof of synchronization.
+  Failed reads or estimates at least 30 seconds old are marked stale; successful
+  reads replace the anchor even when the firewall clock moves backward.
+  The last sync server time and sample publication time remain separately
+  labeled historical timestamps in the worker-status tooltip; raw API values
+  retain their precision. No additional upstream NTP queries are made.
 - NTP/syslog accept 0..8 unique destinations disabled and 1..8 enabled.
   Hosts are canonical unicast/private/ULA/loopback IPs or lowercase ASCII DNS
   labels (1..63 characters each, total <=253), without URIs, embedded ports,
@@ -2500,7 +2532,7 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   "Sync requested" acknowledges restart, not synchronization; simulator responses
   remain explicit. Visible-only status polling uses `/services/ntp/status` and
   matches the returned worker `started_at`, even when sample time moves backward.
-  Signed offset/requested-step metrics and fresh server time remain on the matching
+  Signed offset/requested-step metrics and last-sample details remain on the matching
   server row. Failures are inline and never trigger another sync automatically.
   Running is not proof of synchronization. Rollback restores settings, not past clock state.
   Explicitly configure the desired servers and enable NTP to maintain appliance

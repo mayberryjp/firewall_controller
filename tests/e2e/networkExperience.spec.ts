@@ -3,6 +3,33 @@ import { mockBackend } from "./mockBackend";
 import { experienceHistory, experienceSummary } from "../networkExperienceFixtures";
 import { encodeJson } from "../../src/services/json";
 
+test("a dense summary slower than the aggregation cap renders all 256 hosts with exact counters", async ({ page }) => {
+  const backend = await mockBackend(page);
+  const data = experienceSummary(), host = data.hosts[0]!;
+  host.summary.firewall.dropped_sent_packets.total = "18446744073709551616";
+  data.eligible_hosts = 256;
+  data.hosts = Array.from({ length: 256 }, (_, index) => ({ ...host, ip_address: `192.0.2.${index}` }));
+  let requests = 0;
+  await page.route("**/proxy/statistics/host-experience/summary?*", async route => {
+    requests++;
+    await new Promise(resolve => setTimeout(resolve, 4200));
+    await route.fulfill({ contentType: "application/json", body: encodeJson(data) });
+  });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/diagnostics/network-experience");
+  const view = page.getByRole("region", { name: "Network experience", exact: true });
+  await expect(view).toContainText("Loading network experience");
+  await expect(view.getByRole("alert")).toHaveCount(0);
+  await expect(view.locator("tbody tr")).toHaveCount(256, { timeout: 15000 });
+  await expect(view.locator('[data-host-address="192.0.2.255"] [data-metric="dropped_sent_packets"]')).toHaveText("18446744073709551616");
+  expect(requests).toBe(1);
+  expect(backend.writes).toEqual([]);
+});
+
 test("NETWORK EXPERIENCE opens a coordinated host replay without changing link styling or making writes", async ({ page, isMobile }, testInfo) => {
   const backend = await mockBackend(page);
   const data = experienceSummary(), second = structuredClone(data.hosts[0]!);

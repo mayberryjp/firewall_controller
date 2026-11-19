@@ -2,6 +2,7 @@ import { mount } from "@vue/test-utils";
 import { describe, expect, it } from "vitest";
 import PerformanceLogMessage from "@/components/feature/PerformanceLogMessage.vue";
 import { parsePerformanceLog } from "@/services/logs";
+import { linkDiagnostics } from "../diagnosticsFixtures";
 
 const stubs = {
   VChip: { props: ["color"], template: '<span class="chip" :data-color="color"><slot /></span>' },
@@ -48,7 +49,7 @@ describe("structured experience log messages", () => {
     const evidence = [
       { event: "qdisc_drops", qdisc: { name: "wan0", kind: "fq_codel", handle: 10, parent: 0, drops_delta: "9007199254740993", queue: { drops: "18446744073709551615" } } },
       { event: "qdisc_drops", qdisc: { name: "wan0", kind: "fq_codel", handle: 20, parent: 10, drops_delta: "7", queue: { drops: "12" } } },
-      { event: "interface_errors_or_drops", interface: { name: "wan0", errors_delta: null, drops_delta: "2" } },
+      { event: "interface_errors_or_drops", interface: { ...linkDiagnostics().interfaces![0]!, name: "wan0", rx_errors_delta: null, rx_drops_delta: "2" } },
       { event: "local_tcp_retransmissions", local_tcp: { retransmissions_delta: "3" } },
       { event: "diagnostic_capture_drops", drops_delta: "4", drops: "99" },
       { event: "future_evidence", more: "kept" },
@@ -57,12 +58,41 @@ describe("structured experience log messages", () => {
     expect(wrappers[0]!.get(".evidence-metrics").text()).toContain("New drops: 9007199254740993");
     expect(wrappers[0]!.get(".evidence-metrics").text()).toContain("Total: 18446744073709551615");
     expect(wrappers[1]!.get(".evidence-metrics").text()).toContain("Parent: 10");
-    expect(wrappers[2]!.get(".evidence-metrics").text()).not.toContain("New errors:");
+    expect(wrappers[2]!.get(".evidence-metrics").text()).toContain("New RX errors: Unavailable");
+    expect(wrappers[2]!.get(".evidence-metrics").text()).toContain("New RX drops: 2");
     expect(wrappers[3]!.get(".evidence-resource").text()).toBe("Router-local TCP");
     expect(wrappers[4]!.get(".evidence-event").text()).toBe("Monitoring coverage lost");
     expect(wrappers[4]!.get(".evidence-metrics").text()).not.toContain("New drops:");
     expect(wrappers[5]!.get(".opaque-message").text()).toContain("future_evidence");
     wrappers.forEach(wrapper => wrapper.unmount());
+  });
+  it("renders exact directional evidence without summing RX subcategories or inferring WireGuard rejection causes", () => {
+    const link = { ...linkDiagnostics().interfaces![0]!, name: "tun_wg0",
+      rx_errors_delta: "2", rx_frame_errors_delta: "2", rx_length_errors_delta: null,
+      tx_errors_delta: "9007199254740993", rx_drops_delta: "0", tx_drops_delta: "7",
+    };
+    const { wrapper } = render("link_observation", { evidence: [{ event: "interface_errors_or_drops", interface: link }] });
+    expect(wrapper.get(".evidence-interface").text()).toBe("tun_wg0");
+    const chips = wrapper.findAll(".evidence-metrics .chip");
+    expect(chips.map(chip => chip.text())).toEqual([
+      "New RX errors: 2", "New TX errors: 9007199254740993", "New RX drops: 0", "New TX drops: 7",
+      "New RX frame errors: 2", "New RX length errors: Unavailable",
+    ]);
+    expect(chips.map(chip => chip.attributes("data-color"))).toEqual(["warning", "warning", "default", "warning", "warning", "default"]);
+    expect(chips[0]!.attributes("title")).toBe("Cumulative RX errors: 9007199254740993");
+    expect(chips[4]!.attributes("title")).toContain("Included in RX errors, not additional packet loss");
+    expect(wrapper.text()).not.toContain("AllowedIPs mismatch");
+    wrapper.unmount();
+  });
+  it.each([
+    { index: 2, name: "old0", errors: "9", drops: "7", errors_delta: "2", drops_delta: "1" },
+    { ...linkDiagnostics().interfaces![0]!, rx_errors_delta: undefined },
+    { ...linkDiagnostics().interfaces![0]!, rx_drops: 9007199254740992 },
+  ])("preserves historical or malformed interface evidence as opaque JSON", link => {
+    const { wrapper, message } = render("link_observation", { evidence: [{ event: "interface_errors_or_drops", interface: link }] });
+    expect(wrapper.get(".opaque-message").text()).toBe(message);
+    expect(wrapper.find(".chip").exists()).toBe(false);
+    wrapper.unmount();
   });
   it.each(["gateway_unavailable", "link_monitor_unavailable"])("keeps %s failures explicit and escaped", event => {
     const { wrapper } = render(event, { name: "<img src=x>", error: "<script>alert(1)</script>" });

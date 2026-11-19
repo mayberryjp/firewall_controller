@@ -275,10 +275,12 @@ describe("Network experience hourly summaries", () => {
     expect(wrapper!.text()).toContain("No matching hosts in the loaded summary");
     expect(getNetworkExperienceSummary).toHaveBeenCalledOnce();
   });
-  it.each(["success", "failure"])("keeps initial pending data neutral until %s", async outcome => {
+  it.each(["success", "failure"])("keeps a slow summary neutral and single-flight until %s", async outcome => {
     let resolve!: (value: ReturnType<typeof experienceSummary>) => void, reject!: (error: Error) => void;
     vi.mocked(getNetworkExperienceSummary).mockImplementationOnce(() => new Promise((done, fail) => { resolve = done; reject = fail; }));
     await render();
+    await vi.advanceTimersByTimeAsync(12000);
+    expect(getNetworkExperienceSummary).toHaveBeenCalledOnce();
     expect(wrapper!.text()).toContain("Loading network experience");
     expect(wrapper!.find('[role="alert"]').exists()).toBe(false);
     expect(wrapper!.text()).not.toContain("No configured");
@@ -288,6 +290,10 @@ describe("Network experience hourly summaries", () => {
     expect(wrapper!.text()).not.toContain("Loading network experience");
     if (outcome === "success") expect(wrapper!.findAll("tbody tr")).toHaveLength(1);
     else expect(wrapper!.get('[role="alert"]').text()).toContain("HTTP 503");
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(getNetworkExperienceSummary).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(getNetworkExperienceSummary).toHaveBeenCalledTimes(2);
   });
   it("distinguishes zero from unavailable, retains historical idle ratings and flags mixed ownership", async () => {
     const data = experienceSummary(), value = data.hosts[0]!.summary;

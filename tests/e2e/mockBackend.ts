@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { z } from "zod";
-import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot, mdnsStatus, udpRelayStatus, software } from "../fixtures";
+import { config, runtime, statistics, transaction, gatewayStatistics, connections, healthSnapshot, mdnsStatus, udpRelayStatus, software, systemStatus } from "../fixtures";
 import { bgpSchema, mdnsSchema } from "../../src/types/domain";
 import { bgpStatus, bgpRoutes, bgpAdvertisedRoutes } from "../bgpFixtures";
 import { mdnsInterfaces } from "../../src/services/mdns";
@@ -131,6 +131,7 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
           active_transaction: Object.values(transactions).find(item => !["committed", "rolled_back"].includes(item.status)) });
       }
       if (path === "/runtime") return reply(runtimeState());
+      if (path === "/system/status") return reply(systemStatus(new Date().toISOString()));
       if (path === "/services/udp-broadcast-relay") return reply(committed.udp_broadcast_relay ?? { enabled: false, instances: [] });
       if (path === "/services/udp-broadcast-relay/status") return reply({ instances: relayStatus(), error: "" });
       if (path === "/services/bgp") return reply(activeConfig().bgp ?? bgpSchema.parse({}));

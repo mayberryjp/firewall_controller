@@ -3,15 +3,20 @@ import { z } from "zod";
 const count = z.number().int().safe().nonnegative();
 const metric = z.number().finite().nonnegative().nullable();
 const counter = z.string().regex(/^(0|[1-9]\d*)$/);
+export const linkInterfaceSchema = z.object({
+  index: count, name: z.string(),
+  rx_errors: counter, tx_errors: counter, rx_drops: counter, tx_drops: counter,
+  rx_frame_errors: counter, rx_length_errors: counter,
+  rx_errors_delta: counter.nullable(), tx_errors_delta: counter.nullable(),
+  rx_drops_delta: counter.nullable(), tx_drops_delta: counter.nullable(),
+  rx_frame_errors_delta: counter.nullable(), rx_length_errors_delta: counter.nullable(),
+});
 export const linkDiagnosticsSchema = z.object({
   schema: z.literal("netcontrol-link-diagnostics/v1"), scope: z.string(),
   status: z.enum(["starting", "available", "unavailable", "stale", "simulated"]),
   collected_at: z.string().datetime({ offset: true }).nullable(),
   age_ms: metric, interval_seconds: metric, error: z.string().nullable(),
-  interfaces: z.array(z.object({
-    index: count, name: z.string(), errors: counter, drops: counter,
-    errors_delta: counter.nullable(), drops_delta: counter.nullable(),
-  })).nullable(),
+  interfaces: z.array(linkInterfaceSchema).nullable(),
   queues: z.array(z.object({
     index: count, name: z.string().nullable(), handle: count, parent: count, kind: z.string(),
     status: z.enum(["available", "unavailable"]),

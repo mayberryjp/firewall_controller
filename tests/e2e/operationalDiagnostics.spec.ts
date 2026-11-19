@@ -481,9 +481,16 @@ test("DNS lookup, focused diagnostic tables and icon-only confirmed restart", as
   const drops = page.getByRole("region", { name: "Interface drops", exact: true });
   await expect(drops).toContainText("Current");
   await expect(drops).toContainText("18446744073709551615");
-  await expect(drops.getByRole("columnheader", { name: "Drops delta", exact: true })).toBeVisible();
+  await expect(drops.getByRole("columnheader", { name: "RX drops delta", exact: true })).toBeVisible();
   await expect(drops.locator(".v-chip").filter({ hasText: /^1$/ })).toHaveClass(/text-warning/);
   await expect(drops.locator(".v-chip").filter({ hasText: /^18446744073709551615\s*\+1$/ })).toHaveClass(/text-warning/);
+  await expect(drops.locator('td[data-counter="rx_errors_delta"]')).toHaveText("Unavailable");
+  await expect(drops.locator('td[data-counter="tx_errors"]')).toHaveText("3");
+  await drops.locator("summary").click();
+  await expect(drops.locator('[data-counter="rx_frame_errors"]')).toBeVisible();
+  await expect(drops.locator('[data-counter="rx_frame_errors"] .v-chip')).toHaveText(["9007199254740993", "Unavailable"]);
+  await expect(drops.locator('[data-counter="rx_length_errors"] .v-chip')).toHaveText(["0", "0"]);
+  await drops.locator("summary").click();
   await expect(drops).not.toContainText("Queue (packets)");
   await page.screenshot({ path: testInfo.outputPath("interface-drops.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("tab", { name: "QDISCS", exact: true }).click();

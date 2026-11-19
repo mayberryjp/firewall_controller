@@ -24,7 +24,7 @@ function render(kind: Kind = "interfaces") {
 }
 describe("Focused link diagnostic tables", () => {
   it.each([
-    ["interfaces", "Interface drops", ["Interface", "Errors (RX + TX)", "Errors delta", "Drops (RX + TX)", "Drops delta", "Drop percentage"]],
+    ["interfaces", "Interface drops", ["Interface", "RX errors", "RX errors delta", "TX errors", "TX errors delta", "RX drops", "RX drops delta", "TX drops", "TX drops delta", "Drop percentage"]],
     ["queues", "QDISCS", ["Interface", "Kind", "Handle", "Parent", "Status", "Queue (packets)", "Backlog (bytes)", "Growth (bytes)", "Drops", "Drops delta", "Requeues", "Overlimits"]],
     ["windows", "TCP WINDOWING", ["Interface", "TCP ACK packets", "Zero-window observations", "Zero-window transitions", "Window decreases (% of ACKs)", "Minimum raw window", "Maximum raw window"]],
     ["capture", "Capture details", ["Tracked directions", "Direction limit", "Kernel drops", "Rejected headers", "Capacity rejections", "Capture gaps"]],
@@ -43,30 +43,60 @@ describe("Focused link diagnostic tables", () => {
   });
   it("preserves exact interface counters and colors cumulative observations separately from deltas", () => {
     const data = useControllerStore().linkDiagnostics.data!;
-    data.interfaces!.push({ index: 3, name: "zero0", errors: "1", drops: "2", errors_delta: "0", drops_delta: "0" });
+    data.interfaces!.push({ ...data.interfaces![0]!, index: 3, name: "zero0",
+      rx_errors: "1", tx_errors: "2", rx_errors_delta: "0", tx_errors_delta: "0" });
     render();
     expect(wrapper.text()).toContain("9007199254740993"); expect(wrapper.text()).toContain("18446744073709551615");
     const rows = wrapper.findAll("tbody tr");
-    expect(rows[0]!.findAll(".chip").slice(0, 5).map(chip => chip.attributes("data-color"))).toEqual(["info", "warning", "default", "warning", "warning"]);
-    expect(rows[1]!.findAll(".chip").slice(0, 5).map(chip => chip.attributes("data-color"))).toEqual(["info", "warning", "success", "warning", "success"]);
+    for (const [index, colors] of [[0, ["warning", "default", "warning", "success"]], [1, ["warning", "success", "warning", "success"]]] as const) {
+      expect(["rx_errors", "rx_errors_delta", "tx_errors", "tx_errors_delta"]
+        .map(key => rows[index]!.get(`td[data-counter="${key}"] > .chip`).attributes("data-color"))).toEqual([...colors]);
+    }
     expect(wrapper.text()).toContain("Unavailable");
   });
   it("updates inline error/drop increases on polling and hides them for zero, reset, and stale samples", async () => {
     const store = useControllerStore();
     const sample = linkDiagnostics();
-    sample.interfaces![0]!.errors_delta = "2"; sample.interfaces![0]!.drops_delta = "9007199254740993";
+    sample.interfaces![0]!.rx_errors_delta = "2"; sample.interfaces![0]!.tx_drops_delta = "9007199254740993";
+    sample.interfaces![0]!.rx_drops_delta = "0";
     store.linkDiagnostics.data = sample;
     render();
     const increases = () => wrapper.findAll('tbody span[title="Increase since the previous diagnostic sample"]').map(item => item.text());
     expect(increases()).toEqual(["+2", "+9007199254740993"]);
-    store.linkDiagnostics.data = { ...sample, interfaces: [{ ...sample.interfaces![0]!, errors_delta: "0", drops_delta: null }] };
+    store.linkDiagnostics.data = { ...sample, interfaces: [{ ...sample.interfaces![0]!, rx_errors_delta: "0", tx_drops_delta: null }] };
     await flushPromises();
     expect(increases()).toEqual([]);
-    store.linkDiagnostics.data = { ...sample, interfaces: [{ ...sample.interfaces![0]!, errors_delta: "3", drops_delta: "4" }] };
+    store.linkDiagnostics.data = { ...sample, interfaces: [{ ...sample.interfaces![0]!, rx_errors_delta: "3", tx_drops_delta: "4" }] };
     await flushPromises();
     expect(increases()).toEqual(["+3", "+4"]);
     await vi.advanceTimersByTimeAsync(5001); await flushPromises();
     expect(increases()).toEqual([]);
+  });
+  it("keeps RX subcategories separate without adding them to errors or blaming WireGuard peers", async () => {
+    const row = useControllerStore().linkDiagnostics.data!.interfaces![0]!;
+    row.name = "tun_wg0"; row.rx_errors = "5039"; row.rx_errors_delta = "2";
+    row.rx_frame_errors = "5039"; row.rx_frame_errors_delta = "2";
+    row.rx_length_errors = "0"; row.rx_length_errors_delta = null;
+    row.tx_errors = "3"; row.tx_errors_delta = "0";
+    render();
+    expect(wrapper.get('td[data-counter="rx_errors"] > .chip').text()).toBe("5039 +2");
+    expect(wrapper.get('td[data-counter="rx_errors_delta"]').text()).toBe("2");
+    expect(wrapper.get('td[data-counter="tx_errors"]').text()).toBe("3");
+    const details = wrapper.get("details");
+    expect(details.attributes("open")).toBeUndefined();
+    expect(details.get("summary").text()).toBe("RX error detail");
+    await details.get("summary").trigger("click");
+    expect(details.attributes("open")).toBeDefined();
+    expect(details.get('[data-counter="rx_frame_errors"] > span:first-child').text()).toBe("RX frame errors");
+    expect(details.findAll('[data-counter="rx_frame_errors"] .chip').map(chip => chip.text())).toEqual(["5039", "2"]);
+    expect(details.get('[data-counter="rx_length_errors"] > span:first-child').text()).toBe("RX length errors");
+    expect(details.findAll('[data-counter="rx_length_errors"] .chip').map(chip => chip.text())).toEqual(["0", "Unavailable"]);
+    expect(details.get('[data-counter="rx_frame_errors"]').attributes("title")).toContain("Included in RX errors");
+    const query = useControllerStore().linkDiagnostics;
+    query.data = { ...query.data!, interfaces: [{ ...row, rx_frame_errors_delta: null, rx_errors_delta: "1" }] };
+    await flushPromises();
+    expect(details.get('[data-counter="rx_frame_errors"] .chip:last-child').text()).toBe("Unavailable");
+    expect(wrapper.get('td[data-counter="rx_errors_delta"]').text()).toBe("1");
   });
   it("shows colored cumulative drop percentages without a packet column", async () => {
     const store = useControllerStore(), sample = trafficStatistics();
@@ -74,8 +104,8 @@ describe("Focused link diagnostic tables", () => {
     store.statistics.data = sample; store.statistics.stale = false; store.statistics.lastSuccess = Date.now();
     render();
     expect(wrapper.findAll("thead th").map(cell => cell.text())).not.toContain("Packets (RX + TX)");
-    const totals = () => wrapper.findAll("tbody tr")[0]!.findAll("td").slice(5).map(cell => cell.text());
-    const color = () => wrapper.findAll("tbody tr")[0]!.findAll("td")[5]!.get(".chip").attributes("data-color");
+    const totals = () => [wrapper.findAll("tbody tr")[0]!.findAll("td").at(-1)!.text()];
+    const color = () => wrapper.findAll("tbody tr")[0]!.findAll("td").at(-1)!.get(".chip").attributes("data-color");
     expect(totals()).toEqual(["10.00%"]); expect(color()).toBe("warning");
     store.statistics.data = { ...sample, interfaces: [{ ...sample.interfaces[0]!, counters: { rx_packets: "9007199254740993", tx_packets: "1", rx_dropped: "0", tx_dropped: "0" } }] };
     await flushPromises(); expect(totals()).toEqual(["0.00%"]); expect(color()).toBe("success");
@@ -112,9 +142,12 @@ describe("Focused link diagnostic tables", () => {
   });
   it("uses green chips for measured zero interface errors/drops and qdisc events", async () => {
     const data = useControllerStore().linkDiagnostics.data!;
-    data.interfaces![0] = { index: 2, name: "lab0", errors: "0", errors_delta: "0", drops: "0", drops_delta: "0" };
+    data.interfaces![0] = { index: 2, name: "lab0",
+      rx_errors: "0", tx_errors: "0", rx_drops: "0", tx_drops: "0", rx_frame_errors: "0", rx_length_errors: "0",
+      rx_errors_delta: "0", tx_errors_delta: "0", rx_drops_delta: "0", tx_drops_delta: "0", rx_frame_errors_delta: "0", rx_length_errors_delta: "0",
+    };
     render();
-    expect(wrapper.findAll("tbody .chip").slice(1, 5).every(chip => chip.attributes("data-color") === "success")).toBe(true);
+    expect(wrapper.findAll("tbody .chip").slice(1, -1).every(chip => chip.attributes("data-color") === "success")).toBe(true);
     data.queues![0]!.queue = { qlen_packets: 0, backlog_bytes: 0, drops: "0", requeues: "0", overlimits: "0" };
     data.queues![0]!.drops_delta = "0"; data.queues![0]!.backlog_growth_bytes = "0";
     await wrapper.setProps({ kind: "queues" });

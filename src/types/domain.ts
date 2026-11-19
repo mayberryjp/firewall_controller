@@ -296,6 +296,17 @@ export const blackholeSchema = z.object({
 export type BlackholeConfig = z.infer<typeof blackholeSchema>;
 export const systemSchema = z.object({ hostname: z.string().default(""), domain: z.string().default(""), timezone: z.string().default("") }).strict();
 export type SystemConfig = z.infer<typeof systemSchema>;
+const systemSettingStatusSchema = z.object({
+  configured: z.string(), observed: z.string().nullable(), state: z.string(), error: z.string().nullable(),
+});
+export const systemStatusSchema = z.object({
+  current_time: z.string().datetime({ precision: null }).refine(value =>
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value) && Number.isFinite(Date.parse(value)),
+  "Expected a UTC timestamp with at most nanosecond precision"),
+  hostname: systemSettingStatusSchema, timezone: systemSettingStatusSchema,
+  last_applied_at_unix: integer.nonnegative().nullable(),
+});
+export type SystemStatus = z.infer<typeof systemStatusSchema>;
 export const timezonesSchema = z.object({ timezones: z.array(z.string()) }).strict();
 export const dynamicDnsSecretReferenceSchema = z.object({ secret_ref: z.string().regex(/^[a-f0-9]{32}$/) }).strict();
 export const dynamicDnsStatusSchema = z.object({

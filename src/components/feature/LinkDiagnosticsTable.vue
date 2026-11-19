@@ -9,6 +9,13 @@ const { formatTimestamp, timeZone } = useTimestamps();
 
 const props = defineProps<{ kind: "interfaces" | "queues" | "windows" | "capture" }>();
 const labels = { interfaces: "Interface drops", queues: "QDISCS", windows: "TCP WINDOWING", capture: "Capture details" };
+const interfaceCounters = [
+  { key: "rx_errors", label: "RX errors" }, { key: "tx_errors", label: "TX errors" },
+  { key: "rx_drops", label: "RX drops" }, { key: "tx_drops", label: "TX drops" },
+] as const;
+const rxErrorDetails = [
+  { key: "rx_frame_errors", label: "RX frame errors" }, { key: "rx_length_errors", label: "RX length errors" },
+] as const;
 const store = useControllerStore();
 const data = computed(() => store.linkDiagnostics.data);
 const now = ref(Date.now());
@@ -144,7 +151,13 @@ onMounted(() => {
     >
       <thead>
         <tr>
-          <th>Interface</th><th>Errors (RX + TX)</th><th>Errors delta</th><th>Drops (RX + TX)</th><th>Drops delta</th>
+          <th>Interface</th>
+          <template
+            v-for="counter in interfaceCounters"
+            :key="counter.key"
+          >
+            <th>{{ counter.label }}</th><th>{{ counter.label }} delta</th>
+          </template>
           <th title="Cumulative RX + TX drops / (packets + drops) from interface statistics; not a current loss rate">
             Drop percentage
           </th>
@@ -164,54 +177,67 @@ onMounted(() => {
               {{ formatInterfaceName(row.name) }}
             </v-chip>
           </td>
-          <td>
-            <v-chip
-              size="small"
-              variant="tonal"
-              :color="counterColor(row.errors)"
-              title="Cumulative errors, not a current error rate"
-            >
-              {{ row.errors }}
-              <span
-                v-if="increase(row.errors_delta)"
-                class="ms-2"
-                title="Increase since the previous diagnostic sample"
-              >{{ increase(row.errors_delta) }}</span>
-            </v-chip>
-          </td>
-          <td>
-            <v-chip
-              size="small"
-              variant="tonal"
-              :color="counterColor(row.errors_delta)"
-            >
-              {{ value(row.errors_delta) }}
-            </v-chip>
-          </td>
-          <td>
-            <v-chip
-              size="small"
-              variant="tonal"
-              :color="counterColor(row.drops)"
-              title="Cumulative drops, not a current loss rate"
-            >
-              {{ row.drops }}
-              <span
-                v-if="increase(row.drops_delta)"
-                class="ms-2"
-                title="Increase since the previous diagnostic sample"
-              >{{ increase(row.drops_delta) }}</span>
-            </v-chip>
-          </td>
-          <td>
-            <v-chip
-              size="small"
-              variant="tonal"
-              :color="counterColor(row.drops_delta)"
-            >
-              {{ value(row.drops_delta) }}
-            </v-chip>
-          </td>
+          <template
+            v-for="counter in interfaceCounters"
+            :key="counter.key"
+          >
+            <td :data-counter="counter.key">
+              <v-chip
+                size="small"
+                variant="tonal"
+                :color="counterColor(row[counter.key])"
+                title="Cumulative count, not a current error or loss rate"
+              >
+                {{ row[counter.key] }}
+                <span
+                  v-if="increase(row[`${counter.key}_delta`])"
+                  class="ms-2"
+                  title="Increase since the previous diagnostic sample"
+                >{{ increase(row[`${counter.key}_delta`]) }}</span>
+              </v-chip>
+              <details
+                v-if="counter.key === 'rx_errors'"
+                class="mt-1"
+              >
+                <summary class="text-caption">
+                  RX error detail
+                </summary>
+                <div
+                  v-for="detail in rxErrorDetails"
+                  :key="detail.key"
+                  :data-counter="detail.key"
+                  class="d-flex align-center ga-2 mt-1"
+                  title="Included in RX errors, not additional packet loss or proof of a WireGuard AllowedIPs mismatch"
+                >
+                  <span>{{ detail.label }}</span>
+                  <v-chip
+                    size="small"
+                    variant="tonal"
+                    :color="counterColor(row[detail.key])"
+                  >
+                    {{ row[detail.key] }}
+                  </v-chip>
+                  <span class="text-caption">Delta</span>
+                  <v-chip
+                    size="small"
+                    variant="tonal"
+                    :color="counterColor(row[`${detail.key}_delta`])"
+                  >
+                    {{ value(row[`${detail.key}_delta`]) }}
+                  </v-chip>
+                </div>
+              </details>
+            </td>
+            <td :data-counter="`${counter.key}_delta`">
+              <v-chip
+                size="small"
+                variant="tonal"
+                :color="counterColor(row[`${counter.key}_delta`])"
+              >
+                {{ value(row[`${counter.key}_delta`]) }}
+              </v-chip>
+            </td>
+          </template>
           <td>
             <v-chip
               size="small"
@@ -223,7 +249,7 @@ onMounted(() => {
           </td>
         </tr>
         <tr v-if="!rows?.length">
-          <td colspan="6">
+          <td colspan="10">
             {{ emptyLabel }}
           </td>
         </tr>

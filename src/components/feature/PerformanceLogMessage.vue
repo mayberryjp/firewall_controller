@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { linkInterfaceSchema } from "@/services/linkDiagnostics";
 import type { PerformanceLogEvent } from "@/services/logs";
 
 const props = defineProps<{ event: PerformanceLogEvent | null; message: string }>();
-type Chip = { label: string; value: string; color: string };
+type Chip = { label: string; value: string; color: string; title?: string };
 type EvidenceRow = { title: string; color: string; resource: string; interface: string; target: string; chips: Chip[]; error?: string };
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -29,8 +30,8 @@ function healthColor(value: unknown): string {
 }
 function describe(event: string, details: Record<string, unknown>): EvidenceRow | null {
   const chips: Chip[] = [];
-  function chip(name: string, value: string, color = "default"): void {
-    if (value) chips.push({ label: name, value, color });
+  function chip(name: string, value: string, color = "default", title?: string): void {
+    if (value) chips.push({ label: name, value, color, title });
   }
   const identity = { resource: text(details.name), interface: text(details.interface), target: text(details.target) };
   const window = object(details.window);
@@ -73,12 +74,20 @@ function describe(event: string, details: Record<string, unknown>): EvidenceRow 
         interface: text(queue.name) || `Index ${count(queue.index) || "unknown"}`, target: "", chips };
     }
     case "interface_errors_or_drops": {
-      const link = object(details.interface);
-      if (!count(link.errors_delta) && !count(link.drops_delta)) return null;
-      chip("New errors", count(link.errors_delta), count(link.errors_delta) === "0" ? "default" : "warning");
-      chip("New drops", count(link.drops_delta), count(link.drops_delta) === "0" ? "default" : "warning");
+      const parsed = linkInterfaceSchema.safeParse(details.interface);
+      if (!parsed.success) return null;
+      const link = parsed.data;
+      for (const [key, name] of [
+        ["rx_errors", "RX errors"], ["tx_errors", "TX errors"], ["rx_drops", "RX drops"], ["tx_drops", "TX drops"],
+        ["rx_frame_errors", "RX frame errors"], ["rx_length_errors", "RX length errors"],
+      ] as const) {
+        const delta = link[`${key}_delta`];
+        const subcategory = key === "rx_frame_errors" || key === "rx_length_errors";
+        chip(`New ${name}`, delta ?? "Unavailable", delta !== null && delta !== "0" ? "warning" : "default",
+          `Cumulative ${name}: ${link[key]}${subcategory ? ". Included in RX errors, not additional packet loss or proof of a WireGuard AllowedIPs mismatch." : ""}`);
+      }
       return { title: "Interface errors / drops", color: "warning", resource: "",
-        interface: text(link.name) || `Index ${count(link.index) || "unknown"}`, target: "", chips };
+        interface: link.name || `Index ${link.index}`, target: "", chips };
     }
     case "local_tcp_retransmissions": {
       const delta = count(object(details.local_tcp).retransmissions_delta);
@@ -137,6 +146,7 @@ const row = computed(() => {
           v-for="chip in row.chips"
           :key="chip.label"
           :color="chip.color"
+          :title="chip.title"
           size="small"
           variant="tonal"
         >
