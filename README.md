@@ -2488,9 +2488,21 @@ validated; no WAN/source/route is inferred and no service is toggled on navigati
   labels (1..63 characters each, total <=253), without URIs, embedded ports,
   zones, mapped addresses, whitespace or trailing dots. Syslog requires explicit
   `udp`/`tcp`/`tls` and port 1..65535; uniqueness is transport+host+port.
-- NTP uses host networking and changes the **whole appliance clock**, slew-only,
-  client-only and without NTS. Running is not proof of synchronization; no
-  offset/sync metrics exist. Rollback restores settings, not past clock state.
+- NTP uses host networking and immediately steps the **whole appliance clock**
+  forward or backward by the full accepted offset, client-only and without NTS.
+  It polls at startup and waits 24 hours after each round, not until midnight.
+  **Sync now** sits in its own column immediately before Actions and restarts only the
+  enabled NTP worker using `POST /processes/restart` with `{"target":"ntp"}` and
+  `system.restart`. It polls the saved server list, not an unsaved row or a
+  separately selected server. Its tooltip identifies immediate clock-step effects;
+  no additional banner or confirmation is added.
+  Duplicate/conflicting operations and unsaved-only servers are disabled.
+  "Sync requested" acknowledges restart, not synchronization; simulator responses
+  remain explicit. Visible-only status polling uses `/services/ntp/status` and
+  matches the returned worker `started_at`, even when sample time moves backward.
+  Signed offset/requested-step metrics and fresh server time remain on the matching
+  server row. Failures are inline and never trigger another sync automatically.
+  Running is not proof of synchronization. Rollback restores settings, not past clock state.
   Explicitly configure the desired servers and enable NTP to maintain appliance
   time; there is no implicit public-server fallback. With the revised Ubuntu
   install/full-source-upgrade policy, disabled NTP means no managed time

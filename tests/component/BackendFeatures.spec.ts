@@ -44,7 +44,7 @@ import { useControllerStore } from "@/stores/controller";
 import { configSchema, dhcpClientSchema, runtimeSchema } from "@/types/domain";
 import { displayResourceValue } from "@/services/resourceCollections";
 import { cloneConfig, differences, requiredPermissions, validateConfig } from "@/services/configuration";
-import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns, mqttStatus } from "../fixtures";
+import { config, state, runtime, transaction, gatewayStatistics, monitor, statistics, connections, vnstatReporting, wireguardDns, mqttStatus, processHealthSnapshot } from "../fixtures";
 import type { Component } from "vue";
 import { bgpConfig, bgpRoutes } from "../bgpFixtures";
 import { dragRule } from "../dragRule";
@@ -202,6 +202,122 @@ describe("October 17 frontend workflows", () => {
       expect(wrapper.find("time").exists()).toBe(false);
       expect(wrapper.findAll("tbody tr")[1]!.findAll("td")[2]!.text()).toBe("-");
     } finally { wrapper.unmount(); }
+  });
+  it("syncs from the saved server row and accepts a matching worker sample even when time moves backward", async () => {
+    vi.useFakeTimers();
+    const store = useControllerStore();
+    store.state.data!.desired.ntp = { enabled: true, servers: ["clock.example", "other.example"] };
+    store.state.stale = false; store.runtime.stale = false;
+    const previousWorker = {
+      name: "ntp", scope: "host" as const, state: "running", sample_status: "available",
+      server: "clock.example", started_at: "2026-11-19T03:00:00Z",
+      server_time: "2026-11-19T03:01:00.123Z", collected_at: "2026-11-19T03:01:00.123Z",
+    };
+    const newWorker = {
+      ...previousWorker, started_at: "2026-11-18T03:00:00Z",
+      server_time: "2026-11-18T03:01:00.987654Z", collected_at: "2026-11-18T03:01:00.987654Z",
+      offset_ms: -123.456, requested_step_ms: -123.456, delay_ms: 1.25,
+    };
+    store.runtime.data = runtimeSchema.parse({ ...runtime(), appliance_services: [previousWorker] });
+    vi.spyOn(api, "getPlatformStatus").mockResolvedValue(processHealthSnapshot());
+    const read = vi.spyOn(api, "getApplianceStatus").mockResolvedValue({ instances: [previousWorker], error: "" });
+    let finish!: (value: Awaited<ReturnType<typeof api.restartProcess>>) => void;
+    const restart = vi.spyOn(api, "restartProcess").mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const wrapper = await render(NTPView, "/services/ntp");
+    try {
+      const buttons = wrapper.findAll("button").filter(button => button.text() === "Sync now");
+      expect(buttons).toHaveLength(2);
+      expect(wrapper.findAll("th").map(header => header.text()).slice(-2)).toEqual(["Sync", "Actions"]);
+      expect(buttons[0]!.element.closest("td")?.nextElementSibling?.querySelector('[aria-label="Edit clock.example"]')).not.toBeNull();
+      expect(buttons[0]!.element.closest("td")?.querySelector('[aria-label="Edit clock.example"]')).toBeNull();
+      expect(buttons[0]!.element.closest("tr")?.textContent).toContain("clock.example");
+      expect(buttons[1]!.element.closest("tr")?.textContent).toContain("other.example");
+      expect(buttons[0]!.attributes("title")).toContain("Immediately steps");
+      const before = cloneConfig(store.state.data!.desired);
+      await buttons[0]!.trigger("click"); await buttons[1]!.trigger("click"); await flushPromises();
+      expect(restart).toHaveBeenCalledOnce();
+      expect(restart).toHaveBeenCalledWith("ntp");
+      expect(wrapper.text()).toContain("Requesting sync...");
+      expect(wrapper.find("time").exists()).toBe(false);
+      finish({ target: "ntp", status: "restarted", worker: newWorker }); await flushPromises();
+      expect(wrapper.text()).toContain("Sync requested.");
+      expect(wrapper.text()).not.toContain("Synchronized");
+      expect(wrapper.find("time").exists()).toBe(false);
+      read.mockResolvedValue({ instances: [newWorker], error: "" });
+      await vi.advanceTimersByTimeAsync(3000); await flushPromises();
+      expect(read).toHaveBeenCalledWith("ntp", expect.any(AbortSignal));
+      expect(wrapper.get("time").text()).toBe("2026-11-18 03:01:00");
+      expect(wrapper.get("time").attributes("datetime")).toBe(newWorker.server_time);
+      expect(wrapper.get("thead").text()).toContain("Requested step");
+      expect(wrapper.text()).toContain("-123.456 ms");
+      expect(wrapper.text()).not.toContain("Requested slew");
+      expect(store.draft).toBeNull();
+      expect(cloneConfig(store.state.data!.desired)).toEqual(before);
+      read.mockRejectedValue(new ApiFailure("HTTP 503: NTP status unavailable", 503));
+      await vi.advanceTimersByTimeAsync(3000); await flushPromises();
+      expect(wrapper.get('[role="alert"]').text()).toContain("NTP status unavailable");
+      expect(wrapper.find("time").exists()).toBe(false);
+      const calls = read.mock.calls.length;
+      wrapper.unmount();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(read).toHaveBeenCalledTimes(calls);
+    } finally { wrapper.unmount(); store.$dispose(); vi.useRealTimers(); }
+  });
+  it.each([403, 409, 503])("keeps NTP sync HTTP %s failures inline without automatic resubmission", async code => {
+    const store = useControllerStore();
+    store.state.data!.desired.ntp = { enabled: true, servers: ["clock.example"] };
+    store.state.stale = false;
+    const restart = vi.spyOn(api, "restartProcess").mockRejectedValue(new ApiFailure(`HTTP ${code}: Sync rejected`, code, undefined, code >= 500));
+    const read = vi.spyOn(api, "getApplianceStatus").mockResolvedValue({ instances: [], error: "NTP status unavailable" });
+    const wrapper = await render(NTPView, "/services/ntp");
+    try {
+      await wrapper.get('button[aria-label="Sync now clock.example"]').trigger("click"); await flushPromises();
+      expect(wrapper.get('[role="alert"]').text()).toContain(`HTTP ${code}`);
+      expect(restart).toHaveBeenCalledOnce();
+      expect(wrapper.get('button[aria-label="Sync now clock.example"]').attributes("disabled")).toBe(code === 403 ? "" : undefined);
+      if (code === 503) expect(read).toHaveBeenCalledWith("ntp", expect.any(AbortSignal));
+      expect(store.draft).toBeNull();
+    } finally { wrapper.unmount(); store.$dispose(); }
+  });
+  it("disables NTP sync for unsaved servers and conflicting operations, and labels simulator requests", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.ntp = { enabled: true, servers: ["clock.example"] };
+    store.state.stale = false;
+    store.draft = cloneConfig(store.state.data!.desired);
+    store.draft.ntp.servers.push("draft.example");
+    const restart = vi.spyOn(api, "restartProcess").mockResolvedValue({ target: "ntp", status: "simulated" });
+    vi.spyOn(api, "getPlatformStatus").mockResolvedValue(processHealthSnapshot());
+    const read = vi.spyOn(api, "getApplianceStatus");
+    const wrapper = await render(NTPView, "/services/ntp");
+    try {
+      const saved = () => wrapper.get('button[aria-label="Sync now clock.example"]');
+      expect(wrapper.get('button[aria-label="Sync now draft.example"]').attributes("disabled")).toBeDefined();
+      store.busy = true; await flushPromises();
+      expect(saved().attributes("disabled")).toBeDefined();
+      store.busy = false; store.upgradePending = true; await flushPromises();
+      expect(saved().attributes("disabled")).toBeDefined();
+      store.upgradePending = false; await flushPromises();
+      const before = cloneConfig(store.draft);
+      await saved().trigger("click"); await flushPromises();
+      expect(wrapper.text()).toContain("Simulated; the appliance clock was not changed.");
+      expect(restart).toHaveBeenCalledOnce();
+      expect(read).not.toHaveBeenCalled();
+      expect(store.draft).toEqual(before);
+    } finally { wrapper.unmount(); store.$dispose(); }
+  });
+  it("does not display an NTP sync result after the firewall connection changes", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.ntp = { enabled: true, servers: ["clock.example"] }; store.state.stale = false;
+    let finish!: (value: Awaited<ReturnType<typeof api.restartProcess>>) => void;
+    vi.spyOn(api, "restartProcess").mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const wrapper = await render(NTPView, "/services/ntp");
+    try {
+      await wrapper.get('button[aria-label="Sync now clock.example"]').trigger("click"); await flushPromises();
+      store.sessionVersion++; await flushPromises();
+      finish({ target: "ntp", status: "simulated" }); await flushPromises();
+      expect(wrapper.text()).not.toContain("Sync requested");
+      expect(wrapper.text()).not.toContain("Simulated; the appliance clock");
+    } finally { wrapper.unmount(); store.$dispose(); }
   });
   it("shows NTP recovery without displaying retained measurements as fresh", async () => {
     const store = useControllerStore();

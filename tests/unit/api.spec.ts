@@ -1009,6 +1009,20 @@ describe("controller-proxied API boundary", () => {
     await net.getGatewayStatistic("a /b");
     expect(captured?.url).toBe("/statistics/gateways/a%20%2Fb");
   });
+  it.each([-123.456, 0, 123.456])("preserves signed NTP step %s and worker identity for manual sync", async step => {
+    const worker = {
+      name: "ntp", scope: "host", state: "running", started_at: "2026-11-19T03:30:00Z",
+      sample_status: "available", server: "clock.example", collected_at: "2026-11-18T03:30:01.123456Z",
+      server_time: "2026-11-18T03:30:01.123456Z", offset_ms: step, requested_step_ms: step, delay_ms: 0.1,
+    };
+    body = encodeJson({ target: "ntp", status: "restarted", worker });
+    expect(await net.restartProcess("ntp")).toMatchObject({ worker });
+    expect(captured?.url).toBe("/processes/restart");
+    expect(decodeJson(String(captured?.data))).toEqual({ target: "ntp" });
+    body = encodeJson({ instances: [worker], error: "" });
+    expect((await net.getApplianceStatus("ntp")).instances[0]).toMatchObject(worker);
+    expect(captured?.url).toBe("/services/ntp/status");
+  });
   it.each(["ntp", "syslog", "vnstat"] as const)("reads %s metadata/status and repairs bodylessly", async service => {
     body = encodeJson(config()[service]);
     await net.getApplianceConfig(service); expect(captured?.url).toBe(`/services/${service}`);

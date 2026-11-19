@@ -472,6 +472,7 @@ export const applianceStatusSchema = z.object({
   sample_status: optionalText, server: z.string().nullable().optional(),
   server_time: timestamp.nullable().optional(),
   offset_ms: z.number().finite().nullable().optional(), delay_ms: z.number().finite().nullable().optional(),
+  requested_step_ms: z.number().finite().nullable().optional(),
   requested_slew_ms: z.number().finite().nullable().optional(),
   uncorrected_offset_ms: z.number().finite().nullable().optional(),
   discipline: optionalText, collected_at: timestamp.nullable().optional(),

@@ -1,16 +1,32 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig, validateConfig } from "@/services/configuration";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { isApplianceStatus, type Config } from "@/types/domain";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 import { formatCount } from "@/services/counters";
+import { useDiagnosticRead } from "@/composables/useDiagnosticRead";
+import { getApplianceStatus } from "@/services/netcontrol";
 const { formatTimestamp, timeZone } = useTimestamps();
 
 interface Row { host: string; port?: number; transport?: string }
 const props = defineProps<{ service: "ntp" | "syslog" }>();
 const store = useControllerStore();
+const syncSending = ref(false), syncTracking = ref(false), syncHost = ref("");
+const syncError = ref(""), syncNotice = ref(""), syncDenied = ref(false), syncGeneration = ref(0);
+const syncWorker = ref<string | null>(null);
+let disposed = false;
+const syncRead = useDiagnosticRead(async signal => {
+  const page = await getApplianceStatus("ntp", signal);
+  if (page.error) throw new Error(page.error);
+  if (!page.instances.some(item => item.name === "ntp")) throw new Error("NTP worker status is unavailable.");
+  return page;
+}, 3000,
+  () => String(syncGeneration.value), () => props.service === "ntp" && syncTracking.value && !syncSending.value);
+const syncedStatus = computed(() => syncRead.data.value?.instances.find(item => item.name === "ntp" && syncWorker.value && item.started_at === syncWorker.value));
+const syncBlocked = computed(() => syncSending.value || syncDenied.value || Boolean(store.operationBlockedReason) ||
+  !store.state.data?.desired.ntp.enabled || store.state.stale || Boolean(store.state.error));
 const stored = computed(() => store.activeTransactions.find(item => item.status === "pending_confirmation")?.candidate ?? store.state.data?.desired);
 const editing = computed(() => store.draft ?? stored.value);
 const title = computed(() => props.service === "ntp" ? "NTP" : "Syslog");
@@ -18,9 +34,12 @@ const rows = computed<Row[]>(() => props.service === "ntp"
   ? (editing.value?.ntp.servers ?? []).map(host => ({ host }))
   : (editing.value?.syslog.servers ?? []).map(({ host, port, transport }) => ({ host, port, transport })));
 const blocked = computed(() => Boolean(store.readOnlyReason) || !editing.value);
-const status = computed(() => store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === props.service));
-const sampleAvailable = computed(() => !store.runtime.stale && !status.value?.retrying && !status.value?.error && status.value?.sample_status === "available");
-const statColumns = 6;
+const status = computed(() => props.service === "ntp" && syncTracking.value ? syncedStatus.value :
+  store.runtime.data?.appliance_services.filter(isApplianceStatus).find(item => item.name === props.service));
+const statusStale = computed(() => props.service === "ntp" && syncTracking.value
+  ? syncRead.stale.value || Boolean(syncRead.error.value) : store.runtime.stale);
+const sampleAvailable = computed(() => !statusStale.value && !status.value?.retrying && !status.value?.error && status.value?.sample_status === "available");
+const statColumns = 5;
 const syslogCounters = [
   { key: "received_records", title: "Logs read", color: "info" },
   { key: "forwarded_deliveries", title: "Remote sends", color: "primary" },
@@ -38,13 +57,13 @@ const activeIndex = computed(() => {
 const statusText = computed(() => {
   const current = status.value;
   if (!current) return "";
-  if (store.runtime.stale) return `${current.state} · stale`;
+  if (statusStale.value) return `${current.state} · stale`;
   return sampleAvailable.value ? current.state : `${current.state} · ${(current.sample_status ?? "unavailable").replace("_", " ")}`;
 });
 const statusColor = computed(() => {
   const current = status.value;
   if (!current) return undefined;
-  if (current.retrying || store.runtime.stale) return "warning";
+  if (current.retrying || statusStale.value) return "warning";
   const byState: Record<string, string> = { running: "success", simulated: "info", stopped: "warning", disabled: "default", error: "error" };
   const stateColor = byState[current.state] ?? "default";
   if (stateColor !== "success" && stateColor !== "info") return stateColor;
@@ -104,6 +123,39 @@ function remove(index: number): void {
   try { commit(candidate => { candidate[props.service].servers.splice(index, 1); }); close(); }
   catch (cause) { error.value = cause instanceof Error ? cause.message : "Unable to stage the change"; }
 }
+async function syncNow(host: string): Promise<void> {
+  if (props.service !== "ntp" || syncBlocked.value || !store.state.data?.desired.ntp.servers.includes(host)) return;
+  const session = store.sessionVersion;
+  syncSending.value = true; syncTracking.value = true; syncHost.value = host; syncWorker.value = null;
+  syncError.value = ""; syncNotice.value = ""; syncGeneration.value++;
+  try {
+    const result = await store.restartProcess("ntp");
+    if (disposed || session !== store.sessionVersion) return;
+    if (!result) {
+      syncError.value = store.restartError || "Sync outcome is unknown. Check NTP status before trying again.";
+      syncDenied.value = syncError.value.includes("HTTP 403:");
+      syncTracking.value = syncError.value.startsWith("Restart outcome unknown.");
+    } else if (result.status === "simulated") {
+      syncNotice.value = "Simulated; the appliance clock was not changed.";
+      syncTracking.value = false;
+    } else {
+      syncNotice.value = "Sync requested.";
+      if (result.status === "restarted" && typeof result.worker.started_at === "string") syncWorker.value = result.worker.started_at;
+      else syncError.value = "Sync was requested, but the new NTP worker could not be identified. Check status before trying again.";
+    }
+  } catch (failure) {
+    if (disposed || session !== store.sessionVersion) return;
+    syncError.value = failure instanceof Error ? failure.message : "Unable to request NTP sync.";
+    syncTracking.value = false;
+  } finally {
+    if (!disposed && session === store.sessionVersion) syncSending.value = false;
+  }
+}
+watch(() => [store.sessionVersion, props.service], () => {
+  syncSending.value = false; syncTracking.value = false; syncHost.value = ""; syncWorker.value = null;
+  syncError.value = ""; syncNotice.value = ""; syncDenied.value = false;
+});
+onBeforeUnmount(() => { disposed = true; });
 </script>
 
 <template>
@@ -196,10 +248,7 @@ function remove(index: number): void {
               Delay
             </th>
             <th scope="col">
-              Requested slew
-            </th>
-            <th scope="col">
-              Uncorrected offset
+              Requested step
             </th>
           </template>
           <template v-if="service === 'syslog'">
@@ -217,6 +266,13 @@ function remove(index: number): void {
               {{ column.title }}
             </th>
           </template>
+          <th
+            v-if="service === 'ntp'"
+            scope="col"
+            class="column-sync text-center"
+          >
+            Sync
+          </th>
           <th
             scope="col"
             class="column-actions"
@@ -279,16 +335,7 @@ function remove(index: number): void {
                       variant="tonal"
                       color="primary"
                     >
-                      {{ ms(status?.requested_slew_ms, true) }}
-                    </v-chip>
-                  </td>
-                  <td>
-                    <v-chip
-                      size="small"
-                      variant="tonal"
-                      :color="offsetColor(status?.uncorrected_offset_ms)"
-                    >
-                      {{ ms(status?.uncorrected_offset_ms, true) }}
+                      {{ ms(status?.requested_step_ms, true) }}
                     </v-chip>
                   </td>
                 </template>
@@ -334,6 +381,37 @@ function remove(index: number): void {
                 </td>
               </template>
             </template>
+            <td
+              v-if="service === 'ntp'"
+              class="text-center"
+            >
+              <v-btn
+                size="small"
+                variant="outlined"
+                color="primary"
+                :aria-label="`Sync now ${row.host}`"
+                title="Sync saved NTP servers now. Immediately steps the appliance clock and may affect logs, expiry, schedules and gateway measurements. Requires system.restart. Automatic polling is daily."
+                :loading="syncSending && syncHost === row.host"
+                :disabled="syncBlocked || !store.state.data?.desired.ntp.servers.includes(row.host)"
+                @click="syncNow(row.host)"
+              >
+                Sync now
+              </v-btn>
+              <p
+                v-if="syncHost === row.host && (syncError || syncRead.error.value || syncRead.data.value?.error)"
+                role="alert"
+                class="text-error text-caption"
+              >
+                {{ syncError || syncRead.error.value || syncRead.data.value?.error }}
+              </p>
+              <p
+                v-else-if="syncHost === row.host && (syncSending || syncNotice)"
+                role="status"
+                class="text-caption"
+              >
+                {{ syncSending ? 'Requesting sync...' : syncNotice }}
+              </p>
+            </td>
             <td>
               <v-btn
                 icon="mdi-pencil-outline"
@@ -372,6 +450,7 @@ function remove(index: number): void {
               v-if="service === 'ntp'"
               :colspan="statColumns"
             />
+            <td v-if="service === 'ntp'" />
             <template v-if="service === 'syslog'">
               <td>
                 <v-number-input
@@ -430,7 +509,7 @@ function remove(index: number): void {
           </tr>
         </template>
         <tr v-if="!rows.length && editIndex === null">
-          <td :colspan="service === 'syslog' ? 3 : 2 + statColumns">
+          <td :colspan="service === 'syslog' ? 3 : 3 + statColumns">
             No servers.
           </td>
           <template v-if="service === 'syslog'">
@@ -458,4 +537,5 @@ function remove(index: number): void {
 section { padding-bottom: 56px; }
 .service-table :deep(th), .service-table :deep(td) { white-space: normal; overflow-wrap: anywhere; }
 .service-table :deep(.column-actions) { width: 140px; }
+.service-table :deep(.column-sync) { width: 132px; }
 </style>

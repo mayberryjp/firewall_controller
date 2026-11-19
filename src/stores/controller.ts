@@ -441,7 +441,7 @@ export const useControllerStore = defineStore("controller", () => {
     }
     reconnectTimer = setTimeout(() => { void probe(); }, 5000);
   }
-  async function restartProcess(target: string): Promise<void> {
+  async function restartProcess(target: string): Promise<Awaited<ReturnType<typeof api.restartProcess>> | undefined> {
     if (operationBlockedReason.value) throw new Error(operationBlockedReason.value);
     const session = epoch;
     restartPending.value = target; restartError.value = ""; restartNotice.value = "";
@@ -453,6 +453,7 @@ export const useControllerStore = defineStore("controller", () => {
           `${target}: supervisor restarted. Protocol health and delivery are not established.`;
       if (target === "netcontrold" && result.status === "restart_requested") reconnectAfterRestart(session);
       else void refreshPlatformStatus();
+      return result;
     } catch (error) {
       if (session !== epoch) return;
       const unknown = error instanceof ApiFailure && error.uncertain;
