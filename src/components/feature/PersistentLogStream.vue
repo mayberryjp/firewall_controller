@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useLogHistory } from "@/composables/useLogHistory";
 import { useTimestamps } from "@/composables/useTimestamps";
-import { getPersistentLog } from "@/services/netcontrol";
+import { getPersistentLog, purgePerformanceLog } from "@/services/netcontrol";
+import { useControllerStore } from "@/stores/controller";
+import { ApiFailure } from "@/services/api";
 import type { LogSource } from "@/services/logs";
 import { parsePerformanceLog } from "@/services/logs";
 import PerformanceLogMessage from "@/components/feature/PerformanceLogMessage.vue";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
 
 const props = defineProps<{ source: LogSource; active: boolean }>();
+const store = useControllerStore();
+const purging = ref(false), purgeError = ref(""), generation = ref(0);
+let purgeRequest: AbortController | undefined;
 const modes = [{ title: "Recent / live", value: "recent" }, { title: "Retained history", value: "history" }];
 const mode = ref("recent"), startCursor = ref<string>();
-const { data, loading, error, stale } = useLogHistory(async (cursor, signal) => {
+const { data, loading, error, stale, cancel } = useLogHistory(async (cursor, signal) => {
   let page = await getPersistentLog(props.source, { cursor, limit: 100 }, signal);
   const first = page.entries[0], oldest = page.oldest_cursor;
   if (props.source === "performance" && cursor === undefined && first && oldest
@@ -20,7 +25,7 @@ const { data, loading, error, stale } = useLogHistory(async (cursor, signal) => 
     page = { ...retained, gap: page.gap || retained.gap, reset: page.reset || retained.reset };
   }
   return { page, entries: page.entries };
-}, 3000, () => `${props.source}:${mode.value}`, () => props.active, () => startCursor.value);
+}, 3000, () => `${props.source}:${mode.value}:${generation.value}`, () => props.active && !purging.value, () => startCursor.value);
 const displayedEntries = computed(() => [...(data.value?.entries ?? [])].reverse().flatMap(entry => {
   const performance = props.source === "performance" ? parsePerformanceLog(entry.message) : null;
   const evidence = performance?.event === "link_observation" && Array.isArray(performance.details?.evidence)
@@ -38,10 +43,59 @@ function changeMode(value: string): void {
   startCursor.value = value === "history" ? data.value?.page.oldest_cursor ?? undefined : undefined;
   mode.value = value;
 }
+async function purge(): Promise<void> {
+  if (props.source !== "performance" || !props.active || !store.connected || purging.value) return;
+  if (!window.confirm("Purge all retained performance logs? This cannot be undone.")) return;
+  const controller = new AbortController();
+  purgeRequest = controller;
+  purging.value = true; purgeError.value = "";
+  cancel();
+  try {
+    await purgePerformanceLog(controller.signal);
+    if (purgeRequest !== controller) return;
+    startCursor.value = undefined;
+    generation.value++;
+  } catch (failure) {
+    if (purgeRequest !== controller) return;
+    const detail = failure instanceof Error ? failure.message : "Performance log purge failed.";
+    purgeError.value = detail + (failure instanceof ApiFailure && failure.status === 403 ? " Requires logs.delete." :
+      failure instanceof ApiFailure && failure.uncertain ? " Deletion may have occurred; no automatic retry was made." : "");
+    stale.value = data.value !== null;
+  } finally {
+    if (purgeRequest === controller) { purgeRequest = undefined; purging.value = false; }
+  }
+}
+function cancelPurge(): void {
+  purgeRequest?.abort(); purgeRequest = undefined; purging.value = false; purgeError.value = "";
+}
+watch(() => [store.sessionVersion, props.source], cancelPurge, { flush: "sync" });
+onBeforeUnmount(cancelPurge);
 </script>
 
 <template>
   <section :aria-label="`${source} log stream`">
+    <div
+      v-if="source === 'performance'"
+      class="d-flex justify-end mb-3"
+    >
+      <v-btn
+        color="error"
+        size="small"
+        variant="outlined"
+        :loading="purging"
+        :disabled="!store.connected || !active || purging"
+        @click="purge"
+      >
+        Purge performance log
+      </v-btn>
+    </div>
+    <p
+      v-if="purgeError"
+      role="alert"
+      class="text-error"
+    >
+      {{ purgeError }}
+    </p>
     <v-select
       v-if="source !== 'performance'"
       :model-value="mode"

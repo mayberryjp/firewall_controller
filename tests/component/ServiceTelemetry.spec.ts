@@ -225,6 +225,78 @@ describe("service counters", () => {
 });
 
 describe("diagnostic log pages", () => {
+  it("offers purge only on performance logs and does nothing when confirmation is declined", async () => {
+    const purge = vi.spyOn(api, "purgePerformanceLog"), confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const other = mount(PersistentLogStream, { props: { source: "syslog", active: true }, global: { stubs } });
+    const wrapper = mount(ExperienceLogView, { global: { stubs } }); await flushPromises();
+    expect(other.findAll("button")).toHaveLength(0);
+    await wrapper.get("button").trigger("click"); await flushPromises();
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(purge).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("performance entry 1");
+    other.unmount(); wrapper.unmount();
+  });
+  it("invalidates old in-flight GETs and restarts the purged stream without affecting other logs", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const pending = deferred<ReturnType<typeof persistentLog>>();
+    const deletion = deferred<{ source: "performance"; purged: true }>();
+    const purge = vi.spyOn(api, "purgePerformanceLog").mockReturnValue(deletion.promise);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } });
+    const other = mount(PersistentLogStream, { props: { source: "syslog", active: true }, global: { stubs } }); await flushPromises();
+    vi.mocked(api.getPersistentLog).mockImplementation(source =>
+      source === "performance" ? pending.promise : Promise.resolve(persistentLog(source)));
+    await vi.advanceTimersByTimeAsync(3000); await flushPromises();
+    const oldSignal = vi.mocked(api.getPersistentLog).mock.calls.filter(call => call[0] === "performance").at(-1)![2]!;
+    await wrapper.get("button").trigger("click"); await flushPromises();
+    expect(oldSignal.aborted).toBe(true);
+    expect(wrapper.get("button").attributes("disabled")).toBeDefined();
+    const count = vi.mocked(api.getPersistentLog).mock.calls.filter(call => call[0] === "performance").length;
+    await vi.advanceTimersByTimeAsync(6000); await flushPromises();
+    expect(vi.mocked(api.getPersistentLog).mock.calls.filter(call => call[0] === "performance")).toHaveLength(count);
+    const fresh = persistentLog("performance"); fresh.entries = []; fresh.next_cursor = `${"b".repeat(32)}:0`; fresh.oldest_cursor = null;
+    vi.mocked(api.getPersistentLog).mockImplementation(async source => source === "performance" ? fresh : persistentLog(source));
+    deletion.resolve({ source: "performance", purged: true }); await flushPromises();
+    pending.resolve(persistentLog("performance", "2")); await flushPromises();
+    expect(purge).toHaveBeenCalledOnce();
+    expect(api.getPersistentLog).toHaveBeenLastCalledWith("performance", { cursor: undefined, limit: 100 }, expect.any(AbortSignal));
+    expect(wrapper.text()).toContain("No retained log entries");
+    expect(wrapper.text()).not.toContain("performance entry");
+    expect(other.text()).toContain("syslog entry 1");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    wrapper.unmount(); other.unmount();
+  });
+  it.each([403, 503])("keeps retained rows and reports purge HTTP %s inline without retrying DELETE", async status => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const deletion = deferred<{ source: "performance"; purged: true }>();
+    const purge = vi.spyOn(api, "purgePerformanceLog").mockReturnValue(deletion.promise);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } }); await flushPromises();
+    await wrapper.get("button").trigger("click"); await flushPromises();
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    const empty = persistentLog("performance"); empty.entries = [];
+    vi.mocked(api.getPersistentLog).mockResolvedValue(empty);
+    deletion.reject(new ApiFailure(`HTTP ${status}: Purge rejected`, status, undefined, status >= 500));
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain(`HTTP ${status}`);
+    expect(wrapper.get('[role="alert"]').text()).toContain(status === 403 ? "logs.delete" : "Deletion may have occurred");
+    expect(wrapper.text()).toContain("performance entry 1");
+    await vi.advanceTimersByTimeAsync(6000); await flushPromises();
+    expect(purge).toHaveBeenCalledOnce();
+    wrapper.unmount();
+  });
+  it("ignores purge completion from a previous firewall session", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const deletion = deferred<{ source: "performance"; purged: true }>();
+    const purge = vi.spyOn(api, "purgePerformanceLog").mockReturnValue(deletion.promise);
+    const wrapper = mount(ExperienceLogView, { global: { stubs } }); await flushPromises();
+    await wrapper.get("button").trigger("click"); await flushPromises();
+    useControllerStore().sessionVersion++; await flushPromises();
+    expect(purge.mock.calls[0]![0]!.aborted).toBe(true);
+    const calls = vi.mocked(api.getPersistentLog).mock.calls.length;
+    deletion.resolve({ source: "performance", purged: true }); await flushPromises();
+    expect(api.getPersistentLog).toHaveBeenCalledTimes(calls);
+    expect(wrapper.text()).toContain("performance entry 1");
+    wrapper.unmount();
+  });
   it("uses the saved timezone for fractional timestamps, not unsaved timezone drafts", async () => {
     const store = useControllerStore();
     store.state.data!.desired.system = systemSchema.parse({ timezone: "Asia/Tokyo" });

@@ -5,6 +5,7 @@ import unittest
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
@@ -309,6 +310,31 @@ class RegistryHTTPTests(unittest.TestCase):
         self.assertEqual(len(FakeFirewallHandler.requests), 2)
         response, _ = self.request("DELETE", f"/api/v1/devices/{device_id}", {}, token)
         self.assertEqual(response.status, 405)
+
+    def test_proxy_forwards_bodyless_performance_purge_and_upstream_failures(self):
+        token = self.login()
+        _, created = self.request("POST", "/api/v1/devices", {
+            "name": "Performance purge test firewall",
+            "address": f"http://127.0.0.1:{self.firewall.server_port}",
+            "credential": "device-key",
+        }, token)
+        endpoint = f'/api/v1/devices/{created["device"]["id"]}/proxy/logs/performance'
+        response, _ = self.request("DELETE", endpoint, token=token)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(FakeFirewallHandler.requests[-1], (
+            "/api/v1/logs/performance", "Bearer device-key", b"",
+        ))
+        for status in (403, 503):
+            with self.subTest(status=status):
+                def reject_purge(handler):
+                    handler._reply(status, {"error": "Purge rejected"})
+
+                with patch.object(FakeFirewallHandler, "do_DELETE", reject_purge):
+                    response, payload = self.request("DELETE", endpoint, token=token)
+                self.assertEqual(response.status, status)
+                self.assertEqual(payload, {"error": "Purge rejected"})
+        response, _ = self.request("DELETE", endpoint)
+        self.assertEqual(response.status, 401)
 
     def test_device_can_be_updated_and_deleted(self):
         token = self.login()

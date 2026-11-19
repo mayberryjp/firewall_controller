@@ -29,6 +29,10 @@ test("MQTT publisher stays compact through retry, recovery and status errors wit
   await expect(publisher.locator(".setting-desc")).toHaveCount(0);
   await expect(settings.locator("dl")).toHaveCount(0);
   await expect(settings.locator(".v-chip")).toHaveText("connecting");
+  await expect(settings.locator(".mqtt-topic")).toHaveText([
+    `netcontrol/${wire.device_id}/state`,
+    `netcontrol/${wire.device_id}/availability`,
+  ]);
   await settings.getByLabel("Broker URL", { exact: true }).fill("mqtts://pending.example.test:8883");
   const failure = { category: "connection_reset", message: "MQTT connection reset by peer", os_error_code: 104, at_unix: 1793393503 };
   wire = { ...wire, state: "reconnecting", error: failure.message, last_failure: failure, connection_attempts: 1, reconnect_count: 1 };

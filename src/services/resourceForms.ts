@@ -51,7 +51,7 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
         hint: "Explicit metadata only; no NAT, firewall or routing is configured." }]),
       number("mtu", "MTU", "1280..65535"), { key: "up", label: "Administratively up (not carrier readiness)", kind: "switch" },
       { key: "addresses", label: "Interface address prefixes", kind: "lines", hint: "Host bits are retained, e.g. 192.0.2.10/24. Global unicast includes private addresses." },
-      ...(kind === "ethernet" ? [
+      ...(kind === "ethernet" || kind === "vlan" ? [
         select("address_mode", "IPv4 configuration", ["static", "dhcp"]),
         { key: "dhcp_client", label: "DHCPv4 client", kind: "object" as const, fields: [
           text("client_id", "Client ID (hexadecimal)"), text("hostname", "DHCP hostname"),

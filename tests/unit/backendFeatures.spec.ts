@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { configSchema, interfaceSchema, runtimeSchema, transactionSchema, revisionDetailSchema, objectMetadataSchema } from "@/types/domain";
+import { configSchema, interfaceSchema, runtimeSchema, transactionSchema, revisionDetailSchema, objectMetadataSchema, dhcpClientSchema } from "@/types/domain";
 import { differences, equalConfig, importConfig, normalize, requiredPermissions, selectedRelayPrefix, serviceRepairPermissions, validateConfig } from "@/services/configuration";
 import { preset, resourceFields } from "@/services/resourceForms";
 import { interfaceChoice } from "@/services/resourceCollections";
@@ -251,6 +251,33 @@ describe("required explicit WAN/LAN role", () => {
     expect(differences(before, after)).toHaveLength(1);
     expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "interfaces.write"]);
     expect(after.routes).toEqual(before.routes); expect(after.firewall).toEqual(before.firewall);
+  });
+});
+describe("VLAN DHCPv4 clients", () => {
+  it("accepts a VLAN client and DHCP-following route while retaining static IPv6 and DHCP options", () => {
+    const candidate = config();
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "ethernet" };
+    candidate.interfaces.push({
+      ...candidate.interfaces[0]!, name: "wan20", kind: "vlan", addresses: ["2001:db8:20::1/64"],
+      vlan: { parent: "lab0", id: 20 },
+    });
+    candidate.dhcp_clients = { wan20: dhcpClientSchema.parse({ hostname: "router", route_metric: 100, use_mtu: true }) };
+    candidate.routes.push({ enabled: true, destination: "198.51.100.0/24", interface: "wan20", gateway: "dhcp", table: 254, metric: 100 });
+    expect(validateConfig(candidate)).toEqual([]);
+    expect(importConfig(encodeJson(candidate))).toEqual(candidate);
+    candidate.interfaces[1]!.addresses.push("10.20.0.1/24");
+    expect(validateConfig(candidate).some(issue => issue.path === "dhcp_clients.wan20" && issue.message.includes("static IPv4"))).toBe(true);
+    candidate.interfaces[1]!.addresses = ["2001:db8:20::1/64"];
+    candidate.interfaces[1]!.dhcp_relay = { enabled: true, servers: ["192.0.2.1"] };
+    expect(validateConfig(candidate).some(issue => issue.path === "dhcp_clients.wan20" && issue.message.includes("relay"))).toBe(true);
+  });
+  it("continues rejecting DHCP on dummy and WireGuard links", () => {
+    const candidate = config();
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "dummy", addresses: [] };
+    candidate.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
+    expect(validateConfig(candidate).some(issue => issue.path === "dhcp_clients.lab0")).toBe(true);
+    candidate.interfaces[0] = { ...candidate.interfaces[0]!, kind: "wireguard", wireguard: { key_ref: "test-key", listen_port: 51820, peers: [] } };
+    expect(validateConfig(candidate).some(issue => issue.path === "dhcp_clients.lab0")).toBe(true);
   });
 });
 describe("DHCPv4 relay contract and validation", () => {

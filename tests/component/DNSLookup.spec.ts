@@ -114,6 +114,17 @@ describe("DNS server row lookup", () => {
     expect(wrapper.text()).toContain("restart");
     expect(api.lookupDNS).not.toHaveBeenCalled();
   });
+  it("tests DNS despite a failed idle installation-status read without requesting another", async () => {
+    const store = useControllerStore();
+    store.upgrade.data = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    store.upgrade.stale = true; store.upgrade.error = "Installation status unavailable";
+    const read = vi.spyOn(api, "getSystemUpgrade");
+    await setup(); await submit();
+    expect(api.lookupDNS).toHaveBeenCalledOnce();
+    expect(read).not.toHaveBeenCalled();
+    expect(wrapper.text()).not.toContain("Installation status unavailable");
+    expect(wrapper.get('[aria-label="RTT for 192.0.2.53"]').text()).toBe("13 ms");
+  });
   it("lets backend routing choose an interface instead of binding to the interface owning the resolver setting", async () => {
     const config = useControllerStore().state.data!.desired;
     config.interfaces.push({ ...config.interfaces[0]!, name: "wan0", role: "wan", addresses: ["203.0.113.1/24"] });

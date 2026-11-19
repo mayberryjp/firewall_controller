@@ -227,6 +227,14 @@ capture drops mean missing coverage, and parent/child qdiscs are not summed.
 A running sink and empty history do not establish detector health or clean traffic.
 History and cursors stay separate from Syslog/Netcontrol, with the same visible-only
 three-second polling, page draining, history bounds and gap/reset/error notices.
+**Purge performance log** confirms once, then sends a bodyless, queryless
+`DELETE /api/v1/logs/performance` using `logs.delete` (separate from `logs.read`).
+It deletes all retained performance evidence, not just displayed rows; collection
+continues and other logs/configuration are unchanged. In-flight reads are canceled
+and invalidated, and successful purge restarts reading without an old cursor.
+Failures and uncertain outcomes stay inline without automatically repeating DELETE.
+Deploy the accepting backend before using the action; unsupported backends return
+an explicit error. The registry forwards bodyless DELETE and upstream failures.
 
 Services > **DHCPv4 relay** adds **Requests forwarded** and **Replies received**
 columns to its existing interface rows, without a separate counter table. Reads
@@ -1467,6 +1475,13 @@ automatic acquisition without removing imported hosts or rules. Automatic
 Protected Hosts metadata lookups also follow the committed flag and source.
 Sync never automatically changes firewall hosts, rules or verdicts.
 **Import hosts** and **Import rules** remain available when sync is disabled.
+Each inventory or per-localhost connection request has its own two-minute timeout,
+including the response download; there is no overall import deadline.
+While importing rules, a progress bar shows completed/total unique localhost
+addresses (including IPv6 lookups) and the address currently being fetched.
+Inventory loading is indeterminate until those addresses are known.
+**Stop import** cancels the active request and remaining lookups without staging
+partial results or changing existing draft edits, rules or reports.
 Each successful or partial import stages a separate host/rule report with its
 source URL, counts and UTC timestamp alongside its firewall changes
 (`firewall.write`). While automatic sync is enabled, a small chip beside its toggle
@@ -1485,9 +1500,10 @@ outbound default for new hosts explicitly; the safe initial selection is drop.
 Existing names, addresses, defaults, rules,
 ingress overrides, NAT and unrelated draft edits remain unchanged. Identical
 hosts/rules are skipped; conflicting ownership and unsupported entries are
-reported inline. IPv4 and optional IPv6 addresses are retained together; invalid
-or globally disabled IPv6 prevents importing that device rather than silently
-dropping its address.
+reported inline. IPv4 and supported optional IPv6 addresses are retained together.
+An invalid, unsupported or globally disabled optional IPv6 address is omitted with
+an inline skipped-entry explanation; the valid primary address is still imported.
+An invalid or globally disabled primary address still prevents importing the device.
 
 Both imports ignore inventory records whose `ip_address` is missing, null, empty
 or whitespace-only, without failing the remaining inventory or looking up connections
@@ -1754,6 +1770,9 @@ limit. Prefer `mqtts://` with a trusted broker certificate.
 The consolidated MQTT backend publishes retained discovery at
 `homeassistant/device/netcontrol_<device_id>/config` and complete samples at
 `netcontrol/<device_id>/state` (QoS 1, nonretained), with a 32 MiB payload cap.
+Availability is retained at `netcontrol/<device_id>/availability` with `online`
+or `offline` payloads. The MQTT settings page shows the device state and
+availability topics once a fresh MQTT status read supplies the device identity.
 When migrating from the superseded split-topic backend, stop the old publisher,
 allow these topics in broker ACLs, configure payload limits of at least
 33,554,432 bytes and packet limits of at least 33,558,528 bytes, and clear each
@@ -1838,12 +1857,12 @@ the route's pinned gateway is reachable.
 
 The route editor offers **Direct**, **Static address**, and **DHCP gateway**
 inline in the table; each saved row shows its type derived from its gateway.
-For new routes and interface changes, IPv4 routes on DHCP Ethernet interfaces
+For new routes and interface changes, IPv4 routes on DHCP Ethernet/VLAN interfaces
 default to DHCP gateway without requiring a type selection. Explicit selections
 are retained while editing the destination; opening an existing route does not
 silently convert its saved gateway.
 DHCP gateway stores the exact `gateway: "dhcp"` token and requires an IPv4
-destination on a managed Ethernet interface with DHCPv4 configured in the draft,
+destination on a managed Ethernet or VLAN interface with DHCPv4 configured in the draft,
 including disabled routes. It follows that interface's lease gateway across WAN
 changes without changing the saved route, table, metric or revision. Existing
 literal gateways remain pinned until explicitly converted; new Direct routes no
@@ -1908,7 +1927,15 @@ draft, alter the daily schedule or install software. Discovery does not validate
 installation assets or establish installation success.
 
 The API client retains Ubuntu self-upgrade support for backend integrations, but this
-page does not submit installations. Canonical versions
+page does not submit installations. Installation status polling is scoped to the
+Upgrade page, except while tracking a known active or uncertain installation.
+Connecting and unrelated actions such as DNS tests, DHCP retries and service repairs
+do not request installation status or depend on its freshness. A successful response
+with `job: null` and `last_successful_version: null` is known idle status.
+Known pending, active or uncertain installations and post-upgrade recovery still
+block conflicting actions. Installation submissions still require a fresh,
+successful status read.
+Canonical versions
 use a real Gregorian date and iteration: `yyyy.mm.dd.iteration`, year 0001..9999,
 iteration 1..4294967295, with no leading `v`, prerelease or build suffix.
 Versions compare numeric components (`.10` is newer than `.9`). Installation
@@ -1992,10 +2019,11 @@ Previously downloaded purge-based scripts retain their former behavior; use the
 updated scripts rather than forcing package removal.
 
 The scripts require a supported GRUB layout and systemd, prepare and verify
-`apparmor=0`, then stop, disable and persistently mask `apparmor.service` after
-verifying kernel disablement. If the running kernel still enables AppArmor,
-deployment stops with an error requiring a manual console reboot and rerun of
-the same command; it does not reboot automatically or report successful completion.
+`apparmor=0`, then stop, disable and persistently mask `apparmor.service`.
+If the running kernel still enables AppArmor, deployment completes with a visible
+recommendation to reboot manually from a local console afterward. Reboot may be
+deferred; no rerun or automatic reboot is required. Existing kernel confinement
+may remain active until reboot.
 Stopping the service alone does not establish kernel disablement. Unknown kernel
 state, unsafe files and boot/service-control or verification failures abort.
 Full source upgrades perform this check before old-daemon shutdown or binary
@@ -2145,10 +2173,20 @@ Deploy these frontend changes with the matching backend:
   explicit enablement, including retained disabled resources. Disabling IPv6
   reports conflicts inline rather than deleting them. Use IPv4 management and
   console recovery; IPv6-only access and `::1` dependencies stop when disabled.
-- Console provisioning imports supported Ethernet/veth, dummy/VLAN, IPv4 routes,
-  DHCP/DNS and representable nftables policy. It preserves WAN settings and
-  other imported configuration, changing selected LAN addressing and assigned
-  port roles rather than replacing everything with a factory firewall/NAT plan.
+- The November 19 initial-install wizard supersedes the earlier LAN-only,
+  import-preserving installer: review physical Ethernet/existing VLAN ports,
+  optionally create VLANs, assign exactly one WAN and one or more LANs, choose
+  DHCP/static IPv4, and approve the final plan. Static WAN requires gateway/DNS;
+  management LAN requires private static IPv4. Tagged/nested trunks require
+  matching switch configuration. The reviewed starter replaces imported
+  addresses/routes/DNS/firewall, permits LAN router access and LAN-to-WAN
+  forwarding with IPv4 masquerade, and does not add inter-LAN forwarding or
+  DHCP/DNS servers. HTTP binds to management IPv4:8080; SSH remains localhost:2222.
+  IPv6 and Wi-Fi association are not part of this wizard. Use a matching release
+  advertising `--plan-network`, `--check-network-plan` and `--provision-network`;
+  unattended installation uses `--network-plan FILE --yes`, not the old
+  `--wan`/`--lan`/`--lan-address` installer flags. Existing appliances use normal
+  confirmed transactions, not reinstall/reset for routine edits.
   Static-route metrics accept **0..2147483647**, preserving zero on edits/export.
 - Initial takeover can disable unsupported topology, routing, firewall rules,
   traffic control/BPF and known competing managers. It is console-only, with
@@ -2169,8 +2207,8 @@ Deploy these frontend changes with the matching backend:
   console hardening; a normal daemon upgrade or factory reset does not apply
   these OS policies.
 
-The installer requires a backend advertising `console-host-takeover`. Repository
-tests do not establish production installation, reboot or management continuity.
+See the [installation wizard handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-19.md#2026-11-19-03-interface-and-vlan-installation-wizard).
+Repository tests do not establish production installation, reboot or management continuity.
 
 ### October 23 host networking, DHCP and DNS
 
@@ -2182,6 +2220,12 @@ tests do not establish production installation, reboot or management continuity.
   static IPv4 or DHCPv4, optional static IPv6, DHCP client ID/hostname/metric,
   dynamic-MTU/domain policy and per-interface DNS servers/routing domains.
   DHCPv4 cannot coexist with static IPv4 or an enabled relay on that NIC.
+- Managed VLANs also support DHCPv4 through the existing `dhcp_clients` map.
+  The inline IPv4 selector stages DHCP/static mode, preserving static IPv6,
+  DHCP options and unrelated settings. Leases remain runtime-only; committed
+  VLAN clients show their address, errors and existing Reload DHCP action.
+  DHCP-dependent IPv4 routes also accept VLAN clients. Dummy/WireGuard DHCP
+  clients remain invalid; static-IPv4 and relay conflicts remain enforced.
 - DHCP and DNS maps are preserved in complete packages, imports, exports,
   transaction snapshots and historical restores. Map-only changes appear in
   review and require interfaces.write, as do shared repairs when either map is

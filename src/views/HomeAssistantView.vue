@@ -20,6 +20,8 @@ watch(() => [store.connected, store.connecting], () => { upload?.abort(); passwo
 onMounted(() => { if (store.connected && document.visibilityState !== "hidden") void store.refreshMqttStatus(); });
 onUnmounted(() => { alive = false; password.value = ""; upload?.abort(); });
 const publisher = computed(() => store.mqttStatus.data);
+const deviceTopic = computed(() => store.connected && !store.mqttStatus.stale && publisher.value?.device_id
+  ? `netcontrol/${publisher.value.device_id}` : null);
 const publisherColor = computed(() => store.mqttStatus.stale ? "default" : publisher.value?.state === "running" ? "success" : publisher.value?.state === "error" ? "error" : ["connecting", "reconnecting"].includes(publisher.value?.state ?? "") ? "warning" : "default");
 async function stage(): Promise<void> {
   error.value = "";
@@ -233,6 +235,29 @@ async function stage(): Promise<void> {
         </div>
       </div>
       <v-divider />
+      <template v-if="deviceTopic">
+        <div class="setting-row">
+          <div class="setting-name">
+            Device topic
+          </div>
+          <div class="setting-control">
+            <code class="mqtt-topic">{{ deviceTopic }}/state</code>
+          </div>
+        </div>
+        <v-divider />
+        <div class="setting-row">
+          <div class="setting-name">
+            Availability topic
+          </div>
+          <div class="setting-control">
+            <code class="mqtt-topic">{{ deviceTopic }}/availability</code>
+            <p class="setting-desc">
+              Retained online / offline status.
+            </p>
+          </div>
+        </div>
+        <v-divider />
+      </template>
       <div class="d-flex justify-end mt-6">
         <v-btn
           type="submit"
@@ -258,6 +283,7 @@ section { padding-bottom: 56px; }
 .setting-control > .v-switch { width: auto; }
 .setting-desc { margin: 0; max-width: 760px; font-size: .8125rem; line-height: 1.45; color: var(--text-muted); overflow-wrap: anywhere; }
 .password-status { display: flex; align-items: center; gap: 8px; }
+.mqtt-topic { max-width: 100%; padding-top: 6px; overflow-wrap: anywhere; user-select: text; }
 @media (max-width: 700px) {
   .setting-row { grid-template-columns: 1fr; gap: 10px; padding: 16px 4px; }
   .setting-name { padding-top: 0; }

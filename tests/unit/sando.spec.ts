@@ -16,9 +16,72 @@ const connection = (changes: Partial<SandoConnection> = {}): SandoConnection => 
   dst_port: 443, protocol: 6, ...changes,
 });
 function emptyConfig() { const value = config(); value.firewall.rules = []; return value; }
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); });
 
 describe("Sando API and persistence", () => {
+  function mockRequestTimers() {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(milliseconds => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), milliseconds);
+      return controller.signal;
+    });
+  }
+  it("allows slow headers and downloads with a fresh two-minute budget for each localhost", async () => {
+    mockRequestTimers();
+    const fetcher = vi.fn().mockImplementation((_url, options: RequestInit) => new Promise((resolve, reject) => {
+      options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true });
+      setTimeout(() => resolve({
+        ok: true,
+        text: () => new Promise<string>((resolveBody, rejectBody) => {
+          options.signal!.addEventListener("abort", () => rejectBody(options.signal!.reason), { once: true });
+          setTimeout(() => resolveBody("[]"), 20_000);
+        }),
+      }), 70_000);
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const progress = vi.fn();
+    const result = getSandoConnections("https://sando.example", new AbortController().signal,
+      ["192.0.2.20", "192.0.2.20", "2001:db8::20"], progress);
+    expect(progress).toHaveBeenLastCalledWith({ completed: 0, total: 2, currentHost: "192.0.2.20" });
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(progress).toHaveBeenLastCalledWith({ completed: 1, total: 2, currentHost: "2001:db8::20" });
+    await vi.advanceTimersByTimeAsync(90_000);
+    await expect(result).resolves.toEqual([]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(progress).toHaveBeenLastCalledWith({ completed: 2, total: 2, currentHost: null });
+  });
+  it.each(["headers", "body"])("times out stalled inventory %s at two minutes without retrying", async phase => {
+    mockRequestTimers();
+    const fetcher = vi.fn().mockImplementation((_url, options: RequestInit) => {
+      const pending = () => new Promise((_resolve, reject) => {
+        options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true });
+      });
+      return phase === "headers" ? pending() : Promise.resolve({ ok: true, text: pending });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const settled = vi.fn();
+    const result = getSandoDevices("https://sando.example", new AbortController().signal);
+    const assertion = expect(result).rejects.toThrow("localhosts timed out after 2 minutes");
+    void result.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it("stops a connection import without requesting remaining localhosts or reporting completion", async () => {
+    const controller = new AbortController(), progress = vi.fn();
+    const fetcher = vi.fn().mockImplementation((_url, options: RequestInit) => new Promise((_resolve, reject) => {
+      options.signal!.addEventListener("abort", () => reject(options.signal!.reason), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const result = getSandoConnections("https://sando.example", controller.signal, ["192.0.2.20", "192.0.2.21"], progress);
+    controller.abort();
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(progress.mock.calls).toEqual([[{ completed: 0, total: 2, currentHost: "192.0.2.20" }]]);
+  });
   it("imports compatible portless ICMP suggestions with ownership and without broadening families", () => {
     const result = importSando(emptyConfig(), [device()], [
       connection({ protocol: 1, dst_port: "*" }),
@@ -233,8 +296,10 @@ describe("Sando draft imports", () => {
     const ipv4Only = emptyConfig(); ipv4Only.ipv6_enabled = false;
     const ipv6 = importSando(ipv4Only, [], [connection({ src_ip: "2001:db8::20", dst_ip: "*", dst_port: "*" })], "drop");
     expect(ipv6.hostsAdded).toBe(0); expect(ipv6.skipped[0]).toContain("IPv6 is disabled");
-    const invalidDevice = importSando(emptyConfig(), [{ ...device(), ip6_address: "invalid" }], [connection()], "drop");
+    const invalidDevice = importSando(emptyConfig(), [{ ...device(), ip_address: "invalid" }],
+      [connection({ src_ip: "2001:db8::20", dst_ip: "*" })], "drop");
     expect(invalidDevice.hostsAdded).toBe(0); expect(invalidDevice.hostsSkipped).toBe(1);
+    expect(invalidDevice.rulesAdded).toBe(0);
     expect(invalidDevice.skipped[1]).toContain("source device could not be imported");
   });
   it("preserves explicit API destination and port wildcards without widening a dual-stack host's address family", async () => {
@@ -317,6 +382,27 @@ describe("Sando draft imports", () => {
     expect(result.config).toEqual(existing); expect(result.skipped).toHaveLength(1);
     const ipv4Only = emptyConfig(); ipv4Only.ipv6_enabled = false;
     expect(importSando(ipv4Only, [device()], undefined, "drop").skipped[0]).toContain("IPv6 is disabled");
+  });
+  it.each(["ff:80", "fe80::20%eth0", "fe80::20", "192.0.2.21"])(
+    "imports IPv4 and its rules while reporting unsupported optional IPv6 %s", ip6_address => {
+      const result = importSando(emptyConfig(), [{ ...device(), ip6_address }], [connection()], "drop");
+      expect(result.hostsAdded).toBe(1);
+      expect(result.rulesAdded).toBe(1);
+      expect(result.config.firewall.policies!.hosts[0]!.addresses).toEqual(["192.0.2.20"]);
+      expect(result.skipped).toHaveLength(1);
+      expect(result.skipped[0]).toContain(`optional IPv6 address "${ip6_address}" omitted:`);
+      expect(validateConfig(result.config)).toEqual([]);
+    },
+  );
+  it("imports IPv4 without enabling IPv6 when the optional IPv6 address is globally disabled", () => {
+    const current = emptyConfig(); current.ipv6_enabled = false;
+    for (const iface of current.interfaces) iface.addresses = iface.addresses.filter(address => !address.includes(":"));
+    const result = importSando(current, [device()], undefined, "drop");
+    expect(result.hostsAdded).toBe(1);
+    expect(result.config.ipv6_enabled).toBe(false);
+    expect(result.config.firewall.policies!.hosts[0]!.addresses).toEqual(["192.0.2.20"]);
+    expect(result.skipped[0]).toContain('optional IPv6 address "2001:db8::20" omitted: IPv6 is disabled');
+    expect(validateConfig(result.config)).toEqual([]);
   });
   it("uses distinct valid names for devices sharing a hostname", () => {
     const second = { ...device("192.0.2.30"), ip6_address: null };

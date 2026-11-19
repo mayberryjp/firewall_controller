@@ -191,7 +191,6 @@ export const useControllerStore = defineStore("controller", () => {
     if (acceptedUpgradeID.value && upgrade.data?.job?.id !== acceptedUpgradeID.value) return "The latest upgrade job differs from the accepted job. Its outcome needs operator verification.";
     if (upgradeActive.value) return `System upgrade ${upgrade.data?.job?.id}: ${upgrade.data?.job?.status}. Writes are blocked; recovery_required needs console recovery.`;
     if (upgradeNeedsRefresh.value) return "Refreshing committed state after upgrade. Local changes are retained.";
-    if (upgrade.data?.enabled && upgrade.stale) return "Upgrade status is unavailable. Refresh before writing.";
     return "";
   });
   const activeTransactions = computed(() => {
@@ -543,8 +542,7 @@ export const useControllerStore = defineStore("controller", () => {
   async function checkMaintenance(): Promise<void> {
     if (pathTestWriteBlockedReason.value) throw new Error(pathTestWriteBlockedReason.value);
     if (upgradePending.value) throw new Error("System upgrade submission is pending");
-    await refreshUpgrade();
-    if (upgrade.stale || !upgrade.data || upgradeBlockedReason.value) throw new Error(upgradeBlockedReason.value || upgrade.error || "Upgrade status is unavailable");
+    if (upgradeBlockedReason.value) throw new Error(upgradeBlockedReason.value);
   }
   async function startUpgrade(version: string, expectedRepository: string): Promise<void> {
     if (pathTestWriteBlockedReason.value) throw new Error(pathTestWriteBlockedReason.value);
@@ -621,7 +619,7 @@ export const useControllerStore = defineStore("controller", () => {
     }
     connected.value = true; connecting.value = false;
     rememberRegistryDevice(deviceId);
-    void Promise.all([refreshState(), refreshRuntime(), refreshRevisions(), refreshUpgrade()]).then(settleSubmitted);
+    void Promise.all([refreshState(), refreshRuntime(), refreshRevisions()]).then(settleSubmitted);
     return connected.value;
   }
   function disconnect(): void {

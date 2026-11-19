@@ -41,6 +41,8 @@ export function getPersistentLog(source: LogSource, query: PersistentLogQuery = 
   return request("GET", `/logs/${selected}${params.size ? `?${params}` : ""}`,
     persistentLogPageSchema.refine(value => value.source === selected, "Log response belongs to a different stream"), undefined, signal);
 }
+export const purgePerformanceLog = (signal?: AbortSignal) =>
+  request("DELETE", "/logs/performance", z.object({ source: z.literal("performance"), purged: z.literal(true) }), undefined, signal);
 export function adoptVlan(input: AdoptVlanRequest, signal?: AbortSignal) {
   const value = adoptVlanRequestSchema.parse(input);
   return request("POST", "/interfaces/adopt-vlan", adoptVlanResponseSchema.refine(result =>

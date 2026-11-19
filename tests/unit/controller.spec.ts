@@ -159,7 +159,7 @@ describe("manual software release checks", () => {
   }
   it("checks the backend's default repository even without an installation manager", async () => {
     const store = await ready("mayberryjp/firewall_backend");
-    expect(store.upgrade.data).toMatchObject({ enabled: false, repository: null });
+    expect(api.getSystemUpgrade).not.toHaveBeenCalled();
     await store.checkSoftwareRelease();
     expect(api.checkSoftwareRelease).toHaveBeenCalledTimes(1); expect(store.softwareCheckPending).toBe(true);
     expect(store.softwareCheckError).toBe("");
@@ -405,6 +405,62 @@ describe("independent reads and complete shared draft", () => {
     expect(store.draft).toBeNull();
     expect(store.baseline).toBeNull();
   });
+  it("does not wait for a pending idle upgrade read before allowing maintenance", async () => {
+    const store = await connected();
+    const idle = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    let finish!: (value: typeof idle) => void;
+    vi.mocked(api.getSystemUpgrade).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = store.refreshUpgrade();
+    expect(store.upgrade.loading).toBe(true);
+    await expect(store.checkMaintenance()).resolves.toBeUndefined();
+    expect(api.getSystemUpgrade).toHaveBeenCalledTimes(1);
+    finish(idle); await pending;
+    expect(store.upgrade.stale).toBe(false);
+    expect(store.upgrade.error).toBeNull();
+    expect(store.upgradeActive).toBe(false);
+    expect(store.upgradeBlockedReason).toBe("");
+    expect(store.operationBlockedReason).toBe("");
+    store.$dispose();
+  });
+  it("keeps failed idle upgrade reads out of unrelated maintenance guards", async () => {
+    const idle = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    vi.mocked(api.getSystemUpgrade).mockResolvedValue(idle);
+    const store = await connected();
+    expect(api.getSystemUpgrade).not.toHaveBeenCalled();
+    await store.refreshUpgrade();
+    vi.mocked(api.getSystemUpgrade).mockRejectedValueOnce(new ApiFailure("Upgrade read failed", 503));
+    await store.refreshUpgrade();
+    expect(store.upgrade.stale).toBe(true);
+    expect(store.upgrade.error).toContain("Upgrade read failed");
+    expect(store.operationBlockedReason).toBe("");
+    await expect(store.checkMaintenance()).resolves.toBeUndefined();
+    expect(api.getSystemUpgrade).toHaveBeenCalledTimes(2);
+    await store.refreshUpgrade();
+    expect(store.upgrade.error).toBeNull();
+    expect(store.upgradeBlockedReason).toBe("");
+    expect(store.operationBlockedReason).toBe("");
+    store.$dispose();
+  });
+  it("allows maintenance without installation status but still blocks uncertain and pending installations", async () => {
+    const store = await connected();
+    expect(store.upgrade.data).toBeNull();
+    await expect(store.checkMaintenance()).resolves.toBeUndefined();
+    store.upgradeUncertain = true;
+    await expect(store.checkMaintenance()).rejects.toThrow("unconfirmed");
+    store.upgradeUncertain = false; store.upgradePending = true;
+    await expect(store.checkMaintenance()).rejects.toThrow("pending");
+    expect(api.getSystemUpgrade).not.toHaveBeenCalled();
+    store.$dispose();
+  });
+  it("still requires a successful status read before submitting an installation", async () => {
+    const store = await connected();
+    store.upgrade.data = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    vi.mocked(api.getSystemUpgrade).mockRejectedValue(new ApiFailure("Upgrade read failed", 503));
+    await expect(store.startUpgrade("2026.10.29.2", "operator/appliance")).rejects.toThrow("fresh status");
+    expect(api.startSystemUpgrade).not.toHaveBeenCalled();
+    expect(store.upgrade.error).toContain("Upgrade read failed");
+    store.$dispose();
+  });
   it("does not let a status read started before acceptance replace the accepted upgrade job", async () => {
     const available = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
     const job = { id: "upgrade-1", version: "2026.10.29.2", status: "queued", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", error: null, last_successful_version: null };
@@ -437,6 +493,7 @@ describe("independent reads and complete shared draft", () => {
     await store.startUpgrade("2026.10.29.2", "operator/appliance");
     expect(store.readOnlyReason).toBe(""); expect(store.draft?.routes[0]?.metric).toBe(42);
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "recovery_required" } });
+    await store.refreshUpgrade();
     await expect(store.checkMaintenance()).rejects.toThrow("console recovery");
     vi.mocked(api.getSystemUpgrade).mockResolvedValue({ ...available, job: { ...job, status: "rolled_back" } });
     const changed = state(); changed.revision = "2026.10.29.2"; vi.mocked(api.getState).mockResolvedValue(changed);

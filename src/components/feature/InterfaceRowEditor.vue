@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import FieldInput from "@/components/base/FieldInput.vue";
 import { record, type Field } from "@/types/forms";
+import { useControllerStore } from "@/stores/controller";
 
 const props = defineProps<{
   form: Record<string, unknown>;
@@ -22,6 +23,7 @@ const emit = defineEmits<{
   "update:acknowledged": [value: boolean];
 }>();
 const row = ref<HTMLTableRowElement | null>(null);
+const store = useControllerStore();
 onMounted(() => {
   row.value?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   row.value?.querySelector("input")?.focus();
@@ -47,10 +49,19 @@ const inputs = computed(() => {
 });
 const addresses = computed(() => Array.isArray(props.form.addresses) ? props.form.addresses.map(String) : []);
 const ipv4Error = ref("");
+const dhcpAddress = computed(() => store.state.data?.desired.dhcp_clients?.[String(props.form.name)]
+  ? store.runtime.data?.dhcp_clients?.leases[String(props.form.name)]?.address ?? "DHCP" : "DHCP");
+function changeMode(value: string): void {
+  if (props.disabled) return;
+  ipv4Error.value = "";
+  emit("change", "address_mode", value);
+  if (value === "dhcp") emit("change", "addresses", addresses.value.filter(address => address.includes(":")));
+}
 function nested(field: Field): boolean { return field.key === "id" || field.key === "parent"; }
 function change(field: Field, value: unknown): void {
   if (props.disabled || field.disabled) return;
   if (field.key === "addresses") {
+    if (!props.loopbacks && props.form.address_mode === "dhcp") return;
     const edited = String(value ?? "").split(",").map(address => address.trim()).filter(Boolean);
     ipv4Error.value = edited.some(address => address.includes(":")) ? "Enter IPv4 addresses with prefixes; existing IPv6 settings are preserved separately." : "";
     if (!ipv4Error.value) emit("change", "addresses", [...edited, ...addresses.value.filter(address => address.includes(":"))]);
@@ -77,6 +88,21 @@ function change(field: Field, value: unknown): void {
         class="compact-cell-label"
         aria-hidden="true"
       >{{ field.label }}</span>
+      <select
+        v-if="!loopbacks && field.key === 'addresses'"
+        :value="form.address_mode"
+        :disabled="disabled"
+        aria-label="IPv4 configuration"
+        class="compact-select mb-2"
+        @change="changeMode(($event.target as HTMLSelectElement).value)"
+      >
+        <option value="static">
+          Static
+        </option>
+        <option value="dhcp">
+          DHCP
+        </option>
+      </select>
       <template v-if="loopbacks && field.key === 'mtu'">
         {{ form.mtu }}
       </template>
@@ -94,8 +120,8 @@ function change(field: Field, value: unknown): void {
       />
       <FieldInput
         v-else
-        :field="{ ...field, disabled: disabled || field.disabled }"
-        :model-value="field.key === 'addresses' ? addresses.filter(address => !address.includes(':')).join(', ') : nested(field) ? record(form.vlan)[field.key] : form[field.key]"
+        :field="{ ...field, disabled: disabled || field.disabled || (!loopbacks && field.key === 'addresses' && form.address_mode === 'dhcp') }"
+        :model-value="field.key === 'addresses' ? !loopbacks && form.address_mode === 'dhcp' ? dhcpAddress : addresses.filter(address => !address.includes(':')).join(', ') : nested(field) ? record(form.vlan)[field.key] : form[field.key]"
         :path="`editor.${nested(field) ? 'vlan.' : ''}${field.key}`"
         :errors="errors"
         density="compact"
@@ -171,6 +197,8 @@ function change(field: Field, value: unknown): void {
 .interface-editor-row :deep(.v-input) { width: 100%; min-width: 0; }
 .interface-editor-row :deep(.v-field__input) { min-width: 0; padding-inline: 8px; font-size: 13px; }
 .interface-editor-row :deep(.v-field-label) { font-size: 12px; }
+.compact-select { width: 100%; height: 40px; padding: 6px 8px; border: 1px solid rgba(var(--v-theme-on-surface), 0.4); border-radius: 4px; color: inherit; background: rgb(var(--v-theme-surface)); font: inherit; font-size: 13px; appearance: auto; }
+.compact-select:disabled { opacity: 0.5; }
 @container (max-width: 860px) {
   .editor-actions { flex-direction: row; }
 }

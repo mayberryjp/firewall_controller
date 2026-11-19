@@ -41,9 +41,10 @@ export function sandoBaseUrl(value: string): string {
   return base;
 }
 async function getSando<T extends z.ZodTypeAny>(endpoint: string, resource: string, schema: T, signal: AbortSignal): Promise<z.output<T>> {
+  const timeout = AbortSignal.timeout(120_000);
   try {
     const response = await fetch(`${sandoEndpoint(endpoint)}/${resource}`, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+      signal: AbortSignal.any([signal, timeout]),
       credentials: "omit", redirect: "error", cache: "no-store",
       headers: { Accept: "application/json" },
     });
@@ -51,6 +52,7 @@ async function getSando<T extends z.ZodTypeAny>(endpoint: string, resource: stri
     return schema.parse(decodeJson(await response.text()));
   } catch (error) {
     if (signal.aborted) throw error;
+    if (timeout.aborted) throw new Error(`Unable to import from Sando: ${resource} timed out after 2 minutes. Check the connection and retry; no import changes were staged.`);
     if (error instanceof z.ZodError) {
       const details = error.issues.slice(0, 3).map(issue => `${issue.path.join(".") || "response"}: ${issue.message}`).join("; ");
       const remaining = error.issues.length - 3;
@@ -61,15 +63,30 @@ async function getSando<T extends z.ZodTypeAny>(endpoint: string, resource: stri
 }
 export const getSandoDevices = (endpoint: string, signal: AbortSignal) =>
   getSando(endpoint, "localhosts", sandoDevicesSchema, signal);
-export async function getSandoConnections(endpoint: string, signal: AbortSignal, hosts: string[]): Promise<SandoConnection[]> {
+export interface SandoImportProgress {
+  completed: number;
+  total: number;
+  currentHost: string | null;
+}
+export async function getSandoConnections(
+  endpoint: string, signal: AbortSignal, hosts: string[],
+  onProgress?: (progress: SandoImportProgress) => void,
+): Promise<SandoConnection[]> {
   const entries = new Map<string, SandoConnection>();
-  for (const host of new Set(hosts)) {
+  const uniqueHosts = [...new Set(hosts)];
+  let completed = 0;
+  for (const host of uniqueHosts) {
+    signal.throwIfAborted();
+    onProgress?.({ completed, total: uniqueHosts.length, currentHost: host });
     const rows = await getSando(endpoint, `ignorelist/ip/${encodeURIComponent(host)}`, z.array(sandoConnectionSchema), signal);
+    signal.throwIfAborted();
     for (const row of rows) {
       const key = stableJson([row.ignorelist_id ?? null, row.src_ip, row.dst_ip, row.protocol, row.dst_port]);
       if (!entries.has(key) || row.src_ip === host) entries.set(key, { ...row, requested_host: host });
     }
+    completed++;
   }
+  onProgress?.({ completed, total: uniqueHosts.length, currentHost: null });
   return [...entries.values()];
 }
 
@@ -118,10 +135,14 @@ export function importSando(
       if (config.ipv6_enabled !== true && numericAddress(device.ip_address).kind() === "ipv6") throw new Error("IPv6 is disabled");
       const addresses = [device.ip_address];
       if (device.ip6_address && device.ip6_address !== device.ip_address) {
-        policyHostAddress(device.ip6_address);
-        if (numericAddress(device.ip6_address).kind() !== "ipv6") throw new Error("ip6_address must be IPv6");
-        if (config.ipv6_enabled !== true) throw new Error("IPv6 is disabled");
-        addresses.push(device.ip6_address);
+        try {
+          const address = policyHostAddress(device.ip6_address);
+          if (address.kind() !== "ipv6") throw new Error("ip6_address must be IPv6");
+          if (config.ipv6_enabled !== true) throw new Error("IPv6 is disabled");
+          addresses.push(device.ip6_address);
+        } catch (error) {
+          result.skipped.push(`${device.ip_address}: optional IPv6 address "${device.ip6_address}" omitted: ${error instanceof Error ? error.message : "invalid IPv6 address"}`);
+        }
       }
       const owners = policies.hosts.filter(host => host.addresses.some(address => addresses.includes(address)));
       if (owners.length) {

@@ -242,6 +242,57 @@ describe("page-scoped polling", () => {
       status: "unknown", healthy: null, collected_at: null, stale: true, components: [],
     }, active_alerts: [] });
   });
+  it("keeps idle upgrade polling scoped to its page without blocking DNS after a failed read", async () => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    const idle = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    store.upgrade.data = idle; store.upgrade.stale = false;
+    let fail!: (error: Error) => void;
+    const read = vi.spyOn(api, "getSystemUpgrade")
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }))
+      .mockResolvedValue(idle);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push("/config/upgrade");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await router.push("/settings/remote-dns");
+      fail(new Error("Upgrade proxy unavailable"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.operationBlockedReason).toBe("");
+      expect(store.upgrade.error).toBe("Upgrade proxy unavailable");
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(store.upgrade.error).toBe("Upgrade proxy unavailable");
+      await router.push("/config/upgrade");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(store.upgrade.error).toBeNull();
+      expect(store.operationBlockedReason).toBe("");
+    } finally { wrapper.unmount(); store.$dispose(); visibility.mockRestore(); read.mockRestore(); vi.useRealTimers(); }
+  });
+  it.each(["active", "uncertain"])("continues tracking a known %s installation away from the Upgrade page", async condition => {
+    vi.useFakeTimers();
+    const pinia = createPinia(); setActivePinia(pinia);
+    const store = useControllerStore(); store.connected = true;
+    if (condition === "active") store.upgrade.data = {
+      enabled: true, repository: "operator/appliance", last_successful_version: null,
+      job: { id: "upgrade-1", version: "2026.10.29.2", status: "queued", created_at: "2026-10-29T00:00:00Z",
+        updated_at: "2026-10-29T00:00:00Z", error: null, last_successful_version: null },
+    };
+    else store.upgradeUncertain = true;
+    const read = vi.spyOn(store, "refreshUpgrade").mockResolvedValue();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/:pathMatch(.*)*", component: PollingHost }] });
+    await router.push("/settings/remote-dns");
+    const wrapper = mount(PollingHost, { global: { plugins: [pinia, router] } });
+    try {
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(read).toHaveBeenCalledTimes(3);
+      expect(store.operationBlockedReason).not.toBe("");
+    } finally { wrapper.unmount(); store.$dispose(); visibility.mockRestore(); read.mockRestore(); vi.useRealTimers(); }
+  });
   it("polls Dynamic DNS on its Services page and stops after leaving", async () => {
     vi.useFakeTimers();
     const pinia = createPinia(); setActivePinia(pinia);

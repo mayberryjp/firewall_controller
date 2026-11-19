@@ -31,6 +31,23 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("purges performance evidence with one authenticated bodyless, queryless DELETE", async () => {
+    body = encodeJson({ source: "performance", purged: true });
+    expect(await net.purgePerformanceLog()).toEqual({ source: "performance", purged: true });
+    expect(captured).toMatchObject({ method: "delete", url: "/logs/performance" });
+    expect(captured?.headers.get("Authorization")).toBe("Bearer registry-test-session");
+    expect(captured?.data).toBeUndefined();
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it.each([403, 503])("preserves purge HTTP %s failures without retries", async code => {
+    status = code; body = encodeJson({ error: "Purge rejected" });
+    await expect(net.purgePerformanceLog()).rejects.toMatchObject({ status: code, uncertain: code >= 500 });
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it.each([{}, { source: "syslog", purged: true }, { source: "performance", purged: false }])("rejects incompatible purge acknowledgement %j", async result => {
+    body = encodeJson(result);
+    await expect(net.purgePerformanceLog()).rejects.toMatchObject({ incompatible: true, uncertain: true });
+  });
   it("sends a bodyless Discord test once and keeps backend/config versions distinct", async () => {
     const result = { delivered: true, backend_version: "2026.11.14.1", config_version: "2026.11.14.3", failed: "0" };
     body = encodeJson(result);
@@ -811,6 +828,13 @@ describe("controller-proxied API boundary", () => {
     adapter.mockRejectedValueOnce(new AxiosError("timeout", "ETIMEDOUT"));
     await expect(net.deleteAllConnections()).rejects.toMatchObject({ uncertain: true });
     expect(adapter).toHaveBeenCalledTimes(1);
+  });
+  it("accepts enabled idle upgrade status with no job or successful version", async () => {
+    const idle = { enabled: true, repository: "operator/appliance", job: null, last_successful_version: null };
+    body = encodeJson(idle);
+    await expect(net.getSystemUpgrade()).resolves.toEqual(idle);
+    expect(captured).toMatchObject({ method: "get", url: "/system/upgrade" });
+    expect(captured?.data).toBeUndefined();
   });
   it("reads disabled self-upgrade setup and submits only an explicit canonical version", async () => {
     body = encodeJson({ enabled: false, repository: null, job: null, last_successful_version: null });

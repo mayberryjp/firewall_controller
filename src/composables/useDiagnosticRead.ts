@@ -50,5 +50,5 @@ export function useDiagnosticRead<T>(
     disposed = true; cancel();
     document.removeEventListener("visibilitychange", wake); window.removeEventListener("online", wake);
   });
-  return { data, loading, error, stale, read };
+  return { data, loading, error, stale, read, cancel };
 }

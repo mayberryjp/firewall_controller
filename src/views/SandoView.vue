@@ -4,7 +4,7 @@ import { useControllerStore } from "@/stores/controller";
 import { validateConfig } from "@/services/configuration";
 import {
   getSandoConnections, getSandoDevices, importSando,
-  sandoBaseUrl, replaceSandoRules, type SandoImport,
+  sandoBaseUrl, replaceSandoRules, type SandoImport, type SandoImportProgress,
 } from "@/services/sando";
 import { sandoSchema, sandoImportReportSchema, type SandoSettings } from "@/services/sandoState";
 import { cloneConfig } from "@/services/configuration";
@@ -16,6 +16,7 @@ const endpoint = ref(""), savedEndpoint = ref("");
 const syncToggleVersion = ref(0);
 const error = ref(""), notice = ref(""), skipped = ref<string[]>([]), importing = ref<"hosts" | "rules" | null>(null);
 const acknowledgeMode = ref(false);
+const progress = ref<SandoImportProgress | null>(null);
 const config = computed(() => store.draft ?? store.state.data?.desired);
 const lastImportAt = computed(() => {
   const settings = config.value?.sando;
@@ -73,15 +74,18 @@ async function runImport(kind: "hosts" | "rules"): Promise<void> {
     return;
   }
   const controller = new AbortController();
-  request = controller; importing.value = kind;
+  request = controller; importing.value = kind; progress.value = null;
   const session = store.sessionVersion;
   const savedSource = config.value.sando?.api_url;
   try {
     const base = sandoBaseUrl(endpoint.value);
     const policy = newHostPolicy.value;
     const inventory = await getSandoDevices(base, controller.signal);
+    controller.signal.throwIfAborted();
     const connections = kind === "rules" ? await getSandoConnections(base, controller.signal, inventory.flatMap(device =>
-      device.ip6_address ? [device.ip_address, device.ip6_address] : [device.ip_address])) : undefined;
+      device.ip6_address ? [device.ip_address, device.ip6_address] : [device.ip_address]), value => {
+        if (!controller.signal.aborted && request === controller) progress.value = value;
+      }) : undefined;
     if (controller.signal.aborted || session !== store.sessionVersion) return;
     if (blocked.value || !config.value || modeChange.value && !acknowledgeMode.value) throw new Error(blocked.value || "The configuration changed. Review the policy mode and retry.");
     if (config.value.sando?.api_url !== savedSource) throw new Error("The saved Sando endpoint changed while fetching. Retry the import from the current endpoint; existing rules were retained.");
@@ -97,8 +101,12 @@ async function runImport(kind: "hosts" | "rules"): Promise<void> {
     controller.abort();
     error.value = cause instanceof Error ? cause.message : "Sando import failed.";
   } finally {
-    if (request === controller) { request = undefined; importing.value = null; }
+    if (request === controller) { request = undefined; importing.value = null; progress.value = null; }
   }
+}
+function stopImport(): void {
+  request?.abort();
+  notice.value = "Sando import stopped. No import changes were staged.";
 }
 function stageImport(result: SandoImport, base: string, kind: "hosts" | "rules"): void {
     result.config.sando = { ...sandoSchema.parse(result.config.sando ?? {}), api_url: base };
@@ -235,6 +243,34 @@ onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
       >
         Import rules
       </v-btn>
+      <v-btn
+        v-if="importing"
+        @click="stopImport"
+      >
+        Stop import
+      </v-btn>
+    </div>
+    <div
+      v-if="importing"
+      class="mb-4"
+    >
+      <div role="status">
+        <template v-if="progress">
+          {{ progress.completed }} / {{ progress.total }} localhosts completed<template v-if="progress.currentHost">
+            &mdash; {{ progress.currentHost }}
+          </template>
+        </template>
+        <template v-else>
+          Loading Sando host inventory...
+        </template>
+      </div>
+      <v-progress-linear
+        :indeterminate="!progress"
+        :model-value="progress ? (progress.total ? progress.completed / progress.total * 100 : 100) : 0"
+        aria-label="Sando import progress"
+        color="primary"
+        class="mt-2"
+      />
     </div>
     <v-alert
       v-if="skipped.length"

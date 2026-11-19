@@ -37,7 +37,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
   const immutable = computed(() => Boolean(original.value && store.state.data?.desired.interfaces.some(link => link.name === record(original.value).name)));
   function usesDhcpGateway(value: Record<string, unknown>): boolean {
     const config = editingConfig.value;
-    if (!config?.interfaces.some(link => link.name === value.interface && link.kind === "ethernet") ||
+    if (!config?.interfaces.some(link => link.name === value.interface && ["ethernet", "vlan"].includes(link.kind)) ||
       !config.dhcp_clients?.[String(value.interface)]) return false;
     try { return prefix(String(value.destination), true).family === "ipv4"; }
     catch { return false; }
@@ -238,8 +238,8 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
         }
         value.gateway = monitorGateway(value);
         if (!value.gateway) {
-          errors.value["editor.target"] = ["Select a probe target with an unambiguous route in table 254 on this interface."];
-          throw new Error("No unambiguous route to the probe target on the selected interface.");
+          errors.value["editor.target"] = ["In Static Routes, add or enable a route covering this probe IP on this interface; if routes tie, lower the intended route's metric."];
+          throw new Error("Cannot determine which gateway to use to reach this probe IP on the selected interface.");
         }
       }
       if (loopbacks && (value.kind !== "dummy" || value.name === "lo")) throw new Error("Only loopback interfaces other than lo can be managed here.");

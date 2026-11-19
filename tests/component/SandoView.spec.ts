@@ -27,6 +27,10 @@ const stubs = {
   VAlert: { template: '<div role="alert"><slot /></div>' },
   VTable: { template: "<table><slot /></table>" },
   VChip: { template: "<span><slot /></span>" },
+  VProgressLinear: {
+    props: ["modelValue", "indeterminate"],
+    template: '<div role="progressbar" :aria-valuenow="indeterminate ? undefined : modelValue" />',
+  },
 };
 let wrapper: ReturnType<typeof mount>;
 const devices = [{ ip_address: "192.0.2.20", dhcp_hostname: "desk", icon: "Computer", tags: "trusted" }];
@@ -49,6 +53,61 @@ beforeEach(() => {
 afterEach(() => { wrapper?.unmount(); useControllerStore().$dispose(); vi.restoreAllMocks(); localStorage.clear(); });
 
 describe("one-time Sando imports", () => {
+  it("shows inventory loading, then completed localhost progress and the current address, clearing it on success", async () => {
+    let resolveInventory!: (value: typeof devices) => void;
+    let resolveConnections!: (value: typeof connections) => void;
+    let report!: NonNullable<Parameters<typeof sando.getSandoConnections>[3]>;
+    vi.mocked(sando.getSandoDevices).mockReturnValue(new Promise(resolve => { resolveInventory = resolve; }));
+    vi.mocked(sando.getSandoConnections).mockImplementation((_endpoint, _signal, _hosts, onProgress) => {
+      report = onProgress!;
+      report({ completed: 0, total: 2, currentHost: "192.0.2.20" });
+      return new Promise(resolve => { resolveConnections = resolve; });
+    });
+    wrapper = mount(SandoView, { global: { stubs } }); await prepare();
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
+    await button("Import rules").trigger("click");
+    expect(wrapper.get('[role="status"]').text()).toBe("Loading Sando host inventory...");
+    expect(wrapper.get('[role="progressbar"]').attributes("aria-valuenow")).toBeUndefined();
+    expect(wrapper.findAll('[role="alert"]')).toHaveLength(0);
+    resolveInventory(devices); await flushPromises();
+    expect(wrapper.get('[role="status"]').text()).toContain("0 / 2 localhosts completed");
+    expect(wrapper.get('[role="status"]').text()).toContain("192.0.2.20");
+    report({ completed: 1, total: 2, currentHost: "2001:db8::20" }); await flushPromises();
+    expect(wrapper.get('[role="status"]').text()).toContain("1 / 2 localhosts completed");
+    expect(wrapper.get('[role="status"]').text()).toContain("2001:db8::20");
+    expect(wrapper.get('[role="progressbar"]').attributes("aria-valuenow")).toBe("50");
+    resolveConnections(connections); await flushPromises();
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
+    expect(wrapper.findAll("button").some(value => value.text() === "Stop import")).toBe(false);
+    expect(wrapper.text()).toContain("1 hosts and 1 rules staged");
+  });
+  it.each(["hosts", "rules"])("stops %s acquisition without staging partial results and allows retry", async kind => {
+    const store = useControllerStore();
+    let signal!: AbortSignal;
+    const pending = (_endpoint: string, value: AbortSignal) => {
+      signal = value;
+      return new Promise<never>((_resolve, reject) => {
+        value.addEventListener("abort", () => reject(value.reason), { once: true });
+      });
+    };
+    if (kind === "hosts") vi.mocked(sando.getSandoDevices).mockImplementationOnce(pending);
+    else vi.mocked(sando.getSandoConnections).mockImplementationOnce(pending);
+    wrapper = mount(SandoView, { global: { stubs } }); await prepare();
+    await button("Save endpoint").trigger("click"); await flushPromises();
+    const before = cloneConfig(store.draft!);
+    await button(`Import ${kind}`).trigger("click"); await flushPromises();
+    await button("Stop import").trigger("click"); await flushPromises();
+    expect(signal.aborted).toBe(true);
+    expect(cloneConfig(store.draft!)).toEqual(before);
+    expect(wrapper.text()).toContain("Sando import stopped. No import changes were staged.");
+    expect(wrapper.text()).not.toContain("Aborted");
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
+    expect(button(`Import ${kind}`).attributes("disabled")).toBeUndefined();
+    if (kind === "hosts") expect(sando.getSandoConnections).not.toHaveBeenCalled();
+    await button(`Import ${kind}`).trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("1 hosts and");
+    expect(wrapper.text()).not.toContain("Sando import stopped");
+  });
   it("shows the latest import in the saved system timezone and follows staged toggle changes", async () => {
     const store = useControllerStore();
     store.state.data!.desired.system = { hostname: "", domain: "", timezone: "America/Los_Angeles" };
@@ -292,6 +351,18 @@ describe("one-time Sando imports", () => {
     expect(localStorage.getItem("firewall-controller:sando")).toBeNull();
     expect(apply).not.toHaveBeenCalled();
   });
+  it("stages a valid IPv4 host and reports its malformed optional IPv6 address inline", async () => {
+    vi.mocked(sando.getSandoDevices).mockResolvedValue([{ ip_address: "10.2.10.2", ip6_address: "ff:80" }]);
+    wrapper = mount(SandoView, { global: { stubs } }); await prepare();
+    await button("Import hosts").trigger("click"); await flushPromises();
+    const draft = useControllerStore().draft!;
+    expect(draft.firewall.policies!.hosts[0]!.addresses).toEqual(["10.2.10.2"]);
+    expect(draft.sando!.hosts_import).toMatchObject({ status: "partial", imported_count: 1, skipped_count: 1 });
+    expect(wrapper.text()).toContain("1 hosts and 0 rules staged");
+    expect(wrapper.findAll('[role="alert"]').some(alert =>
+      alert.text().includes('10.2.10.2: optional IPv6 address "ff:80" omitted:'))).toBe(true);
+    expect(sando.getSandoConnections).not.toHaveBeenCalled();
+  });
   it("imports rules and missing hosts, reports unsupported candidates and skips repeat imports", async () => {
     vi.mocked(sando.getSandoConnections).mockResolvedValue([...connections, { ...connections[0]!, ignorelist_id: "icmp", protocol: 1 }]);
     wrapper = mount(SandoView, { global: { stubs } }); await prepare();
@@ -369,6 +440,9 @@ describe("one-time Sando imports", () => {
     wrapper = mount(SandoView, { global: { stubs } }); await prepare();
     await button("Import rules").trigger("click"); await flushPromises();
     expect(wrapper.text()).toContain("Sando returned HTTP 503");
+    expect(wrapper.find('[role="progressbar"]').exists()).toBe(false);
+    expect(wrapper.findAll("button").some(value => value.text() === "Stop import")).toBe(false);
+    expect(button("Import rules").attributes("disabled")).toBeUndefined();
     expect(useControllerStore().draft).toBeNull();
     expect(useControllerStore().state.data!.desired.sando!.rules_import).toBeNull();
     expect(wrapper.text()).not.toContain("rules staged");

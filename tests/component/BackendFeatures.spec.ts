@@ -422,6 +422,41 @@ describe("October 17 frontend workflows", () => {
     expect(upload.mock.calls[0]?.[1]?.aborted).toBe(true);
     resolve({ password_ref: "a".repeat(32) }); await flushPromises(); expect(useControllerStore().draft).toBeNull();
   });
+  it.each(["success", "failure"] as const)("shows device MQTT topics only after a successful status read (%s)", async outcome => {
+    let resolve!: (value: ReturnType<typeof mqttStatus>) => void, reject!: (reason: Error) => void;
+    vi.mocked(api.getMqttStatus).mockReturnValue(new Promise((done, fail) => { resolve = done; reject = fail; }));
+    const store = useControllerStore(), desired = cloneConfig(store.state.data!.desired);
+    const wrapper = await render(HomeAssistantView, "/settings/mqtt-streaming");
+    try {
+      expect(wrapper.findAll(".mqtt-topic")).toHaveLength(0);
+      expect(wrapper.text()).not.toContain("Unavailable");
+      if (outcome === "failure") {
+        reject(new Error("MQTT read denied")); await flushPromises();
+        expect(wrapper.text()).toContain("MQTT read denied");
+        expect(wrapper.findAll(".mqtt-topic")).toHaveLength(0);
+      } else {
+        const device_id = "0123456789abcdef0123456789abcdef";
+        resolve({ ...mqttStatus(), device_id }); await flushPromises();
+        expect(wrapper.findAll(".mqtt-topic").map(item => item.text())).toEqual([
+          `netcontrol/${device_id}/state`, `netcontrol/${device_id}/availability`,
+        ]);
+        expect(wrapper.text()).toContain("Retained online / offline status.");
+        store.mqttStatus.stale = true; store.mqttStatus.error = "MQTT read denied";
+        await flushPromises();
+        expect(wrapper.text()).toContain("MQTT read denied");
+        expect(wrapper.findAll(".mqtt-topic")).toHaveLength(0);
+        store.mqttStatus.stale = false; store.mqttStatus.error = null;
+        store.mqttStatus.data = { ...mqttStatus(), device_id: "b".repeat(32) };
+        await flushPromises();
+        expect(wrapper.findAll(".mqtt-topic").map(item => item.text())).toEqual([
+          `netcontrol/${"b".repeat(32)}/state`, `netcontrol/${"b".repeat(32)}/availability`,
+        ]);
+        store.connected = false; await flushPromises();
+        expect(wrapper.findAll(".mqtt-topic")).toHaveLength(0);
+      }
+      expect(store.draft).toBeNull(); expect(cloneConfig(store.state.data!.desired)).toEqual(desired);
+    } finally { wrapper.unmount(); }
+  });
   it("keeps the MQTT publisher row compact when broker timing is available", async () => {
     vi.mocked(api.getMqttStatus).mockResolvedValue({ ...mqttStatus(), enabled: true, state: "running", last_published_at_unix: Date.UTC(2026, 9, 24, 12, 34, 56) / 1000 });
     const wrapper = await render(HomeAssistantView, "/settings/home-assistant");
@@ -1055,10 +1090,11 @@ describe("October 17 frontend workflows", () => {
     expect(editor.props("form").gateway).toBeUndefined();
     wrapper.unmount();
   });
-  it("offers DHCP gateways only for draft Ethernet DHCP interfaces and IPv4, retaining invalid selections for inline correction", async () => {
+  it.each(["ethernet", "vlan"] as const)("offers DHCP gateways for draft %s clients and IPv4, retaining invalid selections for inline correction", async kind => {
     const store = useControllerStore();
     store.draft = cloneConfig(store.state.data!.desired);
-    store.draft.interfaces[0] = { ...store.draft.interfaces[0]!, kind: "ethernet", addresses: [] };
+    store.draft.interfaces[0] = kind === "ethernet" ? { ...store.draft.interfaces[0]!, kind, addresses: [] } :
+      { ...store.draft.interfaces[0]!, kind, addresses: [], vlan: { parent: "eth0", id: 20 } };
     store.draft.dhcp_clients = { lab0: dhcpClientSchema.parse({}) };
     const wrapper = await render(RoutesView, "/routes");
     await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
@@ -1412,7 +1448,8 @@ describe("October 17 frontend workflows", () => {
     for (const [key, value] of Object.entries({ name: "automatic", interface: "lab0", target: "198.51.100.1" })) editor.vm.$emit("change", key, value);
     await flushPromises();
     await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
-    expect(editor.props("errors")["editor.target"]).toEqual(["Select a probe target with an unambiguous route in table 254 on this interface."]);
+    expect(editor.props("errors")["editor.target"]).toEqual(["In Static Routes, add or enable a route covering this probe IP on this interface; if routes tie, lower the intended route's metric."]);
+    expect(editor.props("error")).toBe("Cannot determine which gateway to use to reach this probe IP on the selected interface.");
     expect(store.draft).toBeNull();
     wrapper.unmount();
   });
@@ -1431,8 +1468,8 @@ describe("October 17 frontend workflows", () => {
     store.connected = true; await flushPromises();
     await wrapper.get('input[type="checkbox"]').setValue(true);
     expect(store.draft?.gateway_monitors[0]?.enabled).toBe(false);
-    expect(wrapper.getComponent(ResourceRowEditor).props("error")).toContain("No unambiguous route");
-    expect(wrapper.text()).toContain("route in table 254");
+    expect(wrapper.getComponent(ResourceRowEditor).props("error")).toBe("Cannot determine which gateway to use to reach this probe IP on the selected interface.");
+    expect(wrapper.text()).toContain("In Static Routes, add or enable a route covering this probe IP");
     wrapper.unmount();
   });
   it("separates physical inventory from dummy interfaces and read-only loopback", async () => {
@@ -1869,6 +1906,50 @@ describe("October 17 frontend workflows", () => {
     for (const name of ["LAB0", "VLAN30", "WG0", "UNMANAGED20"]) expect(wrapper.find("tbody").text()).not.toContain(name);
     expect(wrapper.findAll("button").some(button => button.text() === "Add interface")).toBe(false);
     expect(wrapper.find('button[aria-label="Edit / stage"]').exists()).toBe(true);
+  });
+  it("stages VLAN DHCP/static mode without copying runtime leases or losing IPv6, identity or client options", async () => {
+    const store = useControllerStore(), desired = store.state.data!.desired;
+    desired.interfaces.push({
+      ...desired.interfaces[0]!, name: "vlan30", kind: "vlan", addresses: ["10.30.0.1/24", "2001:db8:30::1/64"],
+      vlan: { parent: "lab0", id: 30 },
+    });
+    const wrapper = await render(VLANsView, "/vlans");
+    const edit = async () => { await wrapper.get('button[aria-label="Edit / stage"]').trigger("click"); };
+    const save = async () => { await wrapper.findAll("button").find(button => button.text() === "Save")!.trigger("click"); await flushPromises(); };
+    await edit();
+    await wrapper.get('select[aria-label="IPv4 configuration"]').setValue("dhcp");
+    await save();
+    const client = dhcpClientSchema.parse({});
+    expect(store.draft!.dhcp_clients?.vlan30).toEqual(client);
+    expect(store.draft!.interfaces[1]).toMatchObject({ addresses: ["2001:db8:30::1/64"], vlan: { parent: "lab0", id: 30 } });
+    expect(desired.interfaces[1]!.addresses).toEqual(["10.30.0.1/24", "2001:db8:30::1/64"]);
+    expect(wrapper.find("tbody").text()).toContain("DHCP");
+    const committed = cloneConfig(store.draft!);
+    committed.dhcp_clients!.vlan30 = { ...client, hostname: "tagged-wan", route_metric: 123 };
+    store.discardDraft(); store.state.data = { ...store.state.data!, desired: committed };
+    store.runtime.data = { ...runtime(), dhcp_clients: { leases: { vlan30: {
+      client: committed.dhcp_clients!.vlan30!, address: "10.30.0.99/24", server: "10.30.0.254",
+      acquired_at: Date.now() / 1000, lifetime: 3600, renewal: 1800, rebinding: 3000,
+      routes: [], dns: ["192.0.2.53"], domain: "", mtu: null,
+    } }, errors: { vlan30: "DHCP renewal failed" } } };
+    await flushPromises();
+    expect(wrapper.find("tbody").text()).toContain("10.30.0.99/24");
+    expect(wrapper.get('[role="alert"]').text()).toContain("DHCP renewal failed");
+    expect(wrapper.find('button[aria-label="Reload DHCP vlan30"]').exists()).toBe(true);
+    await edit();
+    const address = wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!;
+    expect(address.props("field").disabled).toBe(true);
+    expect(address.props("modelValue")).toBe("10.30.0.99/24");
+    await save();
+    expect(store.draft!.dhcp_clients!.vlan30).toEqual(committed.dhcp_clients!.vlan30);
+    expect(store.draft!.interfaces[1]!.addresses).toEqual(["2001:db8:30::1/64"]);
+    await edit();
+    await wrapper.get('select[aria-label="IPv4 configuration"]').setValue("static");
+    wrapper.findAllComponents(FieldInput).find(field => field.props("field").key === "addresses")!.vm.$emit("update:modelValue", "10.30.0.2/24");
+    await flushPromises(); await save();
+    expect(store.draft!.dhcp_clients?.vlan30).toBeUndefined();
+    expect(store.draft!.interfaces[1]!.addresses).toEqual(["10.30.0.2/24", "2001:db8:30::1/64"]);
+    wrapper.unmount();
   });
   it.each(["lan", "wan", "unassigned"] as const)("creates VLANs inheriting parent role %s without altering other interfaces", async role => {
     const store = useControllerStore(), before = config(), submit = vi.spyOn(api, "submitPackage");

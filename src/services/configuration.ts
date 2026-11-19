@@ -625,7 +625,7 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
   for (const [name, client] of Object.entries(config.dhcp_clients ?? {})) {
     const path = `dhcp_clients.${name}`, page = interfacePage(name);
     const link = config.interfaces.find(item => item.name === name);
-    if (!link || link.kind !== "ethernet") issue(path, "DHCPv4 requires a configured Ethernet interface", page);
+    if (!link || !["ethernet", "vlan"].includes(link.kind)) issue(path, "DHCPv4 requires a configured Ethernet or VLAN interface", page);
     if (link?.dhcp_relay.enabled) issue(path, "DHCPv4 client and relay cannot be enabled together", page);
     if (link?.addresses.some(address => { try { return prefix(address, false).family === "ipv4"; } catch { return false; } })) {
       issue(path, "DHCPv4 cannot coexist with static IPv4 addresses; static IPv6 is allowed", page);
@@ -739,9 +739,9 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     const toBlackhole = Boolean(blackholeName) && route.interface === blackholeName;
     if (!interfaces.has(route.interface) && !toBlackhole) issue(`${path}.interface`, "Select a gateway interface", page);
     if (toBlackhole && route.gateway) issue(`${path}.gateway`, "A blackhole route cannot have a gateway", page);
-    if (route.gateway === "dhcp" && (config.interfaces.find(link => link.name === route.interface)?.kind !== "ethernet" ||
+    if (route.gateway === "dhcp" && (!config.interfaces.some(link => link.name === route.interface && ["ethernet", "vlan"].includes(link.kind)) ||
       !config.dhcp_clients?.[route.interface])) {
-      issue(`${path}.gateway`, "DHCP gateways require DHCPv4 on the selected managed Ethernet interface", page);
+      issue(`${path}.gateway`, "DHCP gateways require DHCPv4 on the selected managed Ethernet or VLAN interface", page);
     }
     if (route.table !== 254) bound(route.table, 10000, 19999, `${path}.table`, page);
     bound(route.metric, 0, 2147483647, `${path}.metric`, page);

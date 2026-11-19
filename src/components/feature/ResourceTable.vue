@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import GatewayStatisticsPanel from "@/components/feature/GatewayStatisticsPanel.vue";
 import ServiceWorkerStatus from "@/components/feature/ServiceWorkerStatus.vue";
+import DHCPRetryButton from "@/components/feature/DHCPRetryButton.vue";
 import { useTimestamps } from "@/composables/useTimestamps";
 import { useControllerStore } from "@/stores/controller";
 import { configSchema, type DiscoveredInterface } from "@/types/domain";
@@ -89,7 +90,11 @@ function cell(value: Record<string, unknown>, key: string, discovered?: Discover
     if (isSystemLoopback(discovered)) return discovered?.addressing_type === "static" ? "Static" : "—";
     return discovered?.ownership === "unmanaged" ? "—" : rowMode(value);
   }
-  if (props.vlan && key === "addresses") return (Array.isArray(value.addresses) ? value.addresses.filter(address => !String(address).includes(":")).join(", ") : "") || "None";
+  if (props.vlan && key === "addresses") {
+    if (rowMode(value) === "DHCP") return (store.state.data?.desired.dhcp_clients?.[String(value.name)]
+      ? store.runtime.data?.dhcp_clients?.leases[String(value.name)]?.address : undefined) || "DHCP";
+    return (Array.isArray(value.addresses) ? value.addresses.filter(address => !String(address).includes(":")).join(", ") : "") || "None";
+  }
   if (physical.value) {
     if (key === "name") return String(value.name);
     if (key === "display_name") return String(record(value.metadata).display_name || "—");
@@ -343,6 +348,13 @@ function staged(value: unknown): string {
             >
               {{ cell(row.value, 'role') }}
             </div>
+            <p
+              v-if="vlan && key === 'addresses' && rowMode(row.value) === 'DHCP' && store.runtime.data?.dhcp_clients?.errors[String(row.value.name)]"
+              role="alert"
+              class="text-error text-caption"
+            >
+              {{ store.runtime.data.dhcp_clients.errors[String(row.value.name)] }}
+            </p>
             <v-chip
               v-if="section === 'routes' && key === 'interface' && row.value.interface === blackholeTarget?.name"
               size="x-small"
@@ -493,6 +505,10 @@ function staged(value: unknown): string {
                 variant="text"
                 :disabled="disabled"
                 @click.stop="$emit('edit', row.value)"
+              />
+              <DHCPRetryButton
+                v-if="vlan"
+                :name="String(row.value.name)"
               />
               <v-btn
                 v-if="section === 'interfaces' && !wireguard && row.value.kind === 'wireguard'"
