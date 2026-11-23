@@ -33,17 +33,29 @@ const blocked = computed(() => settingsBlocked.value ||
 const blockedNotice = computed(() => store.connecting && !store.connected ? "" :
   store.readOnlyNotice || (store.state.data ? blocked.value : store.state.error ?? ""));
 const disabled = computed(() => Boolean(importing.value || blocked.value || !endpoint.value.trim() || modeChange.value && !acknowledgeMode.value));
+const automaticPolicies = computed(() => Boolean(config.value?.sando?.policy_sync_enabled ||
+  store.state.data?.desired.sando?.policy_sync_enabled));
 let request: AbortController | undefined;
 watch(() => config.value?.sando?.api_url ?? "", value => {
   if (endpoint.value === savedEndpoint.value) endpoint.value = value;
   savedEndpoint.value = value;
 }, { immediate: true });
 watch([endpoint, savedEndpoint], () => { store.editorDirty = endpoint.value !== savedEndpoint.value; });
-function stageSettings(update: Partial<Pick<SandoSettings, "api_url" | "sync_enabled">>): void {
+function stageSettings(update: Partial<Pick<SandoSettings, "api_url" | "sync_enabled" | "policy_sync_enabled">>): void {
   if (settingsBlocked.value || !config.value) throw new Error(settingsBlocked.value || "Configuration unavailable.");
   const candidate = cloneConfig(config.value);
   candidate.sando = sandoSchema.parse({ ...candidate.sando, ...update });
   store.stage(candidate);
+}
+function setPolicySync(enabled: boolean | null): void {
+  error.value = ""; notice.value = ""; skipped.value = [];
+  try {
+    if (typeof enabled !== "boolean") throw new Error("Choose enabled or disabled for automatic policy sync.");
+    stageSettings({ policy_sync_enabled: enabled });
+  } catch (cause) {
+    syncToggleVersion.value++;
+    error.value = `Unable to change automatic Sando policy sync: ${cause instanceof Error ? cause.message : "configuration unavailable"}`;
+  }
 }
 function setSync(enabled: boolean | null): void {
   error.value = ""; notice.value = ""; skipped.value = [];
@@ -69,8 +81,9 @@ function saveEndpoint(): void {
 }
 async function runImport(kind: "hosts" | "rules"): Promise<void> {
   error.value = ""; notice.value = ""; skipped.value = [];
-  if (disabled.value || !config.value) {
-    error.value = blocked.value || "Enter a Sando endpoint and acknowledge the policy mode change before importing.";
+  if (disabled.value || !config.value || kind === "rules" && automaticPolicies.value) {
+    error.value = kind === "rules" && automaticPolicies.value ? "Disable automatic policy sync and save before importing rules." :
+      blocked.value || "Enter a Sando endpoint and acknowledge the policy mode change before importing.";
     return;
   }
   const controller = new AbortController();
@@ -88,6 +101,7 @@ async function runImport(kind: "hosts" | "rules"): Promise<void> {
       }) : undefined;
     if (controller.signal.aborted || session !== store.sessionVersion) return;
     if (blocked.value || !config.value || modeChange.value && !acknowledgeMode.value) throw new Error(blocked.value || "The configuration changed. Review the policy mode and retry.");
+    if (kind === "rules" && automaticPolicies.value) throw new Error("Automatic policy sync was enabled while fetching. No import changes were staged.");
     if (config.value.sando?.api_url !== savedSource) throw new Error("The saved Sando endpoint changed while fetching. Retry the import from the current endpoint; existing rules were retained.");
     // Merge into the latest shared draft, not a snapshot taken before the network requests.
     if (kind === "rules") {
@@ -210,6 +224,16 @@ onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
         Last import ({{ timeZone }}): {{ formatTimestamp(lastImportAt, "No imports yet") }}
       </v-chip>
     </div>
+    <v-switch
+      :key="'policies-' + String(config?.sando?.policy_sync_enabled ?? false) + syncToggleVersion"
+      :model-value="config?.sando?.policy_sync_enabled ?? false"
+      label="Automatically sync policies"
+      :disabled="Boolean(importing) || Boolean(settingsBlocked)"
+      color="primary"
+      hide-details
+      class="mb-4"
+      @update:model-value="setPolicySync"
+    />
     <v-select
       v-model="newHostPolicy"
       label="New host default policy"
@@ -237,7 +261,7 @@ onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
       </v-btn>
       <v-btn
         color="primary"
-        :disabled="disabled"
+        :disabled="disabled || automaticPolicies"
         :loading="importing === 'rules'"
         @click="runImport('rules')"
       >

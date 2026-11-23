@@ -935,7 +935,7 @@ or appliance acceptance.
 | `/firewall` | PROTECTED HOSTS: searchable host navigation beside ordered outbound rules/default action; legacy forwarding editor when host policies are absent |
 | `/firewall/ingress` | INTERFACE RULES: first Firewall/NAT page, with an interface selector and ordered ingress override rules |
 | `/settings`, `/settings/general` | Host name, domain label, time zone, global IPv6 policy, IPv4 ICMP exception, and one DHCP DNS override control for all currently configured interfaces; settings join the shared draft |
-| `/firewall/sando` | Firewall/NAT > SANDO IMPORT: Sando endpoint, automatic host/threat-score sync toggle, and one-time host and approved-connection imports into the shared draft; old `/settings/sando` links redirect here |
+| `/firewall/sando` | Firewall/NAT > SANDO IMPORT: Sando endpoint, independent metadata/policy sync toggles, and one-time host and approved-connection imports into the shared draft; old `/settings/sando` links redirect here |
 | `/services/dynamic-dns` | Services > Dynamic DNS: Azure DNS entries and status; old `/settings/dynamic-dns` links redirect here |
 | `/config/upgrade` | Current version, update availability, Check for upgrade and last checked; old `/settings/upgrade` links redirect here |
 | `/settings/mqtt-streaming` | MQTT STREAMING (old `/settings/home-assistant` redirects here): MQTT broker, source interface, publish interval and write-only password replacement; shared draft and confirmed publisher status |
@@ -1511,7 +1511,19 @@ a saved endpoint. Only committed settings drive the daemon's hourly metadata
 worker; pending or rolled-back changes do not start or stop it. Disabling cancels
 automatic acquisition without removing imported hosts or rules. Automatic
 Protected Hosts metadata lookups also follow the committed flag and source.
-Sync never automatically changes firewall hosts, rules or verdicts.
+Metadata sync never automatically changes firewall hosts, rules or verdicts.
+**Automatically sync policies** independently stages `config.sando.policy_sync_enabled`
+(default false), using the existing SAVE/confirm flow and requiring a saved endpoint.
+Changing this flag in either direction, or changing the source while it is enabled,
+also requires `firewall.write`. Deploy the matching
+[November 23 backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-23.md)
+before using it. The daemon polls every five minutes and replaces only existing-host
+Sando-owned outbound rules, skipping unsupported entries; empty/all-skipped lists
+remove prior Sando-owned rules. Manual and other-provider rules are preserved.
+**Import rules** is disabled while automatic policies are enabled in either saved
+settings or the draft; save a disable change before importing manually.
+Background revisions use the existing stale-draft SAVE protection; compare and
+restart a stale draft rather than overwrite newer rules.
 **Import hosts** and **Import rules** remain available when sync is disabled.
 Each inventory or per-localhost connection request has its own two-minute timeout,
 including the response download; there is no overall import deadline.

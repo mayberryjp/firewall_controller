@@ -26,7 +26,7 @@ const inventory = (): SandoDevice[] => [
 ];
 function enableSando(): void {
   useControllerStore().state.data!.desired.sando = {
-    api_url: "https://sando.example", sync_enabled: true, hosts_import: null, rules_import: null,
+    api_url: "https://sando.example", sync_enabled: true, policy_sync_enabled: false, hosts_import: null, rules_import: null,
   };
 }
 const box = { template: "<div><slot /></div>" };

@@ -227,7 +227,7 @@ describe("PROTECTED HOSTS host navigation", () => {
   });
   it("uses Sando descriptions and device types, searches without changing selection, and does not stage metadata", async () => {
     const store = useControllerStore();
-    store.state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: true, hosts_import: null, rules_import: null };
+    store.state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: true, policy_sync_enabled: false, hosts_import: null, rules_import: null };
     vi.spyOn(sando, "getSandoDevices").mockResolvedValue([
       sando.sandoDeviceSchema.parse({ ip_address: "192.0.2.20", local_description: "Unifi", device_type: "wifi_ap", icon: "WIFI_ACCESS_POINT", threat_score: 0 }),
       sando.sandoDeviceSchema.parse({ ip_address: "198.51.100.10", local_description: "Alpha", icon: "Server" }),
@@ -250,7 +250,7 @@ describe("PROTECTED HOSTS host navigation", () => {
     expect(stage).not.toHaveBeenCalled(); expect(store.draft).toBeNull();
   });
   it("shows an inline inventory error and keeps configured hosts usable", async () => {
-    useControllerStore().state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: true, hosts_import: null, rules_import: null };
+    useControllerStore().state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: true, policy_sync_enabled: false, hosts_import: null, rules_import: null };
     vi.spyOn(sando, "getSandoDevices").mockRejectedValue(new Error("Sando unavailable"));
     wrapper = mount(FirewallView, { global: { stubs } }); await flushPromises();
     expect(wrapper.text()).toContain("Sando unavailable");
@@ -259,7 +259,7 @@ describe("PROTECTED HOSTS host navigation", () => {
   });
   it("uses only committed sync settings and discards an in-flight metadata result after disabling", async () => {
     const store = useControllerStore();
-    store.state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: false, hosts_import: null, rules_import: null };
+    store.state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: false, policy_sync_enabled: false, hosts_import: null, rules_import: null };
     let finish!: (devices: sando.SandoDevice[]) => void;
     let signal: AbortSignal | undefined;
     const inventory = vi.spyOn(sando, "getSandoDevices").mockImplementation((_endpoint, requestSignal) => {

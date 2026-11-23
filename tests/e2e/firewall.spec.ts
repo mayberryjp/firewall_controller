@@ -15,7 +15,7 @@ async function expectFullHeightHosts(page: Page): Promise<void> {
 
 test("PROTECTED HOSTS browses searchable hosts without staging changes and fits compact screens", async ({ page, isMobile }, testInfo) => {
   const initialConfig = hostPolicyConfig();
-  initialConfig.sando = { api_url: "https://sando.example", sync_enabled: true, hosts_import: null, rules_import: null };
+  initialConfig.sando = { api_url: "https://sando.example", sync_enabled: true, policy_sync_enabled: false, hosts_import: null, rules_import: null };
   await page.route("https://sando.example/api/localhosts", route => route.fulfill({ json: [
     { ip_address: "192.0.2.20", local_description: "Unifi", device_type: "wifi_ap", icon: "WIFI_ACCESS_POINT", threat_score: 0 },
     { ip_address: "198.51.100.10", local_description: "Alpha server", icon: "Server", threat_score: 25 },

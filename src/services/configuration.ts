@@ -954,6 +954,17 @@ export function requiredPermissions(diff: Difference[]): string[] {
   };
   for (const change of diff) {
     if (map[change.area]) permissions.add(map[change.area]!);
+    if (change.area === "sando") {
+      const before = change.before && typeof change.before === "object" ? change.before : {};
+      const after = change.after && typeof change.after === "object" ? change.after : {};
+      const beforeEnabled = "policy_sync_enabled" in before && before.policy_sync_enabled === true;
+      const afterEnabled = "policy_sync_enabled" in after && after.policy_sync_enabled === true;
+      const beforeUrl = "api_url" in before ? before.api_url : "";
+      const afterUrl = "api_url" in after ? after.api_url : "";
+      if (beforeEnabled !== afterEnabled || (beforeEnabled || afterEnabled) && beforeUrl !== afterUrl) {
+        permissions.add("firewall.write");
+      }
+    }
     if (change.area === "interfaces") {
       const before = change.before && typeof change.before === "object" && "wireguard" in change.before ? change.before.wireguard : undefined;
       const after = change.after && typeof change.after === "object" && "wireguard" in change.after ? change.after.wireguard : undefined;

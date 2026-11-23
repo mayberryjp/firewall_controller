@@ -21,10 +21,11 @@ export const sandoImportReportSchema = z.object({
 export const sandoSchema = z.object({
   api_url: z.union([z.literal(""), sandoSourceUrlSchema]).default(""),
   sync_enabled: z.boolean().default(false),
+  policy_sync_enabled: z.boolean().default(false),
   hosts_import: sandoImportReportSchema.nullable().default(null),
   rules_import: sandoImportReportSchema.nullable().default(null),
 }).strict().superRefine((value, context) => {
-  if (value.sync_enabled && !value.api_url) context.addIssue({
+  if ((value.sync_enabled || value.policy_sync_enabled) && !value.api_url) context.addIssue({
     code: z.ZodIssueCode.custom, path: ["api_url"],
     message: "Save a Sando API endpoint before enabling automatic sync.",
   });

@@ -13,11 +13,11 @@ describe("saved Sando contract", () => {
     const before = config(), after = cloneConfig(before);
     expect(configSchema.parse(before).sando).toBeUndefined();
     after.sando = sandoSchema.parse({});
-    expect(after.sando).toEqual({ api_url: "", sync_enabled: false, hosts_import: null, rules_import: null });
+    expect(after.sando).toEqual({ api_url: "", sync_enabled: false, policy_sync_enabled: false, hosts_import: null, rules_import: null });
     expect(normalize(before)).toEqual(normalize(after)); expect(differences(before, after)).toEqual([]);
   });
   it("preserves reports/provenance through URL changes, submission clones, diffs and undo", () => {
-    const before = config(); before.sando = { api_url: "https://sando.example/proxy", sync_enabled: false, hosts_import: report(), rules_import: null };
+    const before = config(); before.sando = { api_url: "https://sando.example/proxy", sync_enabled: false, policy_sync_enabled: false, hosts_import: report(), rules_import: null };
     const after = cloneConfig(before); after.sando!.api_url = "";
     const changes = differences(before, after);
     expect(changes).toHaveLength(1); expect(changes[0]!.area).toBe("sando");
@@ -41,7 +41,7 @@ describe("saved Sando contract", () => {
   it("accepts empty success and partial reports and links validation to Sando", () => {
     expect(sandoImportReportSchema.parse(report())).toEqual(report());
     expect(sandoImportReportSchema.safeParse({ ...report(), status: "partial", imported_count: 1, skipped_count: 1 }).success).toBe(true);
-    const candidate = config(); candidate.sando = { api_url: "bad", sync_enabled: false, hosts_import: null, rules_import: null };
+    const candidate = config(); candidate.sando = { api_url: "bad", sync_enabled: false, policy_sync_enabled: false, hosts_import: null, rules_import: null };
     expect(validateConfig(candidate)).toContainEqual(expect.objectContaining({ page: "/firewall/sando", path: "sando.api_url" }));
   });
   it.each([null, "true", 1])("rejects a non-boolean sync flag %j", sync_enabled => {
@@ -56,5 +56,29 @@ describe("saved Sando contract", () => {
     expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "sando.write"]);
     after.sando!.api_url = "";
     expect(validateConfig(after)).toContainEqual(expect.objectContaining({ page: "/firewall/sando", path: "sando.api_url" }));
+  });
+  it.each([null, "true", 1])("rejects a non-boolean policy sync flag %j", policy_sync_enabled => {
+    expect(sandoSchema.safeParse({ api_url: "https://sando.example", policy_sync_enabled }).success).toBe(false);
+  });
+  it.each([true, false])("preserves independent policy sync %s and requires firewall authority for either direction", enabled => {
+    const before = config();
+    before.sando = sandoSchema.parse({ api_url: "https://sando.example", sync_enabled: false, policy_sync_enabled: !enabled });
+    const after = cloneConfig(before); after.sando!.policy_sync_enabled = enabled;
+    expect(validateConfig(after)).toEqual([]);
+    expect(cloneConfig(after).sando).toEqual({ ...before.sando, policy_sync_enabled: enabled });
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "sando.write", "firewall.write"]);
+    after.sando!.api_url = "";
+    if (enabled) expect(validateConfig(after)).toContainEqual(expect.objectContaining({ path: "sando.api_url" }));
+  });
+  it("requires a source for policy sync and firewall authority for source changes only when policies are enabled", () => {
+    expect(sandoSchema.safeParse({ policy_sync_enabled: true }).success).toBe(false);
+    for (const policy_sync_enabled of [true, false]) {
+      const before = config();
+      before.sando = sandoSchema.parse({ api_url: "https://sando.example", policy_sync_enabled });
+      const after = cloneConfig(before); after.sando!.api_url = "https://other.example";
+      expect(requiredPermissions(differences(before, after))).toEqual([
+        "transactions.write", "sando.write", ...(policy_sync_enabled ? ["firewall.write"] : []),
+      ]);
+    }
   });
 });

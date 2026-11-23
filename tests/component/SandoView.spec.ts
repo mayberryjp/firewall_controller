@@ -201,6 +201,67 @@ describe("one-time Sando imports", () => {
     useControllerStore().busy = true;
     wrapper = mount(SandoView, { global: { stubs } });
     expect(wrapper.get('[role="switch"]').attributes("disabled")).toBeDefined();
+    expect(wrapper.get('input[aria-label="Automatically sync policies"]').attributes("disabled")).toBeDefined();
+  });
+  it.each([true, false])("stages policy sync %s independently without requests or informational messages", async enabled => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example", policy_sync_enabled: !enabled });
+    const before = cloneConfig(store.state.data!.desired), apply = vi.spyOn(store, "apply");
+    wrapper = mount(SandoView, { global: { stubs } });
+    await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(enabled); await flushPromises();
+    expect(store.draft).toEqual({ ...before, sando: { ...before.sando, policy_sync_enabled: enabled } });
+    expect(cloneConfig(store.state.data!.desired)).toEqual(before);
+    expect(sando.getSandoDevices).not.toHaveBeenCalled();
+    expect(sando.getSandoConnections).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[role="alert"], h2, p')).toHaveLength(0);
+    store.discardDraft(); await flushPromises();
+    expect(wrapper.get('input[aria-label="Automatically sync policies"]').element).toHaveProperty("checked", !enabled);
+  });
+  it.each([[false, false], [false, true], [true, false], [true, true]])("keeps metadata %s and policies %s independent and gates only rule imports", async (sync_enabled, policy_sync_enabled) => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example", sync_enabled, policy_sync_enabled });
+    store.state.data!.desired.firewall.policies = { hosts: [], interfaces: [] };
+    wrapper = mount(SandoView, { global: { stubs } });
+    expect(wrapper.get('input[aria-label="Automatic host and threat-score sync"]').element).toHaveProperty("checked", sync_enabled);
+    expect(wrapper.get('input[aria-label="Automatically sync policies"]').element).toHaveProperty("checked", policy_sync_enabled);
+    expect(button("Import hosts").attributes("disabled")).toBeUndefined();
+    expect(button("Import rules").attributes("disabled") !== undefined).toBe(policy_sync_enabled);
+    if (policy_sync_enabled) {
+      await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(false); await flushPromises();
+      expect(button("Import rules").attributes("disabled")).toBeDefined();
+      store.state.data!.desired = cloneConfig(store.draft!); store.discardDraft(); await flushPromises();
+      expect(button("Import rules").attributes("disabled")).toBeUndefined();
+    }
+  });
+  it("requires a saved URL for automatic policies without creating a draft or masking validation", async () => {
+    const store = useControllerStore();
+    wrapper = mount(SandoView, { global: { stubs } });
+    await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(true); await flushPromises();
+    expect(store.draft).toBeNull();
+    expect(wrapper.get('input[aria-label="Automatically sync policies"]').element).toHaveProperty("checked", false);
+    expect(wrapper.text()).toContain("Save a Sando API endpoint");
+    await wrapper.get('input[aria-label="Sando API endpoint"]').setValue("https://sando.example");
+    await button("Save endpoint").trigger("click"); await flushPromises();
+    await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(true); await flushPromises();
+    await wrapper.get('input[aria-label="Sando API endpoint"]').setValue("");
+    await button("Save endpoint").trigger("click"); await flushPromises();
+    expect(store.draft!.sando).toMatchObject({ api_url: "https://sando.example", policy_sync_enabled: true });
+    expect(wrapper.text()).toContain("Save a Sando API endpoint");
+  });
+  it("preserves the reviewed draft and blocks SAVE after an automatic revision change", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+    wrapper = mount(SandoView, { global: { stubs } });
+    await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(true); await flushPromises();
+    const draft = cloneConfig(store.draft!), base = store.baseRevision;
+    store.state.data!.revision = "2026.11.23.4";
+    store.state.data!.desired.sando!.policy_sync_enabled = true;
+    await flushPromises();
+    expect(store.draft).toEqual(draft);
+    expect(store.baseRevision).toBe(base);
+    expect(store.canApply).toBe(false);
+    expect(store.applyBlockedReason).toContain("differs from committed revision");
   });
   it("automatically stages imported rules and enables SAVE without another review or applying", async () => {
     const store = useControllerStore();
@@ -308,7 +369,7 @@ describe("one-time Sando imports", () => {
     const store = useControllerStore();
     const report = { source_url: "https://old.example/proxy", import_count: 7, last_import_at: "2026-10-30T01:02:03.123456789Z",
       status: "partial" as const, imported_count: 3, skipped_count: 2 };
-    store.state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: false, hosts_import: report, rules_import: report };
+    store.state.data!.desired.sando = { api_url: "https://sando.example", sync_enabled: false, policy_sync_enabled: false, hosts_import: report, rules_import: report };
     wrapper = mount(SandoView, { global: { stubs } });
     expect(wrapper.findAll("h2")).toHaveLength(0);
     expect(wrapper.findAll("p")).toHaveLength(0);

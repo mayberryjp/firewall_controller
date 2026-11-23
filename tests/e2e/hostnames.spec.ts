@@ -13,7 +13,7 @@ test(`firewall telemetry truncates ${useInventory ? "local descriptions" : "save
   const destinationName = `Database ${"long-hostname-".repeat(7)}`.trim();
   config.firewall.policies!.hosts[1]!.metadata = { display_name: destinationName, description: "Not displayed" };
   if (useInventory) {
-    config.sando = { api_url: "https://sando.example", sync_enabled: true, hosts_import: null, rules_import: null };
+    config.sando = { api_url: "https://sando.example", sync_enabled: true, policy_sync_enabled: false, hosts_import: null, rules_import: null };
     config.firewall.policies!.hosts[0]!.metadata!.display_name = "Imported DNS tablet";
     config.firewall.policies!.hosts[1]!.metadata!.display_name = "Imported DNS database";
     config.firewall.policies!.hosts.push({ id: "unknown-device", name: "Imported DNS unknown", addresses: ["203.0.113.20"], policy: "drop", rules: [] });
