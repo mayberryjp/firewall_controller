@@ -4,8 +4,9 @@ import { config, runtime } from "../fixtures";
 import { relayStatistics, relayLog, persistentLog } from "../serviceTelemetryFixtures";
 import { interfaceCapabilitySnapshot } from "../diagnosticsFixtures";
 
-async function connect(page: Page, { physicalInterface = false } = {}) {
+async function connect(page: Page, { physicalInterface = false, collector = "127.0.0.1:2055" } = {}) {
   const initialConfig = config();
+  initialConfig.softflowd[0]!.collector = collector;
   if (physicalInterface) {
     initialConfig.interfaces.push({
       ...initialConfig.interfaces[0]!, name: "eno1", kind: "ethernet", up: true, addresses: [],
@@ -115,12 +116,25 @@ test("new diagnostics are reachable and log streams remain separate", async ({ p
 });
 
 test("NetFlow adds just two counters to the existing export rows", async ({ page }, testInfo) => {
-  await connect(page); await page.goto("/services/netflow");
+  await connect(page, { collector: "[2001:db8:1234:5678:90ab:cdef:1234:5678]:65535" }); await page.goto("/services/netflow");
   const table = page.locator(".compact-interface-table");
   await expect(table.locator("thead th")).toContainText(["Flow records", "Export datagrams"]);
   const row = table.locator("tbody tr").first();
   await expect(row.locator("td").nth(7)).toContainText("30");
   await expect(row.locator("td").nth(8)).toContainText("1");
+  const collectorCell = row.locator("td.column-collector");
+  await expect(collectorCell).toHaveCSS("white-space", "nowrap");
+  const collectorFits = await collectorCell.evaluate(cell => {
+    const text = Array.from(cell.childNodes).find(node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
+    if (!text) throw new Error("Collector text is missing");
+    const range = document.createRange();
+    range.selectNode(text);
+    const bounds = range.getBoundingClientRect(), cellBounds = cell.getBoundingClientRect();
+    return range.getClientRects().length === 1 && bounds.left >= cellBounds.left && bounds.right <= cellBounds.right;
+  });
+  expect(collectorFits).toBe(true);
+  await expect(table.locator("th.column-export_version")).toHaveCSS("text-align", "center");
+  await expect(row.locator("td.column-export_version")).toHaveCSS("text-align", "center");
   await expect(page.getByRole("region", { name: "NetFlow/IPFIX", exact: true }).locator("table")).toHaveCount(1);
   if (testInfo.project.name === "chromium") {
     const nameColumn = await table.locator("th.column-name").boundingBox();

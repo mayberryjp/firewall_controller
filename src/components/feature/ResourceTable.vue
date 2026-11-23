@@ -295,7 +295,7 @@ function staged(value: unknown): string {
           <td
             v-for="key in visibleColumns"
             :key="key"
-            :class="{ 'interface-addresses': key === 'addresses' || key === 'active_addresses', 'ipv4-cell': physical && key === 'addresses' }"
+            :class="{ 'interface-addresses': key === 'addresses' || key === 'active_addresses', 'ipv4-cell': physical && key === 'addresses', 'column-collector': section === 'softflowd' && key === 'collector', 'column-export_version': section === 'softflowd' && key === 'export_version' }"
             :title="physical && key === 'name' ? `${cell(row.value, 'kind', row.discovered)} · ${row.discovered?.ownership ?? 'managed'}` : undefined"
           >
             <span
@@ -659,7 +659,10 @@ function staged(value: unknown): string {
 .compact-interface-table :deep(.v-btn__content) { min-width: 0; white-space: normal; }
 .compact-interface-table :deep(table) { width: 100%; min-width: 0; table-layout: fixed; }
 .compact-interface-table :deep(.column-name) { width: 16%; }
+.netflow-table :deep(table) { table-layout: auto; }
 .netflow-table :deep(.column-name) { width: 104px; }
+.netflow-table :deep(.column-collector) { white-space: nowrap; overflow-wrap: normal; }
+.netflow-table :deep(.column-export_version) { text-align: center; }
 .compact-interface-table :deep(.column-role) { width: 104px; }
 .compact-interface-table :deep(.column-up) { width: 88px; }
 .compact-interface-table :deep(.column-mtu) { width: 76px; }
@@ -715,6 +718,7 @@ function staged(value: unknown): string {
   .compact-interface-table :deep(.ipv4-cell),
   .compact-interface-table :deep(td[colspan]) { grid-column: 1 / -1; }
   .loopback-table :deep(.role-cell) { grid-column: 1 / -1; }
+  .netflow-table :deep(td.column-collector) { grid-column: 1 / -1; }
   .compact-interface-table :deep(.compact-cell-label) { display: block; margin-bottom: 2px; color: rgba(var(--v-theme-on-surface), 0.6); font-size: 12px; }
 }
 </style>
