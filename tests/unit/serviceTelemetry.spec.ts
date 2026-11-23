@@ -3,9 +3,24 @@ import { LosslessNumber } from "lossless-json";
 import { dhcpRelayStatisticsSchema, dhcpRelayLogPageSchema } from "@/services/dhcpDiagnostics";
 import { persistentLogPageSchema } from "@/services/logs";
 import { numericCounterSchema, uint64Schema } from "@/services/counters";
+import { serviceStatusSchema } from "@/types/domain";
 import { relayStatistics, relayLog, persistentLog } from "../serviceTelemetryFixtures";
 
 describe("service telemetry contracts", () => {
+  it("preserves flow sampling, byte budgets and exact raw counters", () => {
+    const worker = {
+      name: "capture", state: "running", export_version: 10, sampling_rate: 100, sampling_metadata: true,
+      max_message_size: 1200, message_size_limit: 548,
+      exported_flow_packets: "3", exported_flow_bytes: "18446744073709551615",
+      exported_packets: "2", exported_bytes: "264", exported_flows: 0, statistics_complete: true,
+    };
+    expect(serviceStatusSchema.parse(worker)).toEqual({ ...worker, exported_flows: "0" });
+    const unavailable = serviceStatusSchema.parse({ name: "capture", state: "disabled" });
+    for (const key of ["sampling_rate", "max_message_size", "message_size_limit"]) expect(unavailable).not.toHaveProperty(key);
+  });
+  it.each([1, 9])("rejects retired runtime export version %s", export_version => {
+    expect(serviceStatusSchema.safeParse({ name: "capture", state: "running", export_version }).success).toBe(false);
+  });
   it("preserves u64 counter boundaries without rounding", () => {
     expect(uint64Schema.parse("18446744073709551615")).toBe("18446744073709551615");
     expect(numericCounterSchema.parse(new LosslessNumber("18446744073709551615"))).toBe("18446744073709551615");

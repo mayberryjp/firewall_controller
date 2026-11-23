@@ -15,7 +15,7 @@ async function connect(page: Page, { physicalInterface = false } = {}) {
     { host: "logs.example", port: 514, transport: "udp" },
     { host: "backup.example", port: 6514, transport: "tls" },
   ] };
-  await mockBackend(page, { initialConfig });
+  const backend = await mockBackend(page, { initialConfig });
   await page.route("**/api/v1/**", async route => {
     const url = new URL(route.request().url()), path = url.pathname;
     if (path.endsWith("/statistics/dhcp-relay")) return route.fulfill({ json: relayStatistics() });
@@ -52,6 +52,7 @@ async function connect(page: Page, { physicalInterface = false } = {}) {
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  return backend;
 }
 
 test("DHCP counters stay in the existing compact relay rows", async ({ page }, testInfo) => {
@@ -126,6 +127,62 @@ test("NetFlow adds just two counters to the existing export rows", async ({ page
     expect(nameColumn!.width).toBeLessThanOrEqual(104);
   }
   await page.screenshot({ path: testInfo.outputPath("netflow-inline-counters.png"), fullPage: true, animations: "disabled" });
+});
+
+test("NetFlow keeps sampling and byte limits in advanced configuration without popups", async ({ page }, testInfo) => {
+  const dialogs: string[] = [];
+  page.on("dialog", async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
+  const backend = await connect(page);
+  await page.goto("/services/netflow");
+  await expect(page.getByText("Message size (UDP payload bytes):", { exact: false })).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit / stage", exact: true }).click();
+  await expect(page.getByRole("spinbutton", { name: "Sampling rate (Unsampled)", exact: true })).toBeHidden();
+  await page.getByRole("button", { name: "Show advanced", exact: true }).click();
+  const sampling = page.locator('[id="editor.sampling_rate"]');
+  const size = page.getByRole("spinbutton", { name: "Message size (UDP payload bytes)", exact: true });
+  await expect(sampling).toBeVisible();
+  await expect(size).toHaveValue("");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await sampling.fill("20000");
+  await page.getByRole("combobox", { name: "Export version", exact: true }).press("Enter");
+  await expect(page.getByRole("option", { name: "NetFlow v1", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("option", { name: "NetFlow v9", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: "NetFlow v5", exact: true }).click();
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  await save.click();
+  await expect(sampling).toHaveValue("20000");
+  await expect(page.locator('[id="editor.sampling_rate-messages"]')).toContainText("Must be an integer 1..16383");
+  await sampling.fill("100");
+  await size.fill("65508");
+  await save.click();
+  await expect(size).toHaveValue("65508");
+  await expect(page.locator('[id="editor.max_message_size-messages"]')).toContainText("Must be an integer 132..65507");
+  await size.fill("1200");
+  await expect(sampling).toHaveAccessibleName("Sampling rate (1 in 100)");
+  await page.screenshot({ path: testInfo.outputPath("netflow-advanced-editor.png"), fullPage: true, animations: "disabled" });
+  await save.click();
+  await expect(save).toHaveCount(0);
+  expect(backend.writes).toHaveLength(0);
+  expect(dialogs).toEqual([]);
+});
+
+test("NetFlow details show worker byte limits without treating template traffic as flows", async ({ page }, testInfo) => {
+  await connect(page);
+  await page.route("**/api/v1/**", async route => {
+    if (!new URL(route.request().url()).pathname.endsWith("/runtime")) return route.fallback();
+    return route.fulfill({ json: {
+      ...runtime(), softflowd: [{
+        name: "capture", state: "running", export_version: 10, sampling_rate: 1, sampling_metadata: true,
+        max_message_size: 1200, message_size_limit: 548, exported_packets: "2", exported_bytes: "264", exported_flows: 0,
+      }],
+    } });
+  });
+  await page.goto("/services/netflow/capture");
+  await expect(page.getByText("Message size (UDP payload bytes): 1200 configured / 548 actual", { exact: true })).toBeVisible();
+  await expect(page.locator("tbody tr").first().locator("td").nth(7)).toContainText("0");
+  await expect(page.locator("tbody tr").first().locator("td").nth(8)).toContainText("2");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("netflow-message-size-detail.png"), fullPage: true, animations: "disabled" });
 });
 
 test("experience log keeps one compact inline row per issue", async ({ page }, testInfo) => {

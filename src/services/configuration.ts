@@ -829,7 +829,9 @@ export function validateConfig(config: Config, parents: ParentInterface[] = [], 
     serviceNames.add(service.name);
     if (!interfaces.has(service.interface) && !parents.some((parent) => parent.name === service.interface && parent.available)) issue(`${path}.interface`, "Select a managed or available adopted capture interface", page);
     check(`${path}.collector`, page, () => endpoint(service.collector, true));
-    bound(service.sampling_rate, 1, 1000000, `${path}.sampling_rate`, page);
+    if (service.export_version !== 5 && service.export_version !== 10) issue(`${path}.export_version`, "Select NetFlow v5 or IPFIX (v10)", page);
+    bound(service.sampling_rate, 1, service.export_version === 5 ? 16383 : 1000000, `${path}.sampling_rate`, page);
+    if (service.max_message_size !== undefined) bound(service.max_message_size, 132, 65507, `${path}.max_message_size`, page);
     bound(service.max_flows, 1, 1000000, `${path}.max_flows`, page);
     bound(service.snaplen, 64, 65535, `${path}.snaplen`, page);
     if (service.capture_filter && (utf8Size(service.capture_filter) > 4096 || /[\0\r\n]/.test(service.capture_filter))) issue(`${path}.capture_filter`, "Single line, no NUL, maximum 4096 UTF-8 bytes", page);

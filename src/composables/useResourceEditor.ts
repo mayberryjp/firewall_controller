@@ -47,7 +47,14 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       adopted.value, immutable.value, form.value.kind, form.value.family, familyInterfaces.value, wireguard, editingIndex.value < 0, vlan)
       .map(field => loopbacks && field.key === "kind" ? { ...field, disabled: true, choices: [{ title: "Loopback", value: "dummy" }] } :
         field.key === "family" && !store.ipv6Enabled ? { ...field, choices: field.choices?.filter(choice => choice.value !== "ipv6") } :
-          section === "firewall" && field.key === "destination_ports" ? { ...field, disabled: !firewallEditorSupportsPorts(form.value.protocol) } : field);
+          section === "firewall" && field.key === "destination_ports" ? { ...field, disabled: !firewallEditorSupportsPorts(form.value.protocol) } :
+            section === "softflowd" && field.key === "sampling_rate" ? {
+              ...field,
+              label: form.value.sampling_rate === 1 ? "Sampling rate (Unsampled)" :
+                typeof form.value.sampling_rate === "number" && Number.isInteger(form.value.sampling_rate) && form.value.sampling_rate > 1
+                  ? `Sampling rate (1 in ${form.value.sampling_rate})` : "Sampling rate",
+              hint: `1..${form.value.export_version === 5 ? 16383 : 1000000}; 1 = unsampled`,
+            } : field);
     if (section !== "routes") return result;
     return result.map(field => field.key === "gateway" ? { ...field, disabled: form.value.gateway_mode !== "static" } :
       field.key === "gateway_mode" ? {
@@ -245,6 +252,7 @@ export function useResourceEditor(section: Section, wireguard = false, vlan = fa
       if (loopbacks && (value.kind !== "dummy" || value.name === "lo")) throw new Error("Only loopback interfaces other than lo can be managed here.");
       if (section === "softflowd") {
         value.promiscuous = true;
+        if (value.max_message_size === "") delete value.max_message_size;
         value.timeouts = Object.fromEntries(timeoutNames.flatMap(name => {
           const seconds = value[`timeout_${name}`];
           delete value[`timeout_${name}`];

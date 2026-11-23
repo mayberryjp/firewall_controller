@@ -4,6 +4,67 @@ import { decodeJson, encodeJson, utf8Size } from "@/services/json";
 import { differenceContext, differences, endpoint, equalConfig, importConfig, normalize, prefix, requiredPermissions, validateConfig } from "@/services/configuration";
 import { config, statistics, transaction } from "../fixtures";
 
+describe("current flow export contract", () => {
+  it.each([false, true])("validates sampling and message-size bounds (enabled=%s)", enabled => {
+    const candidate = config(), service = candidate.softflowd[0]!;
+    service.enabled = enabled;
+    for (const version of [5, 10] as const) {
+      service.export_version = version;
+      const maximum = version === 5 ? 16383 : 1000000;
+      for (const rate of [0, 1, 4, 100, maximum, maximum + 1, 1.5]) {
+        service.sampling_rate = rate;
+        expect(validateConfig(candidate).some(issue => issue.path === "softflowd.0.sampling_rate")).toBe(
+          !Number.isInteger(rate) || rate < 1 || rate > maximum);
+        expect(service.sampling_rate).toBe(rate);
+      }
+      service.sampling_rate = 1;
+      for (const size of [131, 132, 1200, 65507, 65508, 132.5]) {
+        service.max_message_size = size;
+        expect(validateConfig(candidate).some(issue => issue.path === "softflowd.0.max_message_size")).toBe(
+          !Number.isInteger(size) || size < 132 || size > 65507);
+        expect(service.max_message_size).toBe(size);
+      }
+      delete service.max_message_size;
+      expect(validateConfig(candidate)).toEqual([]);
+    }
+  });
+  it.each([false, true])("rejects retired versions without rewriting imports (enabled=%s)", enabled => {
+    for (const export_version of [1, 9]) {
+      const candidate = { ...config(), softflowd: [{ ...config().softflowd[0]!, enabled, export_version }] };
+      const parsed = configSchema.safeParse(candidate);
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) expect(parsed.error.issues).toContainEqual(expect.objectContaining({
+        path: ["softflowd", 0, "export_version"], message: "Select NetFlow v5 or IPFIX (v10)",
+      }));
+      expect(() => importConfig(encodeJson(candidate))).toThrow();
+      expect(candidate.softflowd[0]!.export_version).toBe(export_version);
+    }
+  });
+  it.each([null, "1200", true, 132.5])("rejects a wrong-type message size %j", max_message_size => {
+    const candidate = { ...config(), softflowd: [{ ...config().softflowd[0]!, max_message_size }] };
+    expect(configSchema.safeParse(candidate).success).toBe(false);
+    expect(() => importConfig(encodeJson(candidate))).toThrow();
+  });
+  it.each([undefined, null, "1", true, 1.5])("keeps sampling required and integer (%j)", sampling_rate => {
+    const candidate = { ...config(), softflowd: [{ ...config().softflowd[0]!, sampling_rate }] };
+    expect(configSchema.safeParse(candidate).success).toBe(false);
+  });
+  it.each([undefined, 132, 1200, 65507])("preserves message size %s through import, normalization and transaction review", size => {
+    const before = config(), after = config();
+    after.softflowd[0]!.sampling_rate = 100;
+    if (size !== undefined) after.softflowd[0]!.max_message_size = size;
+    expect(importConfig(encodeJson(after)).softflowd).toEqual(after.softflowd);
+    expect(normalize(after).softflowd).toEqual(after.softflowd);
+    const pending = transactionSchema.parse({ ...transaction(), candidate: after, previous: before });
+    expect(pending.candidate.softflowd).toEqual(after.softflowd);
+    expect(pending.previous.softflowd).toEqual(before.softflowd);
+    const changes = differences(before, after);
+    expect(requiredPermissions(changes)).toEqual(["transactions.write", "softflowd.write"]);
+    expect(differenceContext(before, after, changes[0]!).after.softflowd).toEqual(after.softflowd);
+    if (size === undefined) expect(pending.candidate.softflowd[0]).not.toHaveProperty("max_message_size");
+  });
+});
+
 describe("global IPv4 RPF", () => {
   it("defaults omitted input to disabled", () => {
     const before = config();
@@ -553,7 +614,7 @@ describe("inclusive validation limits and dependencies", () => {
     const candidate = config();
     const wire = JSON.parse(JSON.stringify(candidate)) as { softflowd: Array<{ export_version: number }> };
     wire.softflowd[0]!.export_version = value;
-    expect(configSchema.safeParse(wire).success).toBe([1, 5, 9, 10].includes(value));
+    expect(configSchema.safeParse(wire).success).toBe([5, 10].includes(value));
   });
   it("rejects kernel replacement instead of dropping newer backend state", () => {
     const candidate = config(); delete candidate.kernel;

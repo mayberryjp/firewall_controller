@@ -151,11 +151,15 @@ export const masqueradeSchema = z.object({
   family: z.enum(["ipv4", "ipv6"]), source: optionalText, out_interface: z.string(),
 }).strict().superRefine(validateRuleOwnership);
 export const timeoutNames = ["general", "tcp", "tcp.rst", "tcp.fin", "udp", "icmp", "maxlife", "expint"] as const;
+const flowExportVersionSchema = z.union([z.literal(5), z.literal(10)], {
+  errorMap: () => ({ message: "Select NetFlow v5 or IPFIX (v10)" }),
+});
 export const softflowdSchema = z.object({
   ...annotation,
   name: z.string(), enabled: z.boolean(), interface: z.string(), collector: z.string(),
-  export_version: z.union([z.literal(1), z.literal(5), z.literal(9), z.literal(10)]),
+  export_version: flowExportVersionSchema,
   sampling_rate: integer, max_flows: integer, snaplen: integer, promiscuous: z.boolean(),
+  max_message_size: integer.optional(),
   capture_filter: optionalText,
   timeouts: z.record(z.enum(timeoutNames), integer).nullable().transform((value) => value ?? {}),
 }).strict();
@@ -437,6 +441,9 @@ export const serviceStatusSchema = z.object({
   exported_packets: uint64Schema.optional(), exported_bytes: uint64Schema.optional(),
   exported_flow_packets: uint64Schema.optional(), exported_flow_bytes: uint64Schema.optional(),
   export_errors: uint64Schema.optional(),
+  export_version: flowExportVersionSchema.optional(),
+  sampling_rate: integer.positive().optional(), sampling_metadata: z.boolean().optional(),
+  max_message_size: integer.positive().optional(), message_size_limit: integer.positive().optional(),
 });
 export const dhcpRelayStatusSchema = z.object({
   ...supervisionFields,

@@ -1163,6 +1163,23 @@ not scaled, unexported active flows are excluded, and UDP writes do not establis
 collector delivery. Deploy the matching
 [NetFlow counter backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-11.md#2026-11-11-03-per-instance-netflow-export-counters).
 
+The [November 22 flow-export handoff](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-22.md#2026-11-22-03-mtu-safe-byte-based-flow-export)
+restricts export versions to NetFlow v5 (IPv4) and IPFIX v10 (IPv4/IPv6).
+Sampling remains configurable: 1 is unsampled; v5 accepts up to 16,383,
+IPFIX up to 1,000,000. Optional `max_message_size` accepts 132..65,507 UDP
+payload bytes; omission uses the server default of 1200. Export details show
+the worker's configured and actual message-size limits; PMTU/EMSGSIZE can
+reduce the actual limit. These changes are Unreleased and require coordinated
+backend/client deployment. Invalid saved values need explicit correction;
+the controller does not convert versions or clamp rates/caps.
+
+IPFIX collectors must cache templates: two initial template datagrams precede
+data-only messages, with refresh every 600 seconds or 20 successful data
+datagrams. Templates increase export datagram/byte totals, not flow totals.
+Counters remain exact raw observations, not scaled estimates or confirmed
+collector delivery. Validate collector caching and routed/tunnel PMTU/ICMP
+behavior before appliance deployment.
+
 Interfaces > **Interface capabilities** shows VLAN RPS activation from the backend's effective
 physical-parent observation, not raw VLAN queue masks; null activation is Unknown.
 Source metadata remains in the typed snapshot without additional explanatory UI.

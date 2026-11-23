@@ -443,6 +443,104 @@ describe("October 17 frontend workflows", () => {
     expect(chips().at(-3)).toEqual(["—", "default"]);
     wrapper.unmount();
   });
+  it("keeps export configuration in the inline editor and never clamps values on version changes", async () => {
+    const store = useControllerStore(), draft = config();
+    draft.routes[0]!.metric = 42;
+    draft.softflowd[0]!.sampling_rate = 20000;
+    draft.softflowd[0]!.max_message_size = 1500;
+    store.stage(draft);
+    const submit = vi.spyOn(api, "submitPackage"), confirm = vi.spyOn(window, "confirm"), alert = vi.spyOn(window, "alert");
+    const wrapper = await render(SoftflowdView, "/services/netflow");
+    try {
+      await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+      const editor = wrapper.getComponent(ResourceRowEditor);
+      const field = (key: string) => editor.findAllComponents(FieldInput).find(input => input.props("field").key === key)!;
+      expect(field("export_version").props("field").choices?.map(choice => choice.value)).toEqual([5, 10]);
+      expect(field("sampling_rate").props("field").label).toBe("Sampling rate (1 in 20000)");
+      expect(field("max_message_size").props("modelValue")).toBe(1500);
+      expect(wrapper.find('tr[aria-label="Export options"]').attributes("style")).toContain("display: none");
+      field("export_version").vm.$emit("update:modelValue", 5);
+      await flushPromises();
+      expect(field("sampling_rate").props("modelValue")).toBe(20000);
+      expect(field("sampling_rate").props("field").hint).toContain("16383");
+      await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      await flushPromises();
+      expect(editor.props("errors")["editor.sampling_rate"]).toEqual(["Must be an integer 1..16383"]);
+      expect(editor.props("form").sampling_rate).toBe(20000);
+      expect(store.draft!.softflowd[0]!.export_version).toBe(10);
+      expect(wrapper.find('tr[aria-label="Export options"]').attributes("style") ?? "").not.toContain("display: none");
+      field("sampling_rate").vm.$emit("update:modelValue", 4);
+      field("max_message_size").vm.$emit("update:modelValue", 131);
+      await flushPromises();
+      await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      await flushPromises();
+      expect(editor.props("errors")["editor.max_message_size"]).toEqual(["Must be an integer 132..65507"]);
+      expect(editor.props("form").max_message_size).toBe(131);
+      expect(store.draft!.softflowd[0]!.max_message_size).toBe(1500);
+      field("max_message_size").vm.$emit("update:modelValue", 132);
+      await flushPromises();
+      await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      await flushPromises();
+      expect(store.draft!.softflowd[0]).toMatchObject({ export_version: 5, sampling_rate: 4, max_message_size: 132, enabled: false });
+      expect(store.draft!.routes[0]!.metric).toBe(42);
+      expect(submit).not.toHaveBeenCalled(); expect(confirm).not.toHaveBeenCalled(); expect(alert).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); }
+  });
+  it("uses the byte-cap default only for new exports and preserves omission when editing", async () => {
+    const store = useControllerStore();
+    const wrapper = await render(SoftflowdView, "/services/netflow");
+    try {
+      await wrapper.findAll("button").find(button => button.text() === "Add NetFlow/IPFIX export")!.trigger("click");
+      let editor = wrapper.getComponent(ResourceRowEditor);
+      const field = (key: string) => editor.findAllComponents(FieldInput).find(input => input.props("field").key === key)!;
+      expect(field("max_message_size").props("modelValue")).toBe(1200);
+      expect(field("max_message_size").props("field").hint).toContain("blank = server default (1200)");
+      expect(field("sampling_rate").props("field").label).toBe("Sampling rate (Unsampled)");
+      await editor.findAll("button").find(button => button.text() === "Cancel")!.trigger("click");
+      await wrapper.get('button[aria-label="Edit / stage"]').trigger("click");
+      editor = wrapper.getComponent(ResourceRowEditor);
+      expect(field("max_message_size").props("modelValue")).toBeUndefined();
+      field("max_message_size").vm.$emit("update:modelValue", "");
+      await flushPromises();
+      await editor.findAll("button").find(button => button.text() === "Save")!.trigger("click");
+      expect(store.draft!.softflowd[0]).not.toHaveProperty("max_message_size");
+    } finally { wrapper.unmount(); }
+  });
+  it.each(["success", "failure"] as const)("keeps message-size details neutral while loading until %s", async outcome => {
+    const store = useControllerStore(), value = store.state.data!.desired.softflowd[0]!;
+    store.runtime.data = null; store.runtime.loading = true; store.runtime.stale = false;
+    const wrapper = mount(ResourceTable, {
+      props: { section: "softflowd", rows: [{ value, index: 0, rowID: value.name }], total: 1, disabled: false, detail: true },
+      global: { stubs: { ...stubs, RouterLink: box } },
+    });
+    try {
+      expect(wrapper.text()).toContain("Message size (UDP payload bytes): ... configured / ... actual");
+      expect(wrapper.text()).not.toMatch(/unavailable|unsupported|failed/i);
+      store.runtime.loading = false;
+      if (outcome === "success") store.runtime.data = runtimeSchema.parse({
+        ...runtime(), softflowd: [{
+          name: value.name, state: "running", max_message_size: 1200, message_size_limit: 548,
+          exported_packets: "2", exported_bytes: "264", exported_flows: 0, export_errors: "1",
+        }],
+      });
+      else store.runtime.error = "Read failed";
+      await flushPromises();
+      expect(wrapper.text()).toContain(outcome === "success"
+        ? "Message size (UDP payload bytes): 1200 configured / 548 actual"
+        : "Message size (UDP payload bytes): Unknown configured / Unknown actual");
+      if (outcome === "success") {
+        expect(wrapper.text()).toContain("Running");
+        store.runtime.stale = true; await flushPromises();
+        expect(wrapper.find('[title="Last-known runtime"]').exists()).toBe(true);
+        store.runtime.data = runtimeSchema.parse({ ...runtime(), softflowd: [{ name: value.name, state: "disabled" }] });
+        await flushPromises();
+        expect(wrapper.text()).toContain("Unknown configured / Unknown actual");
+      }
+      await wrapper.setProps({ detail: false });
+      expect(wrapper.text()).not.toContain("Message size");
+      expect(store.draft).toBeNull();
+    } finally { wrapper.unmount(); }
+  });
   it.each([false, true])("colors export counter chips while preserving exact and unknown counts (detail=%s)", async detail => {
     const store = useControllerStore();
     const value = store.state.data!.desired.softflowd[0]!;

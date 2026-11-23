@@ -112,8 +112,9 @@ function baseResourceFields(section: Section, managed: Array<string | Choice>, p
       text("name", "Instance name", "1..32 letters, digits, underscore or hyphen; maximum 16 instances including disabled."),
       select("interface", "Capture interface", [...managed, ...parents]),
       text("collector", "Collector IP:port", "Unicast/loopback; IPv6 bracketed; no DNS or zones."),
-      select("export_version", "Export version", [{ title: "NetFlow v1", value: 1 }, { title: "NetFlow v5", value: 5 }, { title: "NetFlow v9", value: 9 }, { title: "IPFIX (v10)", value: 10 }]),
+      select("export_version", "Export version", [{ title: "NetFlow v5", value: 5 }, { title: "IPFIX (v10)", value: 10 }]),
       number("sampling_rate", "Sampling rate", "1..1000000; 1 = unsampled"),
+      number("max_message_size", "Message size (UDP payload bytes)", "132..65507; blank = server default (1200)"),
       number("max_flows", "Maximum flows", "1..1000000"),
       ...timeoutNames.map(name => number(`timeout_${name}`, `${name} timeout seconds (blank = default)`, name === "general" ? "1..604800 or blank" : "0..604800 or blank")),
     ];
@@ -133,7 +134,7 @@ export function preset(section: Section, wireguard = false): unknown {
     case "firewall": return { ...manualRuleOwnership, action: "accept" };
     case "nat": return { ...manualRuleOwnership, family: "ipv4", out_interface: "" };
     case "softflowd": return {
-      name: "", enabled: true, interface: "", collector: "", export_version: 5, sampling_rate: 1,
+      name: "", enabled: true, interface: "", collector: "", export_version: 5, sampling_rate: 1, max_message_size: 1200,
       max_flows: 8192, snaplen: 128, promiscuous: true, timeouts: {},
     };
   }

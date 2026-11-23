@@ -149,6 +149,8 @@ const exportCounters = [
 ] as const;
 const exportCount = (name: unknown, key: typeof exportCounters[number]["key"]) =>
   !store.runtime.data && store.runtime.loading ? "..." : formatCount(softflowStatus(name)?.[key]);
+const messageSize = (name: unknown, key: "max_message_size" | "message_size_limit") =>
+  !store.runtime.data && store.runtime.loading ? "..." : softflowStatus(name)?.[key] ?? "Unknown";
 function observedEnabled(name: unknown): string {
   const observed = configSchema.safeParse(store.state.data?.observed);
   if (!observed.success) return "Unknown";
@@ -592,6 +594,14 @@ function staged(value: unknown): string {
           :row="row"
           :columns="columns"
         />
+        <tr v-if="section === 'softflowd' && detail && editingRow !== row.index">
+          <td
+            :colspan="columns"
+            :title="store.runtime.stale ? 'Last-known runtime' : undefined"
+          >
+            Message size (UDP payload bytes): {{ messageSize(row.value.name, 'max_message_size') }} configured / {{ messageSize(row.value.name, 'message_size_limit') }} actual
+          </td>
+        </tr>
         <tr v-if="section === 'gateway_monitors' && expandedMonitor === row.value.name && editingRow !== row.index">
           <td :colspan="columns">
             <GatewayStatisticsPanel :name="String(row.value.name)" />
