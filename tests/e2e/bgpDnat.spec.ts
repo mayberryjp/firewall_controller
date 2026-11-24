@@ -105,6 +105,8 @@ test("BGP peer enable switches stage beside Actions and persist through confirme
     expect(submitted.config.bgp!.enabled).toBe(true);
     expect(submitted.config.interfaces).toEqual(initialConfig.interfaces);
     expect(submitted.config.routes).toEqual(initialConfig.routes);
+    await navigate(page, "SAVE");
+    await expect(review).toContainText("No unsaved changes.");
     await page.reload(); await navigate(page, "BGP PEERS");
     await expect(toggle).toBeChecked({ checked: enabled });
     await expect(peers.locator(".v-chip")).toHaveText(enabled ? "Established" : "Disabled");
