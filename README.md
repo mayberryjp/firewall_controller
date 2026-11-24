@@ -1520,6 +1520,27 @@ also requires `firewall.write`. Deploy the matching
 before using it. The daemon polls every five minutes and replaces only existing-host
 Sando-owned outbound rules, skipping unsupported entries; empty/all-skipped lists
 remove prior Sando-owned rules. Manual and other-provider rules are preserved.
+**Test sync**, beside the policy toggle, calls the authenticated, bodyless
+`POST /api/v1/sando/policies/preview` on the appliance, not Sando from the browser.
+Deploy the matching [November 24 backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-24.md)
+first; preview requires `state.read`, `sando.write`, and `firewall.write`, enforced
+by the backend (the frontend has no permission inventory). Save a valid endpoint
+and save/discard existing edits before testing. A validated, revision-matched
+preview stages only into a clean draft and opens SAVE with the semantic diff,
+source, imported/skipped counts and empty/all-skipped removal warning. No changes
+are applied, flags enabled, or import reports updated by testing; unchanged
+previews show "No policy changes" without creating a draft. Errors retain edits
+and require an explicit retry. Normal explicit SAVE/confirm and discard apply.
+Unlike the backend contract's recommendation, this frontend **requires a successful
+Test sync before enabling automatic policies**, including a validated unchanged
+preview. The pass lasts only for the current connection session and resets on
+saved/staged endpoint or firewall-policy changes outside the tested original and
+preview configurations. Saving or discarding that exact preview retains the pass.
+Disabling sync and preserving already-enabled sync do not require a test. This is
+a frontend gate, not a backend authorization restriction; other API clients are
+not gated. Applying a preview alone does not enable recurring sync.
+For initial testing, keep automatic policies disabled; an already-running policy
+worker may advance the revision during retrieval, requiring a fresh preview.
 **Import rules** is disabled while automatic policies are enabled in either saved
 settings or the draft; save a disable change before importing manually.
 Background revisions use the existing stale-draft SAVE protection; compare and

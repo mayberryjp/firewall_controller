@@ -33,6 +33,28 @@ beforeEach(() => {
   onMutationCheck(() => "");
 });
 describe("controller-proxied API boundary", () => {
+  it("fetches a validated server-side Sando preview with one authenticated bodyless POST", async () => {
+    const candidate = config();
+    const result = { base_revision: "2026.11.24.1", source_url: "https://sando.example",
+      etag: "\u00e9".repeat(256), imported_count: 1, skipped_count: 2, changed: true, config: candidate };
+    body = encodeJson(result);
+    expect(await net.previewSandoPolicies()).toEqual(result);
+    expect(captured).toMatchObject({ method: "post", url: "/sando/policies/preview" });
+    expect(captured?.data).toBeUndefined();
+    expect(captured?.headers.get("Authorization")).toBe("Bearer registry-test-session");
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it.each([403, 409, 429, 503])("surfaces preview HTTP %s without retrying", async code => {
+    status = code; body = encodeJson({ error: "Preview rejected", transaction: null });
+    await expect(net.previewSandoPolicies()).rejects.toMatchObject({ status: code });
+    expect(adapter).toHaveBeenCalledOnce();
+  });
+  it.each([{ base_revision: "invalid" }, { skipped_count: -1 }, { config: null }, { changed: null }, { etag: null }, { etag: "\u00e9".repeat(257) }])(
+    "rejects malformed policy preview %j", async patch => {
+      body = JSON.stringify({ base_revision: "2026.11.24.1", source_url: "https://sando.example",
+        etag: "", imported_count: 0, skipped_count: 0, changed: false, config: config(), ...patch });
+      await expect(net.previewSandoPolicies()).rejects.toMatchObject({ incompatible: true });
+    });
   it("reads the live daemon clock with an authenticated, bodyless, queryless system-status GET", async () => {
     const sample = systemStatus(), signal = new AbortController().signal;
     body = encodeJson(sample);

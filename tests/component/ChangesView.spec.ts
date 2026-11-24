@@ -36,6 +36,17 @@ function button(wrapper: ReturnType<typeof review>, text: string) {
   return wrapper.findAll("button").find(item => item.text() === text || item.attributes("aria-label") === text)!;
 }
 describe("commit and push checks", () => {
+  it("shows server preview source, counts and empty replacement warning alongside the semantic diff", () => {
+    const store = useControllerStore();
+    store.sandoPreview = { base_revision: store.baseRevision!, source_url: "https://sando.example",
+      etag: "", imported_count: 0, skipped_count: 3, changed: true, config: cloneConfig(store.draft!) };
+    const wrapper = review();
+    expect(wrapper.text()).toContain("Fetched/staged; not applied");
+    expect(wrapper.text()).toContain("https://sando.example");
+    expect(wrapper.text()).toContain("0 imported, 3 skipped");
+    expect(wrapper.text()).toContain("removes previous Sando-owned host rules");
+    expect(wrapper.findComponent(ConfigDiff).exists()).toBe(true);
+  });
   it("shows a red labeled discard button and preserves confirmation before discarding", async () => {
     const store = useControllerStore(), wrapper = review();
     const discard = button(wrapper, "Discard changes");

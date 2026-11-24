@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
 import { validateConfig } from "@/services/configuration";
 import {
@@ -11,6 +12,7 @@ import { cloneConfig } from "@/services/configuration";
 import { useTimestamps } from "@/composables/useTimestamps";
 
 const store = useControllerStore();
+const router = useRouter();
 const { formatTimestamp, timeZone } = useTimestamps();
 const endpoint = ref(""), savedEndpoint = ref("");
 const syncToggleVersion = ref(0);
@@ -27,10 +29,11 @@ const lastImportAt = computed(() => {
 const newHostPolicy = ref<"accept" | "drop">("drop");
 const modeChange = computed(() => Boolean(config.value && !config.value.firewall.policies));
 const settingsBlocked = computed(() => store.readOnlyReason ||
+  (store.sandoPreviewPending ? "Test sync is fetching policies." : "") ||
   (!store.state.data?.desired.sando ? "This backend does not support saved Sando settings and import reports. Update the appliance backend first." : ""));
 const blocked = computed(() => settingsBlocked.value ||
   (config.value?.firewall.rules.length ? "Remove legacy forwarding rules in the shared draft before importing host policies. Existing rules will not be removed automatically." : ""));
-const blockedNotice = computed(() => store.connecting && !store.connected ? "" :
+const blockedNotice = computed(() => store.sandoPreviewPending || store.connecting && !store.connected ? "" :
   store.readOnlyNotice || (store.state.data ? blocked.value : store.state.error ?? ""));
 const disabled = computed(() => Boolean(importing.value || blocked.value || !endpoint.value.trim() || modeChange.value && !acknowledgeMode.value));
 const automaticPolicies = computed(() => Boolean(config.value?.sando?.policy_sync_enabled ||
@@ -51,10 +54,27 @@ function setPolicySync(enabled: boolean | null): void {
   error.value = ""; notice.value = ""; skipped.value = [];
   try {
     if (typeof enabled !== "boolean") throw new Error("Choose enabled or disabled for automatic policy sync.");
+    if (enabled && !store.state.data?.desired.sando?.policy_sync_enabled && !store.sandoPolicyTestPassed) {
+      throw new Error("Run Test sync successfully before enabling automatic policy sync.");
+    }
     stageSettings({ policy_sync_enabled: enabled });
   } catch (cause) {
     syncToggleVersion.value++;
     error.value = `Unable to change automatic Sando policy sync: ${cause instanceof Error ? cause.message : "configuration unavailable"}`;
+  }
+}
+async function testSync(): Promise<void> {
+  error.value = ""; notice.value = ""; skipped.value = [];
+  const controller = new AbortController();
+  request = controller;
+  try {
+    const result = await store.testSandoPolicies(controller.signal);
+    if (result.changed) await router.push("/config/changes");
+    else notice.value = `No policy changes. Test sync passed; ${result.imported_count} imported, ${result.skipped_count} skipped. Sync flags were not changed.`;
+  } catch (cause) {
+    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : "Test sync failed.";
+  } finally {
+    if (request === controller) request = undefined;
   }
 }
 function setSync(enabled: boolean | null): void {
@@ -194,7 +214,7 @@ onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
       label="Sando API endpoint"
       placeholder="https://sando.example/api"
       hide-details="auto"
-      :disabled="Boolean(importing)"
+      :disabled="Boolean(importing) || store.sandoPreviewPending"
       class="mb-4"
     />
     <v-btn
@@ -224,16 +244,38 @@ onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
         Last import ({{ timeZone }}): {{ formatTimestamp(lastImportAt, "No imports yet") }}
       </v-chip>
     </div>
-    <v-switch
-      :key="'policies-' + String(config?.sando?.policy_sync_enabled ?? false) + syncToggleVersion"
-      :model-value="config?.sando?.policy_sync_enabled ?? false"
-      label="Automatically sync policies"
-      :disabled="Boolean(importing) || Boolean(settingsBlocked)"
-      color="primary"
-      hide-details
+    <div class="d-flex align-center flex-wrap ga-3 mb-4">
+      <v-switch
+        :key="'policies-' + String(config?.sando?.policy_sync_enabled ?? false) + syncToggleVersion"
+        :model-value="config?.sando?.policy_sync_enabled ?? false"
+        label="Automatically sync policies"
+        :disabled="Boolean(importing) || Boolean(settingsBlocked) || (!config?.sando?.policy_sync_enabled && !store.state.data?.desired.sando?.policy_sync_enabled && !store.sandoPolicyTestPassed)"
+        color="primary"
+        hide-details
+        class="flex-grow-0"
+        @update:model-value="setPolicySync"
+      />
+      <v-btn
+        :disabled="Boolean(importing) || Boolean(store.sandoPreviewBlockedReason)"
+        :loading="store.sandoPreviewPending"
+        @click="testSync"
+      >
+        Test sync
+      </v-btn>
+    </div>
+    <div
+      v-if="store.sandoPreviewPending"
+      role="status"
       class="mb-4"
-      @update:model-value="setPolicySync"
-    />
+    >
+      Fetching server-side policy preview; no changes are being applied.
+    </div>
+    <div
+      v-else-if="store.state.data && !store.connecting"
+      class="text-body-2 mb-4"
+    >
+      {{ store.sandoPreviewBlockedReason || (!config?.sando?.policy_sync_enabled && !store.sandoPolicyTestPassed ? "Run Test sync successfully before enabling automatic policy sync." : "") }}
+    </div>
     <v-select
       v-model="newHostPolicy"
       label="New host default policy"

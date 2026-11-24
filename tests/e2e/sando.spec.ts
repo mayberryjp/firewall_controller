@@ -2,11 +2,59 @@ import { expect, test } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { config } from "../fixtures";
 import { sandoSchema } from "../../src/services/sandoState";
+import { cloneConfig } from "../../src/services/configuration";
+
+for (const outcome of ["discard", "apply"] as const) test(`server Test sync previews removals for explicit ${outcome} without enabling recurring policies`, async ({ page }) => {
+  const initialConfig = config();
+  initialConfig.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+  initialConfig.firewall.rules = [];
+  initialConfig.firewall.policies = { interfaces: [], hosts: [{
+    id: "desk", name: "Desk", addresses: ["192.0.2.20"], policy: "drop",
+    rules: [{ origin: "import", import_source: "sando", action: "accept" }, { action: "drop" }],
+  }] };
+  const candidate = cloneConfig(initialConfig);
+  candidate.firewall.policies!.hosts[0]!.rules = [{ action: "drop" }];
+  const backend = await mockBackend(page, { initialConfig,
+    sandoPreview: { firewall: candidate.firewall, imported_count: 0, skipped_count: 2 } });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/firewall/sando");
+  await expect(page.getByLabel("Automatically sync policies", { exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Test sync", exact: true }).click();
+  await expect(page).toHaveURL(/\/config\/changes$/);
+  const review = page.getByRole("region", { name: "SAVE", exact: true });
+  await expect(review).toContainText("Fetched/staged; not applied");
+  await expect(review).toContainText("0 imported, 2 skipped");
+  await expect(review).toContainText("removes previous Sando-owned host rules");
+  expect(backend.writes).toEqual([]);
+  if (outcome === "discard") {
+    await page.getByRole("button", { name: "Discard changes", exact: true }).click();
+    await page.getByRole("button", { name: "Discard staged changes", exact: true }).click();
+    await expect(review).toContainText("No unsaved changes");
+    expect(backend.writes).toEqual([]);
+    await page.goBack();
+    await expect(page.getByLabel("Automatically sync policies", { exact: true })).toBeEnabled();
+    await page.reload();
+    await expect(page.getByLabel("Automatically sync policies", { exact: true })).toBeDisabled();
+  } else {
+    await page.getByRole("button", { name: "Commit & push", exact: true }).click();
+    await page.getByRole("button", { name: "Push changes", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Confirm changes", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Commit detail", exact: true })).toContainText("committed");
+    expect(backend.writes.map(write => write.path)).toEqual(["/transactions", "/transactions/tx-test/confirm"]);
+    expect(backend.writes[0]).toMatchObject({ body: { config: {
+      firewall: candidate.firewall, sando: initialConfig.sando,
+    } } });
+  }
+});
 
 for (const flag of ["sync_enabled", "policy_sync_enabled"] as const)
 for (const enabled of [true, false]) test(`Sando ${flag} can be ${enabled ? "enabled" : "disabled"} without importing hosts or rules`, async ({ page }) => {
   const initialConfig = config();
-  initialConfig.sando = sandoSchema.parse({ api_url: enabled ? "" : "https://sando.example", [flag]: !enabled });
+  initialConfig.sando = sandoSchema.parse({ api_url: enabled && flag !== "policy_sync_enabled" ? "" : "https://sando.example", [flag]: !enabled });
   const backend = await mockBackend(page, { initialConfig });
   const sourceRequests: string[] = [];
   await page.route("https://sando.example/**", route => {
@@ -20,7 +68,12 @@ for (const enabled of [true, false]) test(`Sando ${flag} can be ${enabled ? "ena
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await page.goto("/settings/sando");
   const sync = page.getByLabel(flag === "sync_enabled" ? "Automatic host and threat-score sync" : "Automatically sync policies", { exact: true });
-  if (enabled) {
+  if (enabled && flag === "policy_sync_enabled") {
+    await expect(sync).toBeDisabled();
+    await page.getByRole("button", { name: "Test sync", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "No policy changes" })).toBeVisible();
+    await expect(sync).toBeEnabled();
+  } else if (enabled) {
     await sync.click();
     await expect(page.getByRole("alert").filter({ hasText: "Save a Sando API endpoint" })).toBeVisible();
     await expect(sync).not.toBeChecked();

@@ -5,10 +5,13 @@ import SandoView from "@/views/SandoView.vue";
 import ConnectionStatus from "@/components/layout/ConnectionStatus.vue";
 import { useControllerStore } from "@/stores/controller";
 import * as sando from "@/services/sando";
+import * as api from "@/services/netcontrol";
 import { state } from "../fixtures";
 import { sandoSchema } from "@/services/sandoState";
 import { cloneConfig } from "@/services/configuration";
 
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock("vue-router", () => ({ useRouter: () => ({ push: navigate }) }));
 const field = {
   props: ["modelValue", "disabled", "label"], emits: ["update:modelValue"],
   template: '<input :aria-label="label" :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />',
@@ -41,6 +44,7 @@ async function prepare() {
   await wrapper.get('input[aria-label="Use host/interface policy mode with stateful return traffic instead of legacy forwarding mode"]').setValue(true);
 }
 beforeEach(() => {
+  navigate.mockReset();
   setActivePinia(createPinia()); localStorage.clear();
   const store = useControllerStore();
   store.connected = true; store.state.data = state();
@@ -49,10 +53,145 @@ beforeEach(() => {
   store.state.stale = false; store.state.lastSuccess = Date.now();
   vi.spyOn(sando, "getSandoDevices").mockResolvedValue(devices);
   vi.spyOn(sando, "getSandoConnections").mockResolvedValue(connections);
+  vi.spyOn(api, "previewSandoPolicies").mockImplementation(async () => ({
+    base_revision: store.state.data!.revision, source_url: store.state.data!.desired.sando!.api_url,
+    etag: "", imported_count: 0, skipped_count: 0, changed: false, config: cloneConfig(store.state.data!.desired),
+  }));
 });
 afterEach(() => { wrapper?.unmount(); useControllerStore().$dispose(); vi.restoreAllMocks(); localStorage.clear(); });
 
 describe("one-time Sando imports", () => {
+  it("stages a server-side replacement, navigates to SAVE, and unlocks enabling without applying", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+    store.state.data!.desired.firewall.policies = { interfaces: [], hosts: [{
+      id: "desk", name: "Desk", addresses: ["192.0.2.20"], policy: "drop",
+      rules: [{ origin: "import", import_source: "sando", action: "accept" }, { action: "drop" }],
+    }] };
+    const original = cloneConfig(store.state.data!.desired), candidate = cloneConfig(original);
+    candidate.firewall.policies!.hosts[0]!.rules = [{ action: "drop" }];
+    vi.mocked(api.previewSandoPolicies).mockResolvedValue({
+      base_revision: store.state.data!.revision, source_url: original.sando!.api_url,
+      etag: "opaque", imported_count: 0, skipped_count: 2, changed: true, config: candidate,
+    });
+    const apply = vi.spyOn(store, "apply");
+    wrapper = mount(SandoView, { global: { stubs } });
+    expect(wrapper.get('input[aria-label="Automatically sync policies"]').attributes("disabled")).toBeDefined();
+    await button("Test sync").trigger("click"); await flushPromises();
+    expect(store.draft).toEqual(candidate);
+    expect(cloneConfig(store.state.data!.desired)).toEqual(original);
+    expect(store.baseRevision).toBe(store.state.data!.revision);
+    expect(store.sandoPolicyTestPassed).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("/config/changes");
+    expect(apply).not.toHaveBeenCalled();
+    expect(sando.getSandoDevices).not.toHaveBeenCalled();
+    expect(sando.getSandoConnections).not.toHaveBeenCalled();
+    await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(true); await flushPromises();
+    expect(store.draft!.sando!.policy_sync_enabled).toBe(true);
+    store.discardDraft();
+    expect(store.sandoPolicyTestPassed).toBe(true);
+  });
+  it("keeps a successful unchanged pass across navigation but invalidates it on policy, source and connection changes", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+    wrapper = mount(SandoView, { global: { stubs } });
+    await button("Test sync").trigger("click"); await flushPromises();
+    expect(wrapper.text()).toContain("No policy changes");
+    expect(store.draft).toBeNull();
+    wrapper.unmount(); wrapper = mount(SandoView, { global: { stubs } });
+    expect(wrapper.get('input[aria-label="Automatically sync policies"]').attributes("disabled")).toBeUndefined();
+    const modified = cloneConfig(store.state.data!.desired);
+    modified.firewall.policy = "drop";
+    store.stage(modified); store.discardDraft(); await flushPromises();
+    expect(store.sandoPolicyTestPassed).toBe(false);
+    await button("Test sync").trigger("click"); await flushPromises();
+    const changedSource = cloneConfig(store.state.data!.desired);
+    changedSource.sando!.api_url = "https://other.example";
+    store.state.data = { ...store.state.data!, desired: changedSource };
+    expect(store.sandoPolicyTestPassed).toBe(false);
+    await store.testSandoPolicies();
+    expect(store.sandoPolicyTestPassed).toBe(true);
+    store.connected = false;
+    expect(store.sandoPolicyTestPassed).toBe(false);
+  });
+  it("blocks enabling from other editors and blocks applying if policies change after enabling", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+    const candidate = cloneConfig(store.state.data!.desired);
+    candidate.sando!.policy_sync_enabled = true;
+    expect(() => store.stage(candidate)).toThrow("Run Test sync successfully");
+    await store.testSandoPolicies();
+    store.stage(candidate);
+    expect(store.canApply).toBe(true);
+    store.draft!.firewall.policy = "drop";
+    expect(store.canApply).toBe(false);
+    expect(store.applyBlockedReason).toContain("Run Test sync successfully");
+    expect(store.sandoPolicyTestPassed).toBe(false);
+  });
+  it("allows undoing a staged disable for already-enabled policies without requiring a test", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example", policy_sync_enabled: true });
+    wrapper = mount(SandoView, { global: { stubs } });
+    const toggle = () => wrapper.get('input[aria-label="Automatically sync policies"]');
+    await toggle().setValue(false); await flushPromises();
+    expect(toggle().attributes("disabled")).toBeUndefined();
+    await toggle().setValue(true); await flushPromises();
+    expect(store.draft!.sando!.policy_sync_enabled).toBe(true);
+    expect(api.previewSandoPolicies).not.toHaveBeenCalled();
+  });
+  it("rejects dirty drafts before retrieval and preserves edits made and discarded during retrieval", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+    const candidate = cloneConfig(store.state.data!.desired);
+    candidate.routes[0]!.metric = 42;
+    store.stage(candidate);
+    await expect(store.testSandoPolicies()).rejects.toThrow("Save or discard");
+    expect(api.previewSandoPolicies).not.toHaveBeenCalled();
+    expect(store.draft).toEqual(candidate);
+    store.discardDraft();
+    let resolve!: (value: api.SandoPolicyPreview) => void;
+    vi.mocked(api.previewSandoPolicies).mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    const pending = store.testSandoPolicies();
+    store.stage(candidate); store.discardDraft();
+    resolve({ base_revision: store.state.data!.revision, source_url: candidate.sando!.api_url,
+      etag: "", imported_count: 0, skipped_count: 0, changed: false, config: cloneConfig(store.state.data!.desired) });
+    await expect(pending).rejects.toThrow("became stale");
+    expect(store.draft).toBeNull();
+    expect(store.sandoPolicyTestPassed).toBe(false);
+  });
+  it.each(["revision", "source", "flags", "changed", "validation"])("rejects a mismatched %s preview without unlocking or staging", async kind => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+    const result = { base_revision: store.state.data!.revision, source_url: "https://sando.example",
+      etag: "", imported_count: 0, skipped_count: 0, changed: false, config: cloneConfig(store.state.data!.desired) };
+    if (kind === "revision") result.base_revision = "2026.11.24.99";
+    if (kind === "source") result.source_url = "https://other.example";
+    if (kind === "flags") result.config.sando!.sync_enabled = true;
+    if (kind === "changed") result.changed = true;
+    if (kind === "validation") { result.changed = true; result.config.firewall.rules = [{ action: "accept", source: "invalid" }]; }
+    vi.mocked(api.previewSandoPolicies).mockResolvedValue(result);
+    await expect(store.testSandoPolicies()).rejects.toThrow();
+    expect(store.draft).toBeNull();
+    expect(store.sandoPolicyTestPassed).toBe(false);
+  });
+  it("shows neutral pending feedback, disables duplicate tests, and surfaces failed retrieval inline without a pass", async () => {
+    const store = useControllerStore();
+    store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+    let reject!: (failure: Error) => void;
+    vi.mocked(api.previewSandoPolicies).mockReturnValueOnce(new Promise((_done, fail) => { reject = fail; }));
+    wrapper = mount(SandoView, { global: { stubs } });
+    await button("Test sync").trigger("click");
+    expect(wrapper.get('[role="status"]').text()).toContain("Fetching server-side");
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    expect(button("Test sync").attributes("disabled")).toBeDefined();
+    reject(new Error("HTTP 503: Sando unreachable")); await flushPromises();
+    expect(wrapper.text()).toContain("HTTP 503: Sando unreachable");
+    expect(wrapper.find('[role="status"]').exists()).toBe(false);
+    expect(store.sandoPolicyTestPassed).toBe(false);
+    expect(store.draft).toBeNull();
+    await button("Test sync").trigger("click"); await flushPromises();
+    expect(store.sandoPolicyTestPassed).toBe(true);
+  });
   it("shows inventory loading, then completed localhost progress and the current address, clearing it on success", async () => {
     let resolveInventory!: (value: typeof devices) => void;
     let resolveConnections!: (value: typeof connections) => void;
@@ -208,6 +347,7 @@ describe("one-time Sando imports", () => {
     store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example", policy_sync_enabled: !enabled });
     const before = cloneConfig(store.state.data!.desired), apply = vi.spyOn(store, "apply");
     wrapper = mount(SandoView, { global: { stubs } });
+    if (enabled) { await button("Test sync").trigger("click"); await flushPromises(); }
     await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(enabled); await flushPromises();
     expect(store.draft).toEqual({ ...before, sando: { ...before.sando, policy_sync_enabled: enabled } });
     expect(cloneConfig(store.state.data!.desired)).toEqual(before);
@@ -230,19 +370,23 @@ describe("one-time Sando imports", () => {
     if (policy_sync_enabled) {
       await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(false); await flushPromises();
       expect(button("Import rules").attributes("disabled")).toBeDefined();
-      store.state.data!.desired = cloneConfig(store.draft!); store.discardDraft(); await flushPromises();
+      store.state.data = { ...store.state.data!, desired: cloneConfig(store.draft!) }; store.discardDraft(); await flushPromises();
       expect(button("Import rules").attributes("disabled")).toBeUndefined();
     }
   });
-  it("requires a saved URL for automatic policies without creating a draft or masking validation", async () => {
+  it("requires a saved URL and successful preview before enabling automatic policies", async () => {
     const store = useControllerStore();
     wrapper = mount(SandoView, { global: { stubs } });
-    await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(true); await flushPromises();
+    expect(wrapper.get('input[aria-label="Automatically sync policies"]').attributes("disabled")).toBeDefined();
+    expect(button("Test sync").attributes("disabled")).toBeDefined();
     expect(store.draft).toBeNull();
     expect(wrapper.get('input[aria-label="Automatically sync policies"]').element).toHaveProperty("checked", false);
     expect(wrapper.text()).toContain("Save a Sando API endpoint");
     await wrapper.get('input[aria-label="Sando API endpoint"]').setValue("https://sando.example");
     await button("Save endpoint").trigger("click"); await flushPromises();
+    expect(button("Test sync").attributes("disabled")).toBeDefined();
+    store.state.data = { ...store.state.data!, desired: cloneConfig(store.draft!) }; store.discardDraft(); await flushPromises();
+    await button("Test sync").trigger("click"); await flushPromises();
     await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(true); await flushPromises();
     await wrapper.get('input[aria-label="Sando API endpoint"]').setValue("");
     await button("Save endpoint").trigger("click"); await flushPromises();
@@ -253,6 +397,7 @@ describe("one-time Sando imports", () => {
     const store = useControllerStore();
     store.state.data!.desired.sando = sandoSchema.parse({ api_url: "https://sando.example" });
     wrapper = mount(SandoView, { global: { stubs } });
+    await button("Test sync").trigger("click"); await flushPromises();
     await wrapper.get('input[aria-label="Automatically sync policies"]').setValue(true); await flushPromises();
     const draft = cloneConfig(store.draft!), base = store.baseRevision;
     store.state.data!.revision = "2026.11.23.4";
@@ -315,7 +460,7 @@ describe("one-time Sando imports", () => {
   });
   it("keeps the initial page focused on controls without empty reports or explanatory clutter", () => {
     wrapper = mount(SandoView, { global: { stubs } });
-    expect(wrapper.findAll("button").map(value => value.text())).toEqual(["Save endpoint", "Import hosts", "Import rules"]);
+    expect(wrapper.findAll("button").map(value => value.text())).toEqual(["Save endpoint", "Test sync", "Import hosts", "Import rules"]);
     expect(wrapper.findAll("h2")).toHaveLength(0);
     expect(wrapper.findAll("p")).toHaveLength(0);
     expect(wrapper.findAll('[role="alert"]')).toHaveLength(0);
