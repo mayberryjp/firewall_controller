@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
 import { connections, hostPolicyConfig } from "../fixtures";
 import { firewallDenyPage } from "../firewallTelemetryFixtures";
+import { sandoStatus } from "../sandoFixtures";
 
 for (const useInventory of [false, true]) {
 test(`firewall telemetry truncates ${useInventory ? "local descriptions" : "saved host labels"} without changing connection identities`, async ({ page, isMobile }) => {
@@ -12,18 +13,19 @@ test(`firewall telemetry truncates ${useInventory ? "local descriptions" : "save
   config.firewall.policies!.hosts[1]!.addresses.push("2001:db8::10");
   const destinationName = `Database ${"long-hostname-".repeat(7)}`.trim();
   config.firewall.policies!.hosts[1]!.metadata = { display_name: destinationName, description: "Not displayed" };
+  const status = sandoStatus();
   if (useInventory) {
     config.sando = { api_url: "https://sando.example", sync_enabled: true, policy_sync_enabled: false, hosts_import: null, rules_import: null };
     config.firewall.policies!.hosts[0]!.metadata!.display_name = "Imported DNS tablet";
     config.firewall.policies!.hosts[1]!.metadata!.display_name = "Imported DNS database";
     config.firewall.policies!.hosts.push({ id: "unknown-device", name: "Imported DNS unknown", addresses: ["203.0.113.20"], policy: "drop", rules: [] });
-    await page.route("https://sando.example/api/localhosts", route => route.fulfill({ json: [
-      { ip_address: "192.0.2.20", ip6_address: "2001:db8::20", local_description: sourceName, dns_hostname: "dns-tablet", dhcp_hostname: "dhcp-tablet" },
-      { ip_address: "198.51.100.10", ip6_address: "2001:db8::10", local_description: destinationName, dns_hostname: "dns-database" },
-      { ip_address: "203.0.113.20", local_description: null, dns_hostname: "dns-unknown", dhcp_hostname: "dhcp-unknown" },
-    ] }));
+    status.hosts = [
+      { addresses: ["192.0.2.20", "2001:db8::20"], classification: sourceName, host_name: "dns-tablet", icon: null, threat_score: null },
+      { addresses: ["198.51.100.10", "2001:db8::10"], classification: destinationName, host_name: "dns-database", icon: null, threat_score: null },
+      { addresses: ["203.0.113.20"], classification: null, host_name: "dns-unknown", icon: null, threat_score: null },
+    ];
   }
-  const backend = await mockBackend(page, { initialConfig: config });
+  const backend = await mockBackend(page, { initialConfig: config, sandoStatus: status });
   const until = Date.parse("2026-11-08T12:34:56.789Z");
   const drops = firewallDenyPage(); drops.next_before_id = null;
   const base = { ...drops.records[0]!, source_port: 65535, destination_port: 65535 };

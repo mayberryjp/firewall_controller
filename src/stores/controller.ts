@@ -173,29 +173,6 @@ export const useControllerStore = defineStore("controller", () => {
   const ignoredFields = ref<string[]>([]);
   const uncertain = ref<{ operation: string; id?: string; priorIDs: string[]; base: string | null; startedAt: string } | null>(null);
   const editorDirty = ref(false), monitoring = ref(false), gatewayMonitoring = ref(false);
-  const sandoPreview = ref<api.SandoPolicyPreview | null>(null);
-  const sandoPreviewPending = ref(false);
-  const sandoTestSignatures = ref<string[]>([]);
-  const sandoSignature = (config: Config | null | undefined): string =>
-    stableJson([config?.sando?.api_url, config?.firewall, config?.ipv6_enabled]);
-  let sandoDraftVersion = 0;
-  watch([draft, editorDirty], () => {
-    sandoDraftVersion++;
-    if (!draft.value) sandoPreview.value = null;
-  }, { deep: true, flush: "sync" });
-  watch(() => [connected.value, sandoSignature(state.data?.desired), sandoSignature(draft.value ?? state.data?.desired)] as const,
-    current => {
-      if (!connected.value ||
-          sandoTestSignatures.value.length && (!sandoTestSignatures.value.includes(current[1]) ||
-            !sandoTestSignatures.value.includes(current[2]))) {
-        sandoTestSignatures.value = []; sandoPreview.value = null;
-      }
-    }, { flush: "sync" });
-  const sandoPolicyTestPassed = computed(() => connected.value &&
-    sandoTestSignatures.value.includes(sandoSignature(draft.value ?? state.data?.desired)));
-  const sandoEnableBlockedReason = computed(() => draft.value?.sando?.policy_sync_enabled &&
-    !state.data?.desired.sando?.policy_sync_enabled && !sandoPolicyTestPassed.value
-    ? "Run Test sync successfully for the current saved endpoint and policies before enabling automatic policy sync." : "");
   const ipv6Enabled = computed(() => (draft.value ?? state.data?.active_transaction?.candidate ?? state.data?.desired)?.ipv6_enabled === true);
   const supportsDhcpGatewayMonitors = computed(() => !runtime.stale && !runtime.error &&
     runtime.data?.capabilities?.gateway_monitor_modes?.includes("dhcp") === true &&
@@ -246,7 +223,6 @@ export const useControllerStore = defineStore("controller", () => {
     (!state.data ? "Committed desired configuration is unavailable. Recovery remains accessible." : ""));
   const applyBlockedReason = computed(() => {
     if (readOnlyReason.value) return readOnlyReason.value;
-    if (sandoEnableBlockedReason.value) return sandoEnableBlockedReason.value;
     if (draftStale.value) return `Draft base revision ${baseRevision.value} differs from committed revision ${state.data?.revision}. Compare the revisions before discarding changes and starting over.`;
     if (state.error) return `Unable to check the current firewall configuration: ${state.error}. Try Commit & push again.`;
     if (!freshState.value) return "Current firewall state will be checked before pushing. Your changes are retained.";
@@ -628,7 +604,6 @@ export const useControllerStore = defineStore("controller", () => {
   async function connect(deviceId: string): Promise<boolean> {
     try { setApiDevice(deviceId); }
     catch (error) { authError.value = error instanceof Error ? error.message : "Invalid saved firewall"; return false; }
-    sandoTestSignatures.value = []; sandoPreview.value = null;
     connecting.value = true; authError.value = null;
     invalidateReads();
     platform.data = null; platformUnsupported.value = false; linkDiagnostics.data = null;
@@ -664,10 +639,6 @@ export const useControllerStore = defineStore("controller", () => {
   function stage(config: Config, syncWireGuard = false): void {
     if (readOnlyReason.value) throw new Error(readOnlyReason.value);
     const candidate = cloneConfig(configSchema.parse(config));
-    if (candidate.sando?.policy_sync_enabled && !state.data?.desired.sando?.policy_sync_enabled &&
-        !sandoTestSignatures.value.includes(sandoSignature(candidate))) {
-      throw new Error("Run Test sync successfully for the current saved endpoint and policies before enabling automatic policy sync.");
-    }
     const previous = draft.value ?? state.data?.desired;
     if (syncWireGuard || stableJson(previous?.interfaces.filter(link => link.kind === "wireguard")) !==
         stableJson(candidate.interfaces.filter(link => link.kind === "wireguard"))) syncWireGuardRoutes(candidate);
@@ -676,44 +647,6 @@ export const useControllerStore = defineStore("controller", () => {
       baseline.value = cloneConfig(state.data.desired); baseRevision.value = state.data.revision;
     }
     draft.value = candidate;
-  }
-  const sandoPreviewBlockedReason = computed(() => readOnlyReason.value || operationBlockedReason.value ||
-    (sandoPreviewPending.value ? "Test sync is fetching policies." : "") ||
-    (!state.data?.desired.sando?.api_url ? "Save a Sando API endpoint before testing sync." : "") ||
-    (editorDirty.value || diff.value.length || draftStale.value ? "Save or discard existing edits before testing sync." : "") ||
-    (state.stale || state.error ? "Refresh the saved configuration before testing sync." : ""));
-  async function testSandoPolicies(signal?: AbortSignal): Promise<api.SandoPolicyPreview> {
-    if (sandoPreviewBlockedReason.value) throw new Error(sandoPreviewBlockedReason.value);
-    const committed = cloneConfig(state.data!.desired);
-    const revision = state.data!.revision, session = sessionVersion.value, generation = sandoDraftVersion;
-    sandoTestSignatures.value = []; sandoPreview.value = null; sandoPreviewPending.value = true;
-    try {
-      const result = await api.previewSandoPolicies(signal);
-      if (signal?.aborted || session !== sessionVersion.value || !connected.value) throw new Error("Test sync canceled because the firewall connection changed.");
-      if (generation !== sandoDraftVersion || editorDirty.value || diff.value.length || draftStale.value ||
-          state.data?.revision !== revision || result.base_revision !== revision ||
-          !equalConfig(state.data.desired, committed) || result.source_url !== committed.sando?.api_url) {
-        throw new Error("Test sync became stale or edits changed while fetching. No preview was staged; save or discard edits and retry.");
-      }
-      if (readOnlyReason.value || operationBlockedReason.value || state.stale || state.error) {
-        throw new Error(readOnlyReason.value || operationBlockedReason.value || "Saved configuration is unavailable. No preview was staged.");
-      }
-      if (!equalConfig({ ...result.config, firewall: committed.firewall }, committed) ||
-          result.changed !== !equalConfig(result.config, committed)) {
-        throw new Error("Incompatible Test sync candidate: unrelated configuration or change indication differs. No preview was staged.");
-      }
-      const issues = validateConfig(result.config, runtime.data?.parent_interfaces, committed, supportedKernelCatalog.value);
-      if (issues.length) throw new Error(issues.map(issue => `${issue.path}: ${issue.message}`).join("\n"));
-      sandoTestSignatures.value = [sandoSignature(committed), sandoSignature(result.config)];
-      if (result.changed) stage(result.config);
-      sandoPreview.value = result;
-      return result;
-    } catch (failure) {
-      sandoTestSignatures.value = []; sandoPreview.value = null;
-      throw failure;
-    } finally {
-      sandoPreviewPending.value = false;
-    }
   }
   function discardDraft(): void {
     if (busy.value || submitted.value || uncertain.value) throw new Error("Cannot discard a frozen submitted snapshot");
@@ -942,7 +875,6 @@ export const useControllerStore = defineStore("controller", () => {
     nextRevision, comparisonRevision, draft, baseline, baseRevision, submitted, busy, actionError, notice, ignoredFields, uncertain, editorDirty,
     monitoring, gatewayMonitoring, activeTransactions, unknownStatus, incompatible, draftStale, diff, validation, freshState,
     canApply, applyBlockedReason, sortedTransactions, readOnlyReason, readOnlyNotice, ipv6Enabled,
-    sandoPreview, sandoPreviewPending, sandoPolicyTestPassed, sandoEnableBlockedReason, sandoPreviewBlockedReason, testSandoPolicies,
     upgrade, upgradePending, upgradeUncertain, upgradeActive, upgradeBlockedReason, upgradeNotice, acceptedUpgradeID,
     refreshUpgrade, checkMaintenance, startUpgrade, supportsDhcpGatewayMonitors,
     checkSoftwareRelease, softwareCheckPending, softwareCheckDenied, softwareCheckError, softwareCheckNotice,

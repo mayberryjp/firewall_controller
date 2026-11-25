@@ -79,26 +79,6 @@ function discard(): void {
     </div>
     <template v-if="store.draft && store.baseline">
       <v-alert
-        v-if="store.sandoPreview?.changed"
-        variant="tonal"
-        type="info"
-        class="mb-4"
-      >
-        Fetched/staged; not applied. Test sync source: {{ store.sandoPreview.source_url }}.
-        {{ store.sandoPreview.imported_count }} imported, {{ store.sandoPreview.skipped_count }} skipped.
-        Review removed and new rules below. Test sync did not change sync flags;
-        enabling recurring policies requires an explicit toggle change.
-      </v-alert>
-      <v-alert
-        v-if="store.sandoPreview?.changed && store.sandoPreview.imported_count === 0"
-        type="warning"
-        variant="tonal"
-        class="mb-4"
-      >
-        Empty or all-skipped policy replacement: this preview removes previous Sando-owned host rules.
-        Manual and other-provider rules are preserved.
-      </v-alert>
-      <v-alert
         v-if="store.draftStale"
         type="warning"
         class="mb-4"

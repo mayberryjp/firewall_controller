@@ -10,8 +10,10 @@ import { defaultOverviewLayout, overviewLayoutSchema } from "../../src/services/
 import { firewallCounters } from "../firewallTelemetryFixtures";
 import { normalize } from "../../src/services/configuration";
 import { rpsDiagnostics } from "../diagnosticsFixtures";
+import { sandoStatus } from "../sandoFixtures";
+import type { SandoStatus } from "../../src/services/sando";
 
-export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; normalizeCandidate?: boolean; applyError?: { message: string; outcome: "rolled_back" | "recovery_failed" }; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics; stateRuntime?: StateView["runtime"]; sandoPreview?: { firewall: Config["firewall"]; imported_count: number; skipped_count: number } } = {}) {
+export async function mockBackend(page: Page, options: { observationFailed?: boolean; initialStatus?: string; lostSubmit?: boolean; normalizeCandidate?: boolean; applyError?: { message: string; outcome: "rolled_back" | "recovery_failed" }; initialConfig?: Config; serviceDenied?: boolean; gatewayRows?: GatewayStatistics[]; runtimeCapabilities?: RuntimeState["capabilities"]; invalidCredential?: boolean; discoveredInterfaces?: DiscoveredInterface[]; statistics?: Statistics; stateRuntime?: StateView["runtime"]; sandoStatus?: SandoStatus } = {}) {
   let committed = { ...options.initialConfig ?? config(), software: options.initialConfig?.software ?? software() }, revision = "2026.10.29.1";
   let overviewLayout = defaultOverviewLayout();
   const transactions: Record<string, Transaction> = {};
@@ -124,13 +126,14 @@ export async function mockBackend(page: Page, options: { observationFailed?: boo
       return reply({ error: "Firewall requests must be proxied through the controller" }, 404);
     }
     if (options.invalidCredential) return reply({ error: "Invalid device key", transaction: null }, 401);
-    if (path === "/sando/policies/preview" && request.method() === "POST") {
-      if (request.postData()) return reply({ error: "Preview must be bodyless", transaction: null }, 400);
-      return reply({ base_revision: revision, source_url: committed.sando?.api_url,
-        etag: "", imported_count: options.sandoPreview?.imported_count ?? 0, skipped_count: options.sandoPreview?.skipped_count ?? 0,
-        changed: Boolean(options.sandoPreview), config: options.sandoPreview ? { ...committed, firewall: options.sandoPreview.firewall } : committed });
-    }
     if (request.method() === "GET") {
+      if (path === "/sando") {
+        const result = options.sandoStatus ?? sandoStatus();
+        return reply({
+          ...result, source_url: committed.sando?.api_url ?? "", enabled: committed.sando?.sync_enabled ?? false,
+          policies: { ...result.policies, source_url: committed.sando?.api_url ?? "", enabled: committed.sando?.policy_sync_enabled ?? false },
+        });
+      }
       if (path === "/state") {
         if (options.observationFailed) return reply({ error: "Observation unavailable", transaction: null }, 503);
         return reply({ revision, desired: committed, observed: committed, drift: false, runtime: options.stateRuntime,

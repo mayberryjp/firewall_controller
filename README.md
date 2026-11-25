@@ -418,7 +418,8 @@ require separate real-appliance acceptance; mocked UI tests do not prove forward
 
 Firewall drops, Connections (including deletion review), and Possible missing rules
 show known endpoints as **NAME (IP address)**. When saved Sando synchronization is
-enabled, inventory devices use `local_description`, not DNS, DHCP or lease names;
+enabled, cached inventory devices use `classification` (Sando's `local_description`),
+not DNS, DHCP or lease names;
 devices without a local description remain IP-only. Other endpoints use saved
 firewall host display names or host names, and the appliance hostname for its own
 interface addresses. Unknown hosts remain IP-only. Inventory read failures appear
@@ -935,7 +936,7 @@ or appliance acceptance.
 | `/firewall` | PROTECTED HOSTS: searchable host navigation beside ordered outbound rules/default action; legacy forwarding editor when host policies are absent |
 | `/firewall/ingress` | INTERFACE RULES: first Firewall/NAT page, with an interface selector and ordered ingress override rules |
 | `/settings`, `/settings/general` | Host name, domain label, time zone, global IPv6 policy, IPv4 ICMP exception, and one DHCP DNS override control for all currently configured interfaces; settings join the shared draft |
-| `/firewall/sando` | Firewall/NAT > SANDO IMPORT: Sando endpoint, independent metadata/policy sync toggles, and one-time host and approved-connection imports into the shared draft; old `/settings/sando` links redirect here |
+| `/firewall/sando` | Firewall/NAT > SANDO IMPORT: Sando endpoint, independent server-side host/policy sync toggles, and their last successful sync timestamps; old `/settings/sando` links redirect here |
 | `/services/dynamic-dns` | Services > Dynamic DNS: Azure DNS entries and status; old `/settings/dynamic-dns` links redirect here |
 | `/config/upgrade` | Current version, update availability, Check for upgrade and last checked; old `/settings/upgrade` links redirect here |
 | `/settings/mqtt-streaming` | MQTT STREAMING (old `/settings/home-assistant` redirects here): MQTT broker, source interface, publish interval and write-only password replacement; shared draft and confirmed publisher status |
@@ -1497,113 +1498,50 @@ uncertain writes are never automatically retried, and rollback does not stage a
 new deletion draft. Configured hosts are distinct from preserved Sando discovery
 metadata and are not automatically reimported.
 
-### Sando synchronization and one-time imports
+### Server-side Sando synchronization
 
-Firewall/NAT > SANDO IMPORT accepts an HTTP(S) server URL or `/api` base URL. The browser
-calls Sando directly, with no registry/firewall credentials. Sando must be reachable
-from the browser, allow its origin through CORS, and use HTTPS when required by
-the frontend's HTTPS origin. The base URL is staged as `config.sando.api_url`
-and requires `sando.write`. Complete `/api/localhosts` device
-records remain only in page memory, never in the appliance configuration.
+Firewall/NAT > SANDO IMPORT accepts an HTTP(S) server URL or `/api` base URL.
+The appliance daemon performs all Sando acquisition; the browser never calls
+Sando directly. Sando must be reachable from the appliance, not the browser,
+and browser CORS access is not required. The base URL is staged as
+`config.sando.api_url` using the existing SAVE/apply/confirm flow.
 **Automatic host and threat-score sync** stages `config.sando.sync_enabled`
-(default false), independently of manual imports. Enabling requires
-a saved endpoint. Only committed settings drive the daemon's hourly metadata
+(default false). Enabling requires an endpoint. Only committed settings drive the daemon's hourly metadata
 worker; pending or rolled-back changes do not start or stop it. Disabling cancels
-automatic acquisition without removing imported hosts or rules. Automatic
-Protected Hosts metadata lookups also follow the committed flag and source.
-Metadata sync never automatically changes firewall hosts, rules or verdicts.
+automatic acquisition without removing existing hosts or rules. The worker also
+adds eligible missing firewall hosts with a `drop` default; existing host settings
+and rules remain unchanged. Changing either sync flag, or changing the endpoint
+while either flag is enabled, requires `sando.write` and `firewall.write`
+in addition to normal transaction authority.
 **Automatically sync policies** independently stages `config.sando.policy_sync_enabled`
-(default false), using the existing SAVE/confirm flow and requiring a saved endpoint.
-Changing this flag in either direction, or changing the source while it is enabled,
-also requires `firewall.write`. Deploy the matching
-[November 23 backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-23.md)
-before using it. The daemon polls every five minutes and replaces only existing-host
+(default false), using the same SAVE/confirm flow and requiring an endpoint.
+The daemon polls every five minutes and replaces only existing-host
 Sando-owned outbound rules, skipping unsupported entries; empty/all-skipped lists
 remove prior Sando-owned rules. Manual and other-provider rules are preserved.
-**Test sync**, beside the policy toggle, calls the authenticated, bodyless
-`POST /api/v1/sando/policies/preview` on the appliance, not Sando from the browser.
-Deploy the matching [November 24 backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-24.md)
-first; preview requires `state.read`, `sando.write`, and `firewall.write`, enforced
-by the backend (the frontend has no permission inventory). Save a valid endpoint
-and save/discard existing edits before testing. A validated, revision-matched
-preview stages only into a clean draft and opens SAVE with the semantic diff,
-source, imported/skipped counts and empty/all-skipped removal warning. No changes
-are applied, flags enabled, or import reports updated by testing; unchanged
-previews show "No policy changes" without creating a draft. Errors retain edits
-and require an explicit retry. Normal explicit SAVE/confirm and discard apply.
-Unlike the backend contract's recommendation, this frontend **requires a successful
-Test sync before enabling automatic policies**, including a validated unchanged
-preview. The pass lasts only for the current connection session and resets on
-saved/staged endpoint or firewall-policy changes outside the tested original and
-preview configurations. Saving or discarding that exact preview retains the pass.
-Disabling sync and preserving already-enabled sync do not require a test. This is
-a frontend gate, not a backend authorization restriction; other API clients are
-not gated. Applying a preview alone does not enable recurring sync.
-For initial testing, keep automatic policies disabled; an already-running policy
-worker may advance the revision during retrieval, requiring a fresh preview.
-**Import rules** is disabled while automatic policies are enabled in either saved
-settings or the draft; save a disable change before importing manually.
+There is no Test sync button or prerequisite, browser policy preview, or one-time
+browser host/rule import. Both toggles stage directly without additional popups.
+Deploy the matching [November 25 backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-25.md)
+before relying on automatic host additions.
 Background revisions use the existing stale-draft SAVE protection; compare and
 restart a stale draft rather than overwrite newer rules.
-**Import hosts** and **Import rules** remain available when sync is disabled.
-Each inventory or per-localhost connection request has its own two-minute timeout,
-including the response download; there is no overall import deadline.
-While importing rules, a progress bar shows completed/total unique localhost
-addresses (including IPv6 lookups) and the address currently being fetched.
-Inventory loading is indeterminate until those addresses are known.
-**Stop import** cancels the active request and remaining lookups without staging
-partial results or changing existing draft edits, rules or reports.
-Each successful or partial import stages a separate host/rule report with its
-source URL, counts and UTC timestamp alongside its firewall changes
-(`firewall.write`). While automatic sync is enabled, a small chip beside its toggle
-shows the latest host/rule import timestamp in the saved system timezone
-(`yyyy-mm-dd hh:mm:ss`, falling back to UTC when unset), or
-"No imports yet" when neither report exists. Full reports remain in configuration
-without a historical report section. The page shows endpoint/import controls, immediate staging feedback,
-and actionable errors or skipped entries, without historical report sections.
-Failed/canceled attempts do not replace saved reports. Repeated attempts before confirmation
-share one pending operation count; a rule replacement reports its latest
-replacement rather than accumulating removed rules. Changing/clearing the URL retains report provenance.
+
+The page polls authenticated `GET /api/v1/sando` every 30 seconds while visible.
+These reads do not trigger sync. **Last successful host sync** uses the top-level
+`last_success_at`; **Last successful policy sync** uses
+`policies.last_success_at`. Policy success includes unchanged checks, not just
+configuration changes. Both displays use the saved system timezone with exactly
+`yyyy-mm-dd hh:mm:ss` (UTC when unconfigured), retaining full API precision.
+Missing successes show "No successful sync yet"; invalid values remain explicit.
+Timestamps remain visible when sync is disabled. Initial reads show neutral
+loading feedback; read failures and worker errors are inline, and previously
+loaded timestamps are marked stale after a failed status read.
+Saved browser `hosts_import` and `rules_import` reports are preserved in
+configuration but are neither updated nor used for automated sync timestamps.
+Protected Hosts and telemetry labels also read the appliance's cached `hosts`
+from this endpoint, using `classification` for local descriptions, plus cached
+icons and threat scores. They never fetch Sando inventory from the browser.
+Those metadata reads continue to follow the committed sync flag and source.
 Older backends without saved Sando support show an inline upgrade requirement.
-
-**Import hosts** adds IP-based hosts to `firewall.policies.hosts`. Choose the
-outbound default for new hosts explicitly; the safe initial selection is drop.
-Existing names, addresses, defaults, rules,
-ingress overrides, NAT and unrelated draft edits remain unchanged. Identical
-hosts/rules are skipped; conflicting ownership and unsupported entries are
-reported inline. IPv4 and supported optional IPv6 addresses are retained together.
-An invalid, unsupported or globally disabled optional IPv6 address is omitted with
-an inline skipped-entry explanation; the valid primary address is still imported.
-An invalid or globally disabled primary address still prevents importing the device.
-
-Both imports ignore inventory records whose `ip_address` is missing, null, empty
-or whitespace-only, without failing the remaining inventory or looking up connections
-for those records. Other incompatible response data still reports an import error.
-
-**Import rules** also fetches `/api/ignorelist/ip/<encoded-IP>` for each inventory
-host and imports missing hosts. Connection IDs (`ignorelist_id`) are optional;
-ID-less candidates are deduplicated by source, destination, protocol and port.
-Skipped ID-less candidates are identified by those traffic fields.
-Rules retain their explicit source-to-destination direction even when returned by
-the destination's lookup. A valid rule source missing from inventory is added as
-an IP-named host with the selected new-host default; existing source hosts retain
-their names, defaults and non-Sando rules. Invalid rules do not create fallback hosts, and
-failed inventory-device validation is not bypassed. These are Sando detection exceptions,
-not proof that traffic should be authorized. Exact source IPs, destination IPs or
-explicit `*` destinations, protocol 6 (TCP) or 17 (UDP), and destination ports
-1..65535 or explicit `*` ports are translated into outbound accept candidates.
-Protocol 1 (ICMP) and 58 (ICMPv6) candidates are also supported when their
-addresses match the protocol family and their destination port is explicit `*`
-or `0` (including string `"0"`). Sando's ICMP zero-port placeholder is ignored;
-no destination-port constraint is created. TCP and UDP still require ports
-1..65535 or explicit `*`.
-ICMPv6 requires global IPv6 enabled.
-Destination wildcards become `0.0.0.0/0` or `::/0` according to the source IP,
-so they do not enable the other address family on a dual-stack host. Port
-wildcards omit the port constraint while retaining the selected protocol.
-Missing or malformed ports, wildcard sources, CIDRs and other protocols are
-reported rather than widened. Earlier manual drops/catch-alls and ingress
-overrides can shadow imported rules.
 
 Rule origins (`manual`, `import`, `system`, `inherited`) and nullable
 `import_source` are preserved across forwarding, host/interface/input and NAT
@@ -1616,16 +1554,6 @@ descriptive, not permissions or verified upstream identity; interface rules keep
 their saved ownership rather than persisting inherited duplicates on hosts.
 Ownership-only edits do not invalidate otherwise matching packet/byte totals.
 
-Rule imports automatically stage their results in the shared draft, with no
-separate replacement review or staging acknowledgement. Only host-forwarding rules with both `origin: "import"` and
-`import_source: "sando"` are replaced, including old targets absent from the new
-source. Manual rules retain their relative order first, other retained rules keep
-their relative order, and new Sando rules follow in source order. Host inventory,
-defaults, interface policy, input and NAT are not deleted or recreated.
-Successful empty or partial replacements are staged automatically, with skipped
-entries reported inline; all-invalid sources and failed acquisition retain prior
-rules and reports. Imports merge into the latest shared draft after acquisition.
-
 Deploy the October 30 label-capable backend before using ownership-bearing writes.
 The controller verifies that the accepted candidate retains requested labels, matching host
 groups by host ID and interface groups by interface name rather than their array
@@ -1636,19 +1564,12 @@ with its provisional transaction retained for review/rollback; it is never
 automatically retried or confirmed. Historical drop records do not acquire current
 rule labels.
 
-Legacy forwarding rules cannot coexist with host policies; imports never delete
-or translate legacy rules. Remove them deliberately in the shared draft first.
-Entering host/interface policy mode requires an inline acknowledgement because it
-introduces stateful return traffic. Backend host-policy limits, address uniqueness, references, family
-compatibility, port limits, expansion limits and metadata size are validated.
-Nothing is applied automatically.
-
 Configurable resources support optional shared metadata. Display names are empty or
 up to 128 Unicode scalar values, with no controls or whitespace-only names;
 descriptions allow up to 2048 scalars, including newline/tab. Empty annotations
 are omitted. Labels never replace technical names, keys or selectors. Editors,
 imports, exports, transaction review and revision restore preserve annotations;
-host identities can be added manually or through additive Sando imports. PROTECTED HOSTS
+host identities can be added manually or by the server-side Sando host worker. PROTECTED HOSTS
 collapses the Firewall/NAT page menu on desktop (reopen it with the menu button)
 and shows a searchable, alphabetically sorted uppercase host list beside the
 selected host's ordered outbound rules and default action. The blue **+ ADD HOST**
@@ -2358,7 +2279,7 @@ fields are rejected as incompatible rather than silently stripped.
   older saved configurations, even those with previous ICMP drops.
   The toggle works in both legacy and host/interface policy modes. Existing
   `firewall.policies` are decoded, compared and preserved; no implicit
-  exception rows are synthesized. Sando imports add hosts/rules without replacing
+  exception rows are synthesized. Server-side Sando host sync adds hosts without replacing
   existing entries; historical restore remains server-authorized.
 - Each interface has `dhcp_relay: { enabled, servers }`, default disabled/empty.
   Disabled server lists remain preserved and validated. Entries must be distinct

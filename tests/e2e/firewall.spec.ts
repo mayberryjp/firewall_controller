@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mockBackend } from "./mockBackend";
+import { sandoStatus } from "../sandoFixtures";
 import { hostPolicyConfig } from "../fixtures";
 
 test.use({ launchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] } });
@@ -16,14 +17,15 @@ async function expectFullHeightHosts(page: Page): Promise<void> {
 test("PROTECTED HOSTS browses searchable hosts without staging changes and fits compact screens", async ({ page, isMobile }, testInfo) => {
   const initialConfig = hostPolicyConfig();
   initialConfig.sando = { api_url: "https://sando.example", sync_enabled: true, policy_sync_enabled: false, hosts_import: null, rules_import: null };
-  await page.route("https://sando.example/api/localhosts", route => route.fulfill({ json: [
-    { ip_address: "192.0.2.20", local_description: "Unifi", device_type: "wifi_ap", icon: "WIFI_ACCESS_POINT", threat_score: 0 },
-    { ip_address: "198.51.100.10", local_description: "Alpha server", icon: "Server", threat_score: 25 },
-  ] }));
+  const status = sandoStatus();
+  status.hosts = [
+    { addresses: ["192.0.2.20"], host_name: null, classification: "Unifi", icon: "WIFI_ACCESS_POINT", threat_score: 0 },
+    { addresses: ["198.51.100.10"], host_name: null, classification: "Alpha server", icon: "Server", threat_score: 25 },
+  ];
   const longDestination = "2001:db8:1234:5678:abcd:ef01:2345:6789/128";
   initialConfig.firewall.policies!.hosts[2]!.rules[0]!.destination = longDestination;
   initialConfig.firewall.policies!.hosts[2]!.rules[0]!.destination_ports = [53, 443, 5353, 8443, 12345, 54321, 65535];
-  const backend = await mockBackend(page, { initialConfig });
+  const backend = await mockBackend(page, { initialConfig, sandoStatus: status });
   await page.goto("/connect");
   await page.getByLabel("Registry admin password").fill("registry-test-password");
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
@@ -106,7 +108,7 @@ test("PROTECTED HOSTS browses searchable hosts without staging changes and fits 
   await expect(hostButtons).toHaveCount(0);
   await expect(hosts).toContainText("No matching hosts.");
   if (!isMobile) await expectFullHeightHosts(page);
-  await view.getByRole("textbox", { name: "Search hosts" }).fill("wifi_ap");
+  await view.getByRole("textbox", { name: "Search hosts" }).fill("WIFI_ACCESS_POINT");
   await expect(hostButtons).toHaveCount(1);
   await expect(hostButtons).toContainText("UNIFI");
   await view.getByRole("textbox", { name: "Search hosts" }).fill("");

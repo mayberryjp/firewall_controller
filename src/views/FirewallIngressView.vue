@@ -42,7 +42,7 @@ watch(() => interfaceOptions.value.map(option => option.value), names => {
       class="mb-4"
     />
     <p v-if="selectedConfig && !policies">
-      No interface ingress policies configured. Import hosts to enable host/interface policies.
+      No interface ingress policies configured. Enable server-side Sando host sync to add host/interface policies.
     </p>
     <FirewallRuleTable
       v-else-if="selectedInterfaceName"

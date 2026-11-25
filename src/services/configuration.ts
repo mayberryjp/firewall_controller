@@ -959,9 +959,12 @@ export function requiredPermissions(diff: Difference[]): string[] {
       const after = change.after && typeof change.after === "object" ? change.after : {};
       const beforeEnabled = "policy_sync_enabled" in before && before.policy_sync_enabled === true;
       const afterEnabled = "policy_sync_enabled" in after && after.policy_sync_enabled === true;
+      const beforeHostsEnabled = "sync_enabled" in before && before.sync_enabled === true;
+      const afterHostsEnabled = "sync_enabled" in after && after.sync_enabled === true;
       const beforeUrl = "api_url" in before ? before.api_url : "";
       const afterUrl = "api_url" in after ? after.api_url : "";
-      if (beforeEnabled !== afterEnabled || (beforeEnabled || afterEnabled) && beforeUrl !== afterUrl) {
+      if (beforeEnabled !== afterEnabled || beforeHostsEnabled !== afterHostsEnabled ||
+          (beforeEnabled || afterEnabled || beforeHostsEnabled || afterHostsEnabled) && beforeUrl !== afterUrl) {
         permissions.add("firewall.write");
       }
     }

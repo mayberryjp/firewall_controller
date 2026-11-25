@@ -12,15 +12,13 @@ import { tuningSettings } from "@/services/tuning";
 import { kernelTunablesCatalogSchema, kernelTunablesSchema, conntrackPreserved } from "@/services/conntrack";
 import { discordConfigSchema, discordDefaults, discordStatusSchema, discordTestSchema, discordWebhookSchema, discordWebhookReferenceSchema, redactDiscordError } from "@/services/discord";
 import { dateVersionSchema } from "@/services/versions";
-import { sandoSourceUrlSchema } from "@/services/sandoState";
-import { utf8Size } from "@/services/json";
 import { ruleOwnershipPreserved } from "@/services/ruleOwnership";
 import { firewallCountersSchema, firewallDenyPageSchema, firewallDenyQuerySchema, type FirewallDenyQuery } from "@/services/firewallTelemetry";
 import { dnsLookupRequestSchema, dnsLookupSchema, restartResponseSchema, restartTargetSchema, type DNSLookupRequest } from "@/services/operations";
 import {
   adoptVlanRequestSchema, adoptVlanResponseSchema, type AdoptVlanRequest,
   mqttPasswordReferenceSchema, mqttStatusSchema, dynamicDnsSecretReferenceSchema, dynamicDnsStatusSchema, timezonesSchema, systemStatusSchema,
-  configSchema, stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
+  stateSchema, runtimeSchema, transactionSchema, revisionPageSchema, discoveredInterfacesSchema, dhcpRetrySchema, connectionsPageSchema,
   revisionSchema, revisionDetailSchema, statisticsSchema, transactionsSchema, dhcpRelayStatusPageSchema,
   gatewayStatisticsPageSchema, gatewayStatisticsDetailSchema, gatewayStatusPageSchema,
   applianceStatusPageSchema, ntpSchema, syslogSchema, vnstatSchema, vnstatReportingSchema, mdnsSchema, mdnsStatusPageSchema,
@@ -30,19 +28,6 @@ import {
 } from "@/types/domain";
 
 const id = encodeURIComponent;
-const sandoPolicyPreviewSchema = z.object({
-  base_revision: dateVersionSchema,
-  source_url: sandoSourceUrlSchema,
-  etag: z.string().refine(value => utf8Size(value) <= 512, "ETag exceeds 512 UTF-8 bytes"),
-  imported_count: z.number().int().nonnegative(),
-  skipped_count: z.number().int().nonnegative(),
-  changed: z.boolean(),
-  config: configSchema,
-});
-export type SandoPolicyPreview = z.infer<typeof sandoPolicyPreviewSchema>;
-export const previewSandoPolicies = (signal?: AbortSignal) =>
-  request("POST", "/sando/policies/preview", sandoPolicyPreviewSchema, undefined, signal);
-
 export const getDHCPRelayStatistics = (signal?: AbortSignal) =>
   request("GET", "/statistics/dhcp-relay", dhcpRelayStatisticsSchema, undefined, signal);
 export function getDHCPRelayLog(query: DHCPLogQuery = {}, signal?: AbortSignal) {

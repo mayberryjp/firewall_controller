@@ -53,12 +53,20 @@ describe("saved Sando contract", () => {
     const after = cloneConfig(before); after.sando!.sync_enabled = true;
     expect(validateConfig(after)).toEqual([]);
     expect(cloneConfig(after).sando!.sync_enabled).toBe(true);
-    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "sando.write"]);
+    expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "sando.write", "firewall.write"]);
     after.sando!.api_url = "";
     expect(validateConfig(after)).toContainEqual(expect.objectContaining({ page: "/firewall/sando", path: "sando.api_url" }));
   });
   it.each([null, "true", 1])("rejects a non-boolean policy sync flag %j", policy_sync_enabled => {
     expect(sandoSchema.safeParse({ api_url: "https://sando.example", policy_sync_enabled }).success).toBe(false);
+  });
+  it.each(["sync_enabled", "policy_sync_enabled"] as const)("requires firewall authority for both directions of %s", flag => {
+    for (const enabled of [true, false]) {
+      const before = config();
+      before.sando = sandoSchema.parse({ api_url: "https://sando.example", [flag]: !enabled });
+      const after = cloneConfig(before); after.sando![flag] = enabled;
+      expect(requiredPermissions(differences(before, after))).toEqual(["transactions.write", "sando.write", "firewall.write"]);
+    }
   });
   it.each([true, false])("preserves independent policy sync %s and requires firewall authority for either direction", enabled => {
     const before = config();
@@ -70,14 +78,14 @@ describe("saved Sando contract", () => {
     after.sando!.api_url = "";
     if (enabled) expect(validateConfig(after)).toContainEqual(expect.objectContaining({ path: "sando.api_url" }));
   });
-  it("requires a source for policy sync and firewall authority for source changes only when policies are enabled", () => {
+  it("requires a source for policy sync and firewall authority for source changes when either worker is enabled", () => {
     expect(sandoSchema.safeParse({ policy_sync_enabled: true }).success).toBe(false);
-    for (const policy_sync_enabled of [true, false]) {
+    for (const [sync_enabled, policy_sync_enabled] of [[false, false], [true, false], [false, true], [true, true]]) {
       const before = config();
-      before.sando = sandoSchema.parse({ api_url: "https://sando.example", policy_sync_enabled });
+      before.sando = sandoSchema.parse({ api_url: "https://sando.example", sync_enabled, policy_sync_enabled });
       const after = cloneConfig(before); after.sando!.api_url = "https://other.example";
       expect(requiredPermissions(differences(before, after))).toEqual([
-        "transactions.write", "sando.write", ...(policy_sync_enabled ? ["firewall.write"] : []),
+        "transactions.write", "sando.write", ...(sync_enabled || policy_sync_enabled ? ["firewall.write"] : []),
       ]);
     }
   });

@@ -1,44 +1,26 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { useRouter } from "vue-router";
 import { useControllerStore } from "@/stores/controller";
-import { validateConfig } from "@/services/configuration";
-import {
-  getSandoConnections, getSandoDevices, importSando,
-  sandoBaseUrl, replaceSandoRules, type SandoImport, type SandoImportProgress,
-} from "@/services/sando";
-import { sandoSchema, sandoImportReportSchema, type SandoSettings } from "@/services/sandoState";
 import { cloneConfig } from "@/services/configuration";
+import { sandoBaseUrl, getSandoStatus } from "@/services/sando";
+import { sandoSchema, type SandoSettings } from "@/services/sandoState";
+import { useDiagnosticRead } from "@/composables/useDiagnosticRead";
 import { useTimestamps } from "@/composables/useTimestamps";
 
 const store = useControllerStore();
-const router = useRouter();
 const { formatTimestamp, timeZone } = useTimestamps();
 const endpoint = ref(""), savedEndpoint = ref("");
 const syncToggleVersion = ref(0);
-const error = ref(""), notice = ref(""), skipped = ref<string[]>([]), importing = ref<"hosts" | "rules" | null>(null);
-const acknowledgeMode = ref(false);
-const progress = ref<SandoImportProgress | null>(null);
+const error = ref(""), notice = ref("");
 const config = computed(() => store.draft ?? store.state.data?.desired);
-const lastImportAt = computed(() => {
-  const settings = config.value?.sando;
-  const timestamps = [settings?.hosts_import, settings?.rules_import]
-    .flatMap(report => report ? [Date.parse(report.last_import_at)] : []);
-  return timestamps.length ? Math.max(...timestamps) : null;
-});
-const newHostPolicy = ref<"accept" | "drop">("drop");
-const modeChange = computed(() => Boolean(config.value && !config.value.firewall.policies));
 const settingsBlocked = computed(() => store.readOnlyReason ||
-  (store.sandoPreviewPending ? "Test sync is fetching policies." : "") ||
-  (!store.state.data?.desired.sando ? "This backend does not support saved Sando settings and import reports. Update the appliance backend first." : ""));
-const blocked = computed(() => settingsBlocked.value ||
-  (config.value?.firewall.rules.length ? "Remove legacy forwarding rules in the shared draft before importing host policies. Existing rules will not be removed automatically." : ""));
-const blockedNotice = computed(() => store.sandoPreviewPending || store.connecting && !store.connected ? "" :
-  store.readOnlyNotice || (store.state.data ? blocked.value : store.state.error ?? ""));
-const disabled = computed(() => Boolean(importing.value || blocked.value || !endpoint.value.trim() || modeChange.value && !acknowledgeMode.value));
-const automaticPolicies = computed(() => Boolean(config.value?.sando?.policy_sync_enabled ||
-  store.state.data?.desired.sando?.policy_sync_enabled));
-let request: AbortController | undefined;
+  (!store.state.data?.desired.sando ? "This backend does not support saved Sando settings. Update the appliance backend first." : ""));
+const blockedNotice = computed(() => store.connecting && !store.connected ? "" :
+  store.readOnlyNotice || (store.state.data ? settingsBlocked.value : store.state.error ?? ""));
+const { data: status, loading, error: statusError, stale } = useDiagnosticRead(
+  getSandoStatus, 30_000, () => store.state.data?.desired.sando?.api_url ?? "",
+  () => Boolean(store.state.data?.desired.sando),
+);
 watch(() => config.value?.sando?.api_url ?? "", value => {
   if (endpoint.value === savedEndpoint.value) endpoint.value = value;
   savedEndpoint.value = value;
@@ -50,134 +32,32 @@ function stageSettings(update: Partial<Pick<SandoSettings, "api_url" | "sync_ena
   candidate.sando = sandoSchema.parse({ ...candidate.sando, ...update });
   store.stage(candidate);
 }
-function setPolicySync(enabled: boolean | null): void {
-  error.value = ""; notice.value = ""; skipped.value = [];
-  try {
-    if (typeof enabled !== "boolean") throw new Error("Choose enabled or disabled for automatic policy sync.");
-    if (enabled && !store.state.data?.desired.sando?.policy_sync_enabled && !store.sandoPolicyTestPassed) {
-      throw new Error("Run Test sync successfully before enabling automatic policy sync.");
-    }
-    stageSettings({ policy_sync_enabled: enabled });
-  } catch (cause) {
-    syncToggleVersion.value++;
-    error.value = `Unable to change automatic Sando policy sync: ${cause instanceof Error ? cause.message : "configuration unavailable"}`;
-  }
-}
-async function testSync(): Promise<void> {
-  error.value = ""; notice.value = ""; skipped.value = [];
-  const controller = new AbortController();
-  request = controller;
-  try {
-    const result = await store.testSandoPolicies(controller.signal);
-    if (result.changed) await router.push("/config/changes");
-    else notice.value = `No policy changes. Test sync passed; ${result.imported_count} imported, ${result.skipped_count} skipped. Sync flags were not changed.`;
-  } catch (cause) {
-    if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : "Test sync failed.";
-  } finally {
-    if (request === controller) request = undefined;
-  }
-}
-function setSync(enabled: boolean | null): void {
-  error.value = ""; notice.value = ""; skipped.value = [];
+function setSync(key: "sync_enabled" | "policy_sync_enabled", enabled: boolean | null): void {
+  error.value = ""; notice.value = "";
   try {
     if (typeof enabled !== "boolean") throw new Error("Choose enabled or disabled for automatic sync.");
-    stageSettings({ sync_enabled: enabled });
-    notice.value = `Automatic sync ${enabled ? "enabled" : "disabled"} staged.`;
+    stageSettings({ [key]: enabled });
   } catch (cause) {
     syncToggleVersion.value++;
     error.value = `Unable to change automatic Sando sync: ${cause instanceof Error ? cause.message : "configuration unavailable"}`;
   }
 }
 function saveEndpoint(): void {
-  error.value = ""; notice.value = ""; skipped.value = [];
+  error.value = ""; notice.value = "";
   try {
     const normalized = endpoint.value.trim() ? sandoBaseUrl(endpoint.value) : "";
     stageSettings({ api_url: normalized });
     endpoint.value = normalized; savedEndpoint.value = normalized; store.editorDirty = false;
     notice.value = "Endpoint staged.";
   } catch (cause) {
-    error.value = `Unable to save Sando endpoint: ${cause instanceof Error ? cause.message : "storage unavailable"}`;
+    error.value = `Unable to save Sando endpoint: ${cause instanceof Error ? cause.message : "configuration unavailable"}`;
   }
-}
-async function runImport(kind: "hosts" | "rules"): Promise<void> {
-  error.value = ""; notice.value = ""; skipped.value = [];
-  if (disabled.value || !config.value || kind === "rules" && automaticPolicies.value) {
-    error.value = kind === "rules" && automaticPolicies.value ? "Disable automatic policy sync and save before importing rules." :
-      blocked.value || "Enter a Sando endpoint and acknowledge the policy mode change before importing.";
-    return;
-  }
-  const controller = new AbortController();
-  request = controller; importing.value = kind; progress.value = null;
-  const session = store.sessionVersion;
-  const savedSource = config.value.sando?.api_url;
-  try {
-    const base = sandoBaseUrl(endpoint.value);
-    const policy = newHostPolicy.value;
-    const inventory = await getSandoDevices(base, controller.signal);
-    controller.signal.throwIfAborted();
-    const connections = kind === "rules" ? await getSandoConnections(base, controller.signal, inventory.flatMap(device =>
-      device.ip6_address ? [device.ip_address, device.ip6_address] : [device.ip_address]), value => {
-        if (!controller.signal.aborted && request === controller) progress.value = value;
-      }) : undefined;
-    if (controller.signal.aborted || session !== store.sessionVersion) return;
-    if (blocked.value || !config.value || modeChange.value && !acknowledgeMode.value) throw new Error(blocked.value || "The configuration changed. Review the policy mode and retry.");
-    if (kind === "rules" && automaticPolicies.value) throw new Error("Automatic policy sync was enabled while fetching. No import changes were staged.");
-    if (config.value.sando?.api_url !== savedSource) throw new Error("The saved Sando endpoint changed while fetching. Retry the import from the current endpoint; existing rules were retained.");
-    // Merge into the latest shared draft, not a snapshot taken before the network requests.
-    if (kind === "rules") {
-      if (!connections) throw new Error("No successful rule source was returned; existing rules were retained.");
-      const result = replaceSandoRules(config.value, inventory, connections, policy);
-      stageImport(result, base, kind);
-      notice.value += ` ${result.rulesRemoved} previous Sando rules replaced.`;
-    } else stageImport(importSando(config.value, inventory, undefined, policy), base, kind);
-  } catch (cause) {
-    if (controller.signal.aborted) return;
-    controller.abort();
-    error.value = cause instanceof Error ? cause.message : "Sando import failed.";
-  } finally {
-    if (request === controller) { request = undefined; importing.value = null; progress.value = null; }
-  }
-}
-function stopImport(): void {
-  request?.abort();
-  notice.value = "Sando import stopped. No import changes were staged.";
-}
-function stageImport(result: SandoImport, base: string, kind: "hosts" | "rules"): void {
-    result.config.sando = { ...sandoSchema.parse(result.config.sando ?? {}), api_url: base };
-    let reported = false;
-    for (const [key, imported, omitted] of [
-      ["hosts_import", result.hostsAdded, result.hostsSkipped],
-      ["rules_import", result.rulesAdded, result.skipped.length - result.hostsSkipped],
-    ] as const) {
-      if (key === "rules_import" && kind !== "rules" || key === "hosts_import" && kind === "rules" && !result.hostsAdded) continue;
-      if (!imported && omitted) continue;
-      const count = (store.state.data?.desired.sando?.[key]?.import_count ?? 0) + 1;
-      const previous = result.config.sando[key];
-      const pending = key !== "rules_import" && previous?.import_count === count && previous.source_url === base ? previous : null;
-      const skippedCount = Math.max(omitted, pending?.skipped_count ?? 0);
-      result.config.sando[key] = sandoImportReportSchema.parse({
-        source_url: base, import_count: count,
-        last_import_at: pending?.last_import_at ?? new Date().toISOString(), status: skippedCount ? "partial" : "succeeded",
-        imported_count: imported + (pending?.imported_count ?? 0), skipped_count: skippedCount,
-      });
-      reported = true;
-    }
-    const issues = validateConfig(result.config, store.runtime.data?.parent_interfaces, store.baseline ?? store.state.data?.desired, store.supportedKernelCatalog);
-    if (issues.length) throw new Error(issues.map(issue => `${issue.path}: ${issue.message}`).join("\n"));
-    if (result.hostsAdded || result.rulesAdded || reported) {
-      store.stage(result.config); endpoint.value = base; savedEndpoint.value = base; store.editorDirty = false;
-    }
-    skipped.value = result.skipped;
-    notice.value = `${result.hostsAdded} hosts and ${result.rulesAdded} rules staged; ${result.duplicates} duplicates skipped.`;
 }
 watch(() => store.sessionVersion, () => {
-  request?.abort();
-  if (importing.value) error.value = "Sando import canceled because the firewall connection changed.";
   endpoint.value = savedEndpoint.value;
-  notice.value = ""; skipped.value = [];
-  store.editorDirty = false;
+  error.value = ""; notice.value = ""; store.editorDirty = false;
 });
-onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
+onBeforeUnmount(() => { store.editorDirty = false; });
 </script>
 
 <template>
@@ -202,6 +82,15 @@ onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
       {{ error }}
     </v-alert>
     <v-alert
+      v-if="statusError"
+      type="error"
+      class="mb-4"
+    >
+      Unable to read server-side Sando sync status: {{ statusError }}<template v-if="stale">
+        Previously loaded sync timestamps are stale.
+      </template>
+    </v-alert>
+    <v-alert
       v-if="notice"
       type="success"
       variant="tonal"
@@ -214,145 +103,78 @@ onBeforeUnmount(() => { request?.abort(); store.editorDirty = false; });
       label="Sando API endpoint"
       placeholder="https://sando.example/api"
       hide-details="auto"
-      :disabled="Boolean(importing) || store.sandoPreviewPending"
+      :disabled="Boolean(settingsBlocked)"
       class="mb-4"
     />
     <v-btn
-      :disabled="Boolean(importing) || Boolean(settingsBlocked)"
+      :disabled="Boolean(settingsBlocked)"
       class="mb-4"
       @click="saveEndpoint"
     >
       Save endpoint
     </v-btn>
+    <div
+      v-if="loading && !status"
+      role="status"
+      class="mb-4"
+    >
+      Loading server-side sync status...
+    </div>
     <div class="d-flex align-center flex-wrap ga-3 mb-4">
       <v-switch
         :key="String(config?.sando?.sync_enabled ?? false) + syncToggleVersion"
         :model-value="config?.sando?.sync_enabled ?? false"
         label="Automatic host and threat-score sync"
-        :disabled="Boolean(importing) || Boolean(settingsBlocked)"
+        :disabled="Boolean(settingsBlocked)"
         color="primary"
         hide-details
         class="flex-grow-0"
-        @update:model-value="setSync"
+        @update:model-value="setSync('sync_enabled', $event)"
       />
       <v-chip
-        v-if="config?.sando?.sync_enabled"
+        v-if="status"
         size="small"
         variant="tonal"
-        aria-label="Last Sando import"
+        aria-label="Last successful host sync"
       >
-        Last import ({{ timeZone }}): {{ formatTimestamp(lastImportAt, "No imports yet") }}
+        Last successful host sync ({{ timeZone }}): {{ formatTimestamp(status.last_success_at, "No successful sync yet") }}
       </v-chip>
     </div>
+    <v-alert
+      v-if="status?.error"
+      type="error"
+      variant="tonal"
+      class="mb-4"
+    >
+      Host sync failed: {{ status.error }}
+    </v-alert>
     <div class="d-flex align-center flex-wrap ga-3 mb-4">
       <v-switch
         :key="'policies-' + String(config?.sando?.policy_sync_enabled ?? false) + syncToggleVersion"
         :model-value="config?.sando?.policy_sync_enabled ?? false"
         label="Automatically sync policies"
-        :disabled="Boolean(importing) || Boolean(settingsBlocked) || (!config?.sando?.policy_sync_enabled && !store.state.data?.desired.sando?.policy_sync_enabled && !store.sandoPolicyTestPassed)"
+        :disabled="Boolean(settingsBlocked)"
         color="primary"
         hide-details
         class="flex-grow-0"
-        @update:model-value="setPolicySync"
+        @update:model-value="setSync('policy_sync_enabled', $event)"
       />
-      <v-btn
-        :disabled="Boolean(importing) || Boolean(store.sandoPreviewBlockedReason)"
-        :loading="store.sandoPreviewPending"
-        @click="testSync"
+      <v-chip
+        v-if="status"
+        size="small"
+        variant="tonal"
+        aria-label="Last successful policy sync"
       >
-        Test sync
-      </v-btn>
-    </div>
-    <div
-      v-if="store.sandoPreviewPending"
-      role="status"
-      class="mb-4"
-    >
-      Fetching server-side policy preview; no changes are being applied.
-    </div>
-    <div
-      v-else-if="store.state.data && !store.connecting"
-      class="text-body-2 mb-4"
-    >
-      {{ store.sandoPreviewBlockedReason || (!config?.sando?.policy_sync_enabled && !store.sandoPolicyTestPassed ? "Run Test sync successfully before enabling automatic policy sync." : "") }}
-    </div>
-    <v-select
-      v-model="newHostPolicy"
-      label="New host default policy"
-      :items="['accept', 'drop']"
-      hide-details="auto"
-      :disabled="Boolean(importing)"
-      class="mb-4"
-    />
-    <v-checkbox
-      v-if="modeChange"
-      v-model="acknowledgeMode"
-      label="Use host/interface policy mode with stateful return traffic instead of legacy forwarding mode"
-      hide-details="auto"
-      :disabled="Boolean(importing) || Boolean(blocked)"
-      class="mb-4"
-    />
-    <div class="d-flex flex-wrap ga-3 mb-4">
-      <v-btn
-        color="primary"
-        :disabled="disabled"
-        :loading="importing === 'hosts'"
-        @click="runImport('hosts')"
-      >
-        Import hosts
-      </v-btn>
-      <v-btn
-        color="primary"
-        :disabled="disabled || automaticPolicies"
-        :loading="importing === 'rules'"
-        @click="runImport('rules')"
-      >
-        Import rules
-      </v-btn>
-      <v-btn
-        v-if="importing"
-        @click="stopImport"
-      >
-        Stop import
-      </v-btn>
-    </div>
-    <div
-      v-if="importing"
-      class="mb-4"
-    >
-      <div role="status">
-        <template v-if="progress">
-          {{ progress.completed }} / {{ progress.total }} localhosts completed<template v-if="progress.currentHost">
-            &mdash; {{ progress.currentHost }}
-          </template>
-        </template>
-        <template v-else>
-          Loading Sando host inventory...
-        </template>
-      </div>
-      <v-progress-linear
-        :indeterminate="!progress"
-        :model-value="progress ? (progress.total ? progress.completed / progress.total * 100 : 100) : 0"
-        aria-label="Sando import progress"
-        color="primary"
-        class="mt-2"
-      />
+        Last successful policy sync ({{ timeZone }}): {{ formatTimestamp(status.policies.last_success_at, "No successful sync yet") }}
+      </v-chip>
     </div>
     <v-alert
-      v-if="skipped.length"
-      type="warning"
+      v-if="status?.policies.error"
+      type="error"
       variant="tonal"
       class="mb-4"
     >
-      Skipped entries:
-      <ul>
-        <li
-          v-for="(reason, index) in skipped"
-          :key="index"
-        >
-          {{ reason }}
-        </li>
-      </ul>
+      Policy sync failed: {{ status.policies.error }}
     </v-alert>
   </section>
 </template>

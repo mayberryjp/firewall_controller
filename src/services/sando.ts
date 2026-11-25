@@ -1,231 +1,55 @@
 import { z } from "zod";
-import { cloneConfig, numericAddress, policyHostAddress, stableJson } from "@/services/configuration";
-import { decodeJson, utf8Size } from "@/services/json";
-import type { Config } from "@/types/domain";
+import { request } from "@/services/api";
 import { sandoSourceUrlSchema } from "@/services/sandoState";
 
-const text = z.union([z.string(), z.number(), z.boolean()]).nullish().transform(value => value == null ? value : String(value));
-const integer = z.union([z.number(), z.string(), z.boolean()]).nullish();
-const candidateNumber = z.union([z.number(), z.string()]).nullish().transform(value => value == null ? NaN : Number(value));
-export const sandoDeviceSchema = z.object({
-  ip_address: z.string(), first_seen: text, original_flow: text,
-  mac_address: text, mac_vendor: text, dhcp_hostname: text, dns_hostname: text,
-  os_fingerprint: text, local_description: text, lease_hostname: text,
-  lease_hwaddr: text, lease_clientid: text, icon: text, tags: text,
-  acknowledged: integer, threat_score: integer, alerts_enabled: integer,
-  management_link: text, last_seen: text, last_dhcp_discover: text, whitelisted: integer,
-  total_packets_src: integer, total_packets_dst: integer, total_bytes_src: integer,
-  total_bytes_dst: integer, ip6_address: text, alert_if_offline: integer, domain_name: text,
-}).passthrough();
-export type SandoDevice = z.infer<typeof sandoDeviceSchema>;
-const sandoDevicesSchema = z.array(z.unknown()).transform(rows => rows.filter(row => {
-  if (typeof row !== "object" || row === null || Array.isArray(row)) return true;
-  if (!("ip_address" in row)) return false;
-  return row.ip_address != null && (typeof row.ip_address !== "string" || row.ip_address.trim() !== "");
-})).pipe(z.array(sandoDeviceSchema));
-export const sandoConnectionSchema = z.object({
-  ignorelist_id: z.union([z.string(), z.number()]).nullish().transform(value => value == null ? undefined : String(value)),
-  src_ip: z.string().nullable().transform(value => value ?? ""), dst_ip: z.string().nullable().transform(value => value ?? ""),
-  dst_port: z.union([z.literal("*"), candidateNumber]), protocol: candidateNumber, added: text,
-  requested_host: z.string().optional(),
-}).passthrough();
-export type SandoConnection = z.infer<typeof sandoConnectionSchema>;
-type Policies = NonNullable<Config["firewall"]["policies"]>;
+const syncSchema = z.object({
+  enabled: z.boolean(),
+  state: z.enum(["disabled", "pending", "syncing", "succeeded", "error"]),
+  sync_interval_seconds: z.number().int().positive(),
+  source_url: z.union([z.literal(""), sandoSourceUrlSchema]),
+  last_attempt_at: z.string().nullable(),
+  last_success_at: z.string().nullable(),
+  next_sync_at: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export const sandoStatusSchema = syncSchema.extend({
+  hosts: z.array(z.object({
+    addresses: z.array(z.string()).min(1).max(2),
+    host_name: z.string().nullable(),
+    icon: z.string().nullable(),
+    classification: z.string().nullable(),
+    threat_score: z.number().int().min(-1).max(100).nullable(),
+  })),
+  policies: syncSchema,
+});
+export type SandoStatus = z.infer<typeof sandoStatusSchema>;
+export const getSandoStatus = (signal?: AbortSignal) =>
+  request("GET", "/sando", sandoStatusSchema, undefined, signal);
 
-export function sandoEndpoint(value: string): string {
-  return `${sandoBaseUrl(value)}/api`;
-}
 export function sandoBaseUrl(value: string): string {
   const base = value.trim().replace(/\/+$/, "").replace(/\/api$/, "");
   sandoSourceUrlSchema.parse(base);
   return base;
 }
-async function getSando<T extends z.ZodTypeAny>(endpoint: string, resource: string, schema: T, signal: AbortSignal): Promise<z.output<T>> {
-  const timeout = AbortSignal.timeout(120_000);
-  try {
-    const response = await fetch(`${sandoEndpoint(endpoint)}/${resource}`, {
-      signal: AbortSignal.any([signal, timeout]),
-      credentials: "omit", redirect: "error", cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) throw new Error(`Sando returned HTTP ${response.status}.`);
-    return schema.parse(decodeJson(await response.text()));
-  } catch (error) {
-    if (signal.aborted) throw error;
-    if (timeout.aborted) throw new Error(`Unable to import from Sando: ${resource} timed out after 2 minutes. Check the connection and retry; no import changes were staged.`);
-    if (error instanceof z.ZodError) {
-      const details = error.issues.slice(0, 3).map(issue => `${issue.path.join(".") || "response"}: ${issue.message}`).join("; ");
-      const remaining = error.issues.length - 3;
-      throw new Error(`Unable to import from Sando: incompatible ${resource} response (${details}${remaining > 0 ? `; ${remaining} more issues` : ""}).`);
-    }
-    throw new Error(`Unable to import from Sando: ${error instanceof Error ? error.message : "request failed"}. Check the endpoint, browser network access, CORS and HTTPS requirements.`);
-  }
-}
-export const getSandoDevices = (endpoint: string, signal: AbortSignal) =>
-  getSando(endpoint, "localhosts", sandoDevicesSchema, signal);
-export interface SandoImportProgress {
-  completed: number;
-  total: number;
-  currentHost: string | null;
-}
-export async function getSandoConnections(
-  endpoint: string, signal: AbortSignal, hosts: string[],
-  onProgress?: (progress: SandoImportProgress) => void,
-): Promise<SandoConnection[]> {
-  const entries = new Map<string, SandoConnection>();
-  const uniqueHosts = [...new Set(hosts)];
-  let completed = 0;
-  for (const host of uniqueHosts) {
-    signal.throwIfAborted();
-    onProgress?.({ completed, total: uniqueHosts.length, currentHost: host });
-    const rows = await getSando(endpoint, `ignorelist/ip/${encodeURIComponent(host)}`, z.array(sandoConnectionSchema), signal);
-    signal.throwIfAborted();
-    for (const row of rows) {
-      const key = stableJson([row.ignorelist_id ?? null, row.src_ip, row.dst_ip, row.protocol, row.dst_port]);
-      if (!entries.has(key) || row.src_ip === host) entries.set(key, { ...row, requested_host: host });
-    }
-    completed++;
-  }
-  onProgress?.({ completed, total: uniqueHosts.length, currentHost: null });
-  return [...entries.values()];
-}
 
-export function sandoDeviceName(device: SandoDevice): string {
-  return device.dhcp_hostname || device.lease_hostname || device.dns_hostname || device.domain_name || device.ip_address;
-}
-function hostName(device: SandoDevice, hosts: Policies["hosts"]): string {
-  let name = sandoDeviceName(device).trim().replace(/\p{Cc}/gu, "");
-  if (!name) name = device.ip_address;
-  while (utf8Size(name) > 80) name = [...name].slice(0, -1).join("");
-  name = name.trimEnd();
-  if (!hosts.some(host => host.name === name)) return name;
-  return device.ip_address;
-}
-export interface SandoImport {
-  config: Config;
-  hostsAdded: number;
-  rulesAdded: number;
-  duplicates: number;
-  skipped: string[];
-  hostsSkipped: number;
-}
-export function importSando(
-  current: Config, devices: SandoDevice[], connections: SandoConnection[] | undefined,
-  newHostPolicy: "accept" | "drop",
-): SandoImport {
-  if (current.firewall.rules.length) {
-    throw new Error("Legacy forwarding rules cannot coexist with host policies. Review and remove legacy rules in the shared draft before importing; no rules were removed.");
-  }
-  const config = cloneConfig(current);
-  const policies = config.firewall.policies ?? { hosts: [], interfaces: [] };
-  const result: SandoImport = { config, hostsAdded: 0, rulesAdded: 0, duplicates: 0, skipped: [], hostsSkipped: 0 };
-  function addHost(device: SandoDevice, addresses: string[]): Policies["hosts"][number] {
-    const id = `sando_${device.ip_address.replace(/[:.]/g, "_")}`;
-    if (policies.hosts.some(host => host.id === id)) throw new Error(`host ID ${id} already exists`);
-    const name = hostName(device, policies.hosts);
-    if (policies.hosts.some(host => host.name === name)) throw new Error(`host name ${name} already exists`);
-    const host: Policies["hosts"][number] = { id, name, addresses, policy: newHostPolicy, rules: [] };
-    policies.hosts.push(host);
-    result.hostsAdded++;
-    return host;
-  }
-  for (const device of devices) {
-    try {
-      policyHostAddress(device.ip_address);
-      if (config.ipv6_enabled !== true && numericAddress(device.ip_address).kind() === "ipv6") throw new Error("IPv6 is disabled");
-      const addresses = [device.ip_address];
-      if (device.ip6_address && device.ip6_address !== device.ip_address) {
-        try {
-          const address = policyHostAddress(device.ip6_address);
-          if (address.kind() !== "ipv6") throw new Error("ip6_address must be IPv6");
-          if (config.ipv6_enabled !== true) throw new Error("IPv6 is disabled");
-          addresses.push(device.ip6_address);
-        } catch (error) {
-          result.skipped.push(`${device.ip_address}: optional IPv6 address "${device.ip6_address}" omitted: ${error instanceof Error ? error.message : "invalid IPv6 address"}`);
-        }
-      }
-      const owners = policies.hosts.filter(host => host.addresses.some(address => addresses.includes(address)));
-      if (owners.length) {
-        if (owners.length === 1 && addresses.every(address => owners[0]!.addresses.includes(address))) result.duplicates++;
-        else result.skipped.push(`${device.ip_address}: an address already belongs to an existing host; existing addresses were preserved.`);
-        continue;
-      }
-      addHost(device, addresses);
-    } catch (error) {
-      result.skipped.push(`${device.ip_address}: ${error instanceof Error ? error.message : "invalid host"}`);
-    }
-  }
-  result.hostsSkipped = result.skipped.length;
-  for (const connection of connections ?? []) {
-    try {
-      const source = policyHostAddress(connection.src_ip);
-      if (config.ipv6_enabled !== true && source.kind() === "ipv6") throw new Error("IPv6 is disabled");
-      const destination = connection.dst_ip === "*" ? undefined : policyHostAddress(connection.dst_ip);
-      if (destination && source.kind() !== destination.kind()) throw new Error("source and destination address families differ");
-      const protocol = connection.protocol === 6 ? "tcp" : connection.protocol === 17 ? "udp"
-        : connection.protocol === 1 ? "icmp" : connection.protocol === 58 ? "icmpv6" : undefined;
-      if (!protocol) throw new Error("only TCP (6), UDP (17), ICMP (1) and ICMPv6 (58) are supported");
-      if ((protocol === "icmp" && source.kind() !== "ipv4") || (protocol === "icmpv6" && source.kind() !== "ipv6")) {
-        throw new Error("source and destination must match the protocol's address family");
-      }
-      const destinationPort = (protocol === "icmp" || protocol === "icmpv6") && connection.dst_port === 0 ? "*" : connection.dst_port;
-      if ((protocol === "icmp" || protocol === "icmpv6") && destinationPort !== "*") throw new Error("ICMP and ICMPv6 must not specify destination ports");
-      if (destinationPort !== "*" && (!Number.isInteger(destinationPort) || destinationPort < 1 || destinationPort > 65535)) throw new Error("destination port must be 1..65535 or an explicit * wildcard");
-      const rule: Policies["hosts"][number]["rules"][number] = {
-        origin: "import", import_source: "sando",
-        destination: destination ? `${connection.dst_ip}/${destination.kind() === "ipv4" ? 32 : 128}` : source.kind() === "ipv4" ? "0.0.0.0/0" : "::/0",
-        protocol,
-        ...(destinationPort === "*" ? {} : { destination_ports: [destinationPort] }), action: "accept",
-      };
-      let host = policies.hosts.find(host => host.addresses.includes(connection.src_ip));
-      if (!host) {
-        if (devices.some(device => device.ip_address === connection.src_ip || device.ip6_address === connection.src_ip)) {
-          throw new Error("source device could not be imported; resolve its host validation error first");
-        }
-        host = addHost({ ip_address: connection.src_ip }, [connection.src_ip]);
-      }
-      const signature = (value: typeof rule) => stableJson({
-        destination: value.destination, destination_host: value.destination_host || undefined,
-        out_interface: value.out_interface || undefined, protocol: value.protocol || undefined,
-        destination_ports: value.destination_ports?.length ? value.destination_ports.slice().sort((a, b) => a - b) : undefined, action: value.action,
-      });
-      if (host.rules.some(existing => signature(existing) === signature(rule))) { result.duplicates++; continue; }
-      host.rules.push(rule);
-      result.rulesAdded++;
-    } catch (error) {
-      const label = connection.ignorelist_id || `${connection.src_ip} -> ${connection.dst_ip} (protocol ${connection.protocol}, port ${connection.dst_port})`;
-      result.skipped.push(`${label}: ${error instanceof Error ? error.message : "invalid connection"}`);
-    }
-  }
-  if (result.hostsAdded || result.rulesAdded) config.firewall.policies = policies;
-  return result;
-}
+export const sandoDeviceSchema = z.object({
+  ip_address: z.string(),
+  ip6_address: z.string().nullish(),
+  local_description: z.string().nullish(),
+  icon: z.string().nullish(),
+  threat_score: z.number().int().min(-1).max(100).nullish(),
+}).passthrough();
+export type SandoDevice = z.infer<typeof sandoDeviceSchema>;
 
-export interface SandoRuleReplacement extends SandoImport {
-  rulesRemoved: number;
-  changes: Array<{ hostID: string; hostName: string; before: Policies["hosts"][number]["rules"]; after: Policies["hosts"][number]["rules"] }>;
-}
-export function replaceSandoRules(current: Config, devices: SandoDevice[], connections: SandoConnection[], policy: "accept" | "drop"): SandoRuleReplacement {
-  const candidate = cloneConfig(current), affected = new Set<string>();
-  const previousRules = new Map((candidate.firewall.policies?.hosts ?? []).map(host => [host.id, host.rules]));
-  const owned = (rule: Policies["hosts"][number]["rules"][number]) => rule.origin === "import" && rule.import_source === "sando";
-  let rulesRemoved = 0;
-  for (const host of candidate.firewall.policies?.hosts ?? []) {
-    const remaining = host.rules.filter(rule => !owned(rule));
-    if (remaining.length !== host.rules.length) {
-      affected.add(host.id); rulesRemoved += host.rules.length - remaining.length; host.rules = remaining;
-    }
-  }
-  const result = importSando(candidate, devices, connections, policy);
-  if (result.skipped.length && !result.rulesAdded) throw new Error("No replacement rules could be imported cleanly. Existing rules and reports were retained; resolve the skipped source entries before replacing Sando rules.\n" + result.skipped.join("\n"));
-  const changes: SandoRuleReplacement["changes"] = [];
-  for (const host of result.config.firewall.policies?.hosts ?? []) {
-    if (!affected.has(host.id) && !host.rules.some(owned)) continue;
-    host.rules = [
-      ...host.rules.filter(rule => (rule.origin ?? "manual") === "manual"),
-      ...host.rules.filter(rule => (rule.origin ?? "manual") !== "manual"),
-    ];
-    changes.push({ hostID: host.id, hostName: host.name, before: previousRules.get(host.id) ?? [], after: host.rules });
-  }
-  return { ...result, rulesRemoved, changes };
+export async function getSandoDevices(endpoint: string, signal: AbortSignal): Promise<SandoDevice[]> {
+  const status = await getSandoStatus(signal);
+  if (status.source_url !== sandoBaseUrl(endpoint)) throw new Error("The saved Sando source changed. Host metadata is unavailable for this endpoint.");
+  if (status.error) throw new Error(`Server-side Sando host sync failed: ${status.error}`);
+  return status.hosts.map(host => ({
+    ip_address: host.addresses[0]!,
+    ip6_address: host.addresses[1],
+    local_description: host.classification,
+    icon: host.icon,
+    threat_score: host.threat_score,
+  }));
 }
