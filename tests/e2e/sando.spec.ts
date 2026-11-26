@@ -24,12 +24,12 @@ test(`force ${target} sync uses the server with automation disabled and no brows
   await page.getByRole("button", { name: "Connect", exact: true }).click();
   await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
   await page.goto("/settings/sando");
-  const button = page.getByRole("button", { name: target === "hosts" ? "Force host sync" : "Force policy sync", exact: true });
+  const button = page.getByRole("button", { name: target === "hosts" ? "SYNC PROTECTED HOSTS" : "SYNC FIREWALL POLICIES", exact: true });
   await expect(button).toBeEnabled(); await button.click();
   await expect(page.getByText(`${target === "hosts" ? "Host" : "Policy"} sync completed.`, { exact: true })).toBeVisible();
   await expect(page.getByLabel(target === "hosts" ? "Last successful host sync" : "Last successful policy sync", { exact: true })).toContainText("2026-11-26 01:00:00");
-  await expect(page.getByLabel("Automatic host and threat-score sync", { exact: true })).not.toBeChecked();
-  await expect(page.getByLabel("Automatically sync policies", { exact: true })).not.toBeChecked();
+  await expect(page.getByLabel("Sync protected hosts", { exact: true })).not.toBeChecked();
+  await expect(page.getByLabel("Sync firewall policies", { exact: true })).not.toBeChecked();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Test sync|Import hosts|Import rules/ })).toHaveCount(0);
   expect(requests).toEqual(["POST"]); expect(backend.writes).toEqual([]);
@@ -59,7 +59,7 @@ for (const enabled of [true, false]) test(`server Sando ${flag} can be ${enabled
   await expect(page.getByRole("button", { name: /Test sync|Import hosts|Import rules|Stop import/ })).toHaveCount(0);
   await expect(page.getByLabel("Last successful host sync", { exact: true })).toHaveText("Last successful host sync (Asia/Tokyo): 2026-10-30 23:00:00");
   await expect(page.getByLabel("Last successful policy sync", { exact: true })).toHaveText("Last successful policy sync (Asia/Tokyo): 2026-10-31 04:30:08");
-  const sync = page.getByLabel(flag === "sync_enabled" ? "Automatic host and threat-score sync" : "Automatically sync policies", { exact: true });
+  const sync = page.getByLabel(flag === "sync_enabled" ? "Sync protected hosts" : "Sync firewall policies", { exact: true });
   await expect(sync).toBeEnabled();
   await sync.setChecked(enabled);
   await expect(sync).toBeChecked({ checked: enabled });
