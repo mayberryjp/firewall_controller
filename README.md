@@ -1520,6 +1520,15 @@ Sando-owned outbound rules, skipping unsupported entries; empty/all-skipped list
 remove prior Sando-owned rules. Manual and other-provider rules are preserved.
 There is no Test sync button or prerequisite, browser policy preview, or one-time
 browser host/rule import. Both toggles stage directly without additional popups.
+**Force host sync** and **Force policy sync** perform one-time acquisition and
+application on the appliance using the committed endpoint, even when automatic
+sync is disabled; neither changes the sync flags or browser import reports.
+They call bodyless `POST /api/v1/sando/hosts/sync` and
+`POST /api/v1/sando/policies/sync`, requiring `state.read`, `sando.write`,
+`firewall.write` and `transactions.write`. Save or discard edits first.
+Successful actions update server timestamps and refresh committed configuration.
+Failures stay inline; requests are never automatically retried. These actions
+require the matching backend force-sync endpoints; older backends reject them.
 Deploy the matching [November 25 backend](https://github.com/mayberryjp/firewall_backend/blob/main/docs/frontend-handoffs/2026-11-25.md)
 before relying on automatic host additions.
 Background revisions use the existing stale-draft SAVE protection; compare and

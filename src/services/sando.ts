@@ -25,6 +25,9 @@ export const sandoStatusSchema = syncSchema.extend({
 export type SandoStatus = z.infer<typeof sandoStatusSchema>;
 export const getSandoStatus = (signal?: AbortSignal) =>
   request("GET", "/sando", sandoStatusSchema, undefined, signal);
+export type SandoSyncTarget = "hosts" | "policies";
+export const forceSandoSync = (target: SandoSyncTarget, signal?: AbortSignal) =>
+  request("POST", `/sando/${target}/sync`, sandoStatusSchema, undefined, signal);
 
 export function sandoBaseUrl(value: string): string {
   const base = value.trim().replace(/\/+$/, "").replace(/\/api$/, "");

@@ -26,6 +26,8 @@ const stubs = {
 let wrapper: ReturnType<typeof mount>;
 const toggle = (key: string) => wrapper.get(`input[aria-label="${key === "sync_enabled" ? "Automatic host and threat-score sync" : "Automatically sync policies"}"]`);
 const endpoint = () => wrapper.get('input[aria-label="Sando API endpoint"]');
+const forceButton = (target: sando.SandoSyncTarget) => wrapper.findAll("button").find(button =>
+  button.text() === (target === "hosts" ? "Force host sync" : "Force policy sync"))!;
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -44,11 +46,72 @@ describe("server-side Sando sync settings", () => {
     const store = useControllerStore(), apply = vi.spyOn(store, "apply");
     const inventory = vi.spyOn(sando, "getSandoDevices");
     wrapper = mount(SandoView, { global: { stubs } }); await flushPromises();
-    expect(wrapper.findAll("button").map(button => button.text())).toEqual(["Save endpoint"]);
+    expect(wrapper.findAll("button").map(button => button.text())).toEqual(["Save endpoint", "Force host sync", "Force policy sync"]);
     expect(wrapper.text()).not.toMatch(/Last import|New host default|Test sync/);
     expect(sando.getSandoStatus).toHaveBeenCalledWith(expect.any(AbortSignal), null);
     expect(inventory).not.toHaveBeenCalled();
     expect(store.draft).toBeNull(); expect(apply).not.toHaveBeenCalled();
+  });
+  it.each(["hosts", "policies"] as const)("forces %s once with automatic sync disabled, updates server timestamps, and refreshes configuration", async target => {
+    const store = useControllerStore(), before = cloneConfig(store.state.data!.desired);
+    const refresh = vi.spyOn(store, "refresh").mockResolvedValue();
+    const confirm = vi.spyOn(window, "confirm"), alert = vi.spyOn(window, "alert");
+    let resolve!: (status: sando.SandoStatus) => void;
+    const force = vi.spyOn(sando, "forceSandoSync").mockReturnValue(new Promise(done => { resolve = done; }));
+    wrapper = mount(SandoView, { global: { stubs } }); await flushPromises();
+    await forceButton(target).trigger("click");
+    expect(force).toHaveBeenCalledExactlyOnceWith(target, expect.any(AbortSignal));
+    expect(forceButton("hosts").attributes("disabled")).toBeDefined();
+    expect(forceButton("policies").attributes("disabled")).toBeDefined();
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false);
+    await forceButton(target).trigger("click");
+    expect(force).toHaveBeenCalledOnce();
+    const status = sandoStatus();
+    status.last_success_at = "2026-11-26T01:00:00.999Z";
+    status.policies.last_success_at = "2026-11-26T01:01:00.123Z";
+    vi.mocked(sando.getSandoStatus).mockResolvedValue(status); resolve(status); await flushPromises();
+    expect(wrapper.text()).toContain(`${target === "hosts" ? "Host" : "Policy"} sync completed.`);
+    expect(wrapper.get('[aria-label="Last successful host sync"]').text()).toContain("2026-11-26 01:00:00");
+    expect(wrapper.get('[aria-label="Last successful policy sync"]').text()).toContain("2026-11-26 01:01:00");
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(store.draft).toBeNull(); expect(cloneConfig(store.state.data!.desired)).toEqual(before);
+    expect(confirm).not.toHaveBeenCalled(); expect(alert).not.toHaveBeenCalled();
+  });
+  it("exposes failed force sync inline without staging changes or claiming success", async () => {
+    vi.spyOn(sando, "forceSandoSync").mockRejectedValue(new Error("HTTP 503: upstream unavailable"));
+    const refresh = vi.spyOn(useControllerStore(), "refresh");
+    wrapper = mount(SandoView, { global: { stubs } }); await flushPromises();
+    await forceButton("policies").trigger("click"); await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain("Unable to force policy sync: HTTP 503: upstream unavailable");
+    expect(wrapper.text()).not.toContain("sync completed");
+    expect(refresh).not.toHaveBeenCalled(); expect(useControllerStore().draft).toBeNull();
+  });
+  it("blocks force sync during pending reads, unsaved edits and an already running server worker", async () => {
+    const force = vi.spyOn(sando, "forceSandoSync");
+    wrapper = mount(SandoView, { global: { stubs } });
+    expect(forceButton("hosts").attributes("disabled")).toBeDefined();
+    await flushPromises();
+    expect(forceButton("hosts").attributes("disabled")).toBeUndefined();
+    await endpoint().setValue("https://other.example");
+    expect(forceButton("hosts").attributes("disabled")).toBeDefined();
+    await endpoint().setValue("https://sando.example");
+    const status = sandoStatus(); status.policies.state = "syncing";
+    vi.mocked(sando.getSandoStatus).mockResolvedValue(status);
+    useControllerStore().sessionVersion++; await flushPromises();
+    expect(forceButton("hosts").attributes("disabled")).toBeDefined();
+    expect(forceButton("policies").attributes("disabled")).toBeDefined();
+    expect(force).not.toHaveBeenCalled();
+  });
+  it("cancels a prior-session force response without refreshing or displaying its success", async () => {
+    let resolve!: (status: sando.SandoStatus) => void;
+    const force = vi.spyOn(sando, "forceSandoSync").mockReturnValue(new Promise(done => { resolve = done; }));
+    const refresh = vi.spyOn(useControllerStore(), "refresh");
+    wrapper = mount(SandoView, { global: { stubs } }); await flushPromises();
+    await forceButton("hosts").trigger("click");
+    useControllerStore().sessionVersion++; await flushPromises();
+    expect(force.mock.calls[0]![1]!.aborted).toBe(true);
+    resolve(sandoStatus()); await flushPromises();
+    expect(wrapper.text()).not.toContain("sync completed"); expect(refresh).not.toHaveBeenCalled();
   });
   it.each(["sync_enabled", "policy_sync_enabled"] as const)("stages %s independently in both directions without a test, apply, or popup", async key => {
     const store = useControllerStore(), before = cloneConfig(store.state.data!.desired);
@@ -117,12 +180,18 @@ describe("server-side Sando sync settings", () => {
     expect(wrapper.get('[role="status"]').text()).toContain("Loading server-side");
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
     expect(wrapper.find('[aria-label="Last successful host sync"]').exists()).toBe(false);
+    expect(forceButton("hosts").attributes("disabled")).toBeDefined();
     if (outcome === "success") resolve(sandoStatus());
     else reject(new Error("HTTP 503: status unavailable"));
     await flushPromises();
     expect(wrapper.find('[role="status"]').exists()).toBe(false);
-    if (outcome === "success") expect(wrapper.get('[aria-label="Last successful host sync"]').text()).toContain("2026-10-30 14:00:00");
-    else expect(wrapper.get('[role="alert"]').text()).toContain("HTTP 503: status unavailable");
+    if (outcome === "success") {
+      expect(wrapper.get('[aria-label="Last successful host sync"]').text()).toContain("2026-10-30 14:00:00");
+      expect(forceButton("hosts").attributes("disabled")).toBeUndefined();
+    } else {
+      expect(wrapper.get('[role="alert"]').text()).toContain("HTTP 503: status unavailable");
+      expect(forceButton("hosts").attributes("disabled")).toBeDefined();
+    }
   });
   it("polls read-only status every 30 seconds, retaining stale timestamps on failure and updating on recovery", async () => {
     vi.useFakeTimers();

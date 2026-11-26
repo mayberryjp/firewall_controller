@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useControllerStore } from "@/stores/controller";
 import { cloneConfig } from "@/services/configuration";
-import { sandoBaseUrl, getSandoStatus } from "@/services/sando";
+import { sandoBaseUrl, getSandoStatus, forceSandoSync, type SandoSyncTarget } from "@/services/sando";
 import { sandoSchema, type SandoSettings } from "@/services/sandoState";
 import { useDiagnosticRead } from "@/composables/useDiagnosticRead";
 import { useTimestamps } from "@/composables/useTimestamps";
@@ -12,15 +12,44 @@ const { formatTimestamp, timeZone } = useTimestamps();
 const endpoint = ref(""), savedEndpoint = ref("");
 const syncToggleVersion = ref(0);
 const error = ref(""), notice = ref("");
+const syncing = ref<SandoSyncTarget | null>(null);
+let syncRequest: AbortController | undefined;
 const config = computed(() => store.draft ?? store.state.data?.desired);
-const settingsBlocked = computed(() => store.readOnlyReason ||
+const settingsBlocked = computed(() => store.readOnlyReason || (syncing.value ? "Server-side Sando sync is running." : "") ||
   (!store.state.data?.desired.sando ? "This backend does not support saved Sando settings. Update the appliance backend first." : ""));
-const blockedNotice = computed(() => store.connecting && !store.connected ? "" :
+const blockedNotice = computed(() => syncing.value || store.connecting && !store.connected ? "" :
   store.readOnlyNotice || (store.state.data ? settingsBlocked.value : store.state.error ?? ""));
-const { data: status, loading, error: statusError, stale } = useDiagnosticRead(
+const { data: status, loading, error: statusError, stale, read: readStatus, cancel: cancelStatus } = useDiagnosticRead(
   getSandoStatus, 30_000, () => store.state.data?.desired.sando?.api_url ?? "",
   () => Boolean(store.state.data?.desired.sando),
 );
+const syncBlocked = computed(() => settingsBlocked.value || store.operationBlockedReason ||
+  (!store.state.data?.desired.sando?.api_url ? "Save a Sando API endpoint before forcing sync." : "") ||
+  (store.editorDirty || store.diff.length || store.draftStale ? "Save or discard local changes before forcing sync." : "") ||
+  (store.state.stale || store.state.error ? "Refresh the saved configuration before forcing sync." : "") ||
+  (loading.value || !status.value || stale.value || statusError.value ? "Current server-side sync status is required." : "") ||
+  (status.value?.state === "syncing" || status.value?.policies.state === "syncing" ? "Server-side Sando sync is running." : ""));
+async function forceSync(target: SandoSyncTarget): Promise<void> {
+  error.value = ""; notice.value = "";
+  if (syncBlocked.value) { error.value = syncBlocked.value; return; }
+  const controller = new AbortController(), session = store.sessionVersion;
+  syncRequest = controller; syncing.value = target; cancelStatus();
+  const current = () => !controller.signal.aborted && session === store.sessionVersion;
+  try {
+    const result = await forceSandoSync(target, controller.signal);
+    if (!current()) return;
+    status.value = result; stale.value = false; statusError.value = "";
+    notice.value = `${target === "hosts" ? "Host" : "Policy"} sync completed.`;
+    await store.refresh();
+  } catch (cause) {
+    if (current()) error.value = `Unable to force ${target === "hosts" ? "host" : "policy"} sync: ${cause instanceof Error ? cause.message : "request failed"}`;
+  } finally {
+    if (syncRequest === controller) {
+      syncRequest = undefined; syncing.value = null;
+      if (current()) await readStatus();
+    }
+  }
+}
 watch(() => config.value?.sando?.api_url ?? "", value => {
   if (endpoint.value === savedEndpoint.value) endpoint.value = value;
   savedEndpoint.value = value;
@@ -54,10 +83,11 @@ function saveEndpoint(): void {
   }
 }
 watch(() => store.sessionVersion, () => {
+  syncRequest?.abort(); syncRequest = undefined; syncing.value = null;
   endpoint.value = savedEndpoint.value;
   error.value = ""; notice.value = ""; store.editorDirty = false;
 });
-onBeforeUnmount(() => { store.editorDirty = false; });
+onBeforeUnmount(() => { syncRequest?.abort(); store.editorDirty = false; });
 </script>
 
 <template>
@@ -131,6 +161,13 @@ onBeforeUnmount(() => { store.editorDirty = false; });
         class="flex-grow-0"
         @update:model-value="setSync('sync_enabled', $event)"
       />
+      <v-btn
+        :disabled="Boolean(syncBlocked)"
+        :loading="syncing === 'hosts'"
+        @click="forceSync('hosts')"
+      >
+        Force host sync
+      </v-btn>
       <v-chip
         v-if="status"
         size="small"
@@ -159,6 +196,13 @@ onBeforeUnmount(() => { store.editorDirty = false; });
         class="flex-grow-0"
         @update:model-value="setSync('policy_sync_enabled', $event)"
       />
+      <v-btn
+        :disabled="Boolean(syncBlocked)"
+        :loading="syncing === 'policies'"
+        @click="forceSync('policies')"
+      >
+        Force policy sync
+      </v-btn>
       <v-chip
         v-if="status"
         size="small"
@@ -176,5 +220,11 @@ onBeforeUnmount(() => { store.editorDirty = false; });
     >
       Policy sync failed: {{ status.policies.error }}
     </v-alert>
+    <div
+      v-if="!syncing && store.state.data && !store.connecting && !loading && (store.editorDirty || store.diff.length || store.draftStale || !store.state.data.desired.sando?.api_url)"
+      class="text-body-2"
+    >
+      {{ syncBlocked }}
+    </div>
   </section>
 </template>

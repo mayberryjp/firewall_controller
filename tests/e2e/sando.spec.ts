@@ -4,6 +4,38 @@ import { config } from "../fixtures";
 import { sandoSchema } from "../../src/services/sandoState";
 import { sandoStatus } from "../sandoFixtures";
 
+for (const target of ["hosts", "policies"] as const)
+test(`force ${target} sync uses the server with automation disabled and no browser import`, async ({ page }) => {
+  const initialConfig = config(), status = sandoStatus();
+  initialConfig.sando = sandoSchema.parse({ api_url: "https://sando.example" });
+  const backend = await mockBackend(page, { initialConfig, sandoStatus: status });
+  const requests: string[] = [];
+  await page.route("https://sando.example/**", route => route.abort());
+  await page.route(`**/proxy/sando/${target}/sync`, async route => {
+    requests.push(route.request().method());
+    expect(route.request().postData()).toBeNull();
+    if (target === "hosts") status.last_success_at = "2026-11-26T01:00:00.123Z";
+    else status.policies.last_success_at = "2026-11-26T01:00:00.123Z";
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(status) });
+  });
+  await page.goto("/connect");
+  await page.getByLabel("Registry admin password").fill("registry-test-password");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Overview", exact: true })).toBeVisible();
+  await page.goto("/settings/sando");
+  const button = page.getByRole("button", { name: target === "hosts" ? "Force host sync" : "Force policy sync", exact: true });
+  await expect(button).toBeEnabled(); await button.click();
+  await expect(page.getByText(`${target === "hosts" ? "Host" : "Policy"} sync completed.`, { exact: true })).toBeVisible();
+  await expect(page.getByLabel(target === "hosts" ? "Last successful host sync" : "Last successful policy sync", { exact: true })).toContainText("2026-11-26 01:00:00");
+  await expect(page.getByLabel("Automatic host and threat-score sync", { exact: true })).not.toBeChecked();
+  await expect(page.getByLabel("Automatically sync policies", { exact: true })).not.toBeChecked();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Test sync|Import hosts|Import rules/ })).toHaveCount(0);
+  expect(requests).toEqual(["POST"]); expect(backend.writes).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 for (const flag of ["sync_enabled", "policy_sync_enabled"] as const)
 for (const enabled of [true, false]) test(`server Sando ${flag} can be ${enabled ? "enabled" : "disabled"} through SAVE without browser syncs`, async ({ page }) => {
   const initialConfig = config();

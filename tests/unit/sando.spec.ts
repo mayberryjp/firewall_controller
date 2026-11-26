@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getSandoDevices, sandoBaseUrl, sandoStatusSchema } from "@/services/sando";
+import { forceSandoSync, getSandoDevices, sandoBaseUrl, sandoStatusSchema } from "@/services/sando";
 import { request } from "@/services/api";
 import { sandoStatus } from "../sandoFixtures";
 
@@ -7,6 +7,14 @@ vi.mock("@/services/api", () => ({ request: vi.fn() }));
 afterEach(() => vi.resetAllMocks());
 
 describe("server-side Sando cache", () => {
+  it.each(["hosts", "policies"] as const)("forces %s through the authenticated appliance with no body and propagates failures", async target => {
+    const status = sandoStatus(), signal = new AbortController().signal;
+    vi.mocked(request).mockResolvedValueOnce(status);
+    expect(await forceSandoSync(target, signal)).toEqual(status);
+    expect(request).toHaveBeenCalledExactlyOnceWith("POST", `/sando/${target}/sync`, sandoStatusSchema, undefined, signal);
+    vi.mocked(request).mockRejectedValueOnce(new Error("Sync denied"));
+    await expect(forceSandoSync(target, signal)).rejects.toThrow("Sync denied");
+  });
   it("reads cached classifications, icons and threat scores from the authenticated appliance API only", async () => {
     const status = sandoStatus();
     status.hosts = [{
