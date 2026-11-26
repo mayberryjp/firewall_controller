@@ -1505,7 +1505,7 @@ The appliance daemon performs all Sando acquisition; the browser never calls
 Sando directly. Sando must be reachable from the appliance, not the browser,
 and browser CORS access is not required. The base URL is staged as
 `config.sando.api_url` using the existing SAVE/apply/confirm flow.
-**Automatic host and threat-score sync** stages `config.sando.sync_enabled`
+**Sync protected hosts** stages `config.sando.sync_enabled`
 (default false). Enabling requires an endpoint. Only committed settings drive the daemon's hourly metadata
 worker; pending or rolled-back changes do not start or stop it. Disabling cancels
 automatic acquisition without removing existing hosts or rules. The worker also
@@ -1513,14 +1513,15 @@ adds eligible missing firewall hosts with a `drop` default; existing host settin
 and rules remain unchanged. Changing either sync flag, or changing the endpoint
 while either flag is enabled, requires `sando.write` and `firewall.write`
 in addition to normal transaction authority.
-**Automatically sync policies** independently stages `config.sando.policy_sync_enabled`
+**Sync firewall policies** independently stages `config.sando.policy_sync_enabled`
 (default false), using the same SAVE/confirm flow and requiring an endpoint.
 The daemon polls every five minutes and replaces only existing-host
 Sando-owned outbound rules, skipping unsupported entries; empty/all-skipped lists
 remove prior Sando-owned rules. Manual and other-provider rules are preserved.
 There is no Test sync button or prerequisite, browser policy preview, or one-time
 browser host/rule import. Both toggles stage directly without additional popups.
-**Force host sync** and **Force policy sync** perform one-time acquisition and
+The blue **SYNC PROTECTED HOSTS** and **SYNC FIREWALL POLICIES** buttons below
+the toggles perform one-time acquisition and
 application on the appliance using the committed endpoint, even when automatic
 sync is disabled; neither changes the sync flags or browser import reports.
 They call bodyless `POST /api/v1/sando/hosts/sync` and

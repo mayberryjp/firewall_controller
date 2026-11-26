@@ -24,10 +24,10 @@ const stubs = {
   VChip: { template: "<span><slot /></span>" },
 };
 let wrapper: ReturnType<typeof mount>;
-const toggle = (key: string) => wrapper.get(`input[aria-label="${key === "sync_enabled" ? "Automatic host and threat-score sync" : "Automatically sync policies"}"]`);
+const toggle = (key: string) => wrapper.get(`input[aria-label="${key === "sync_enabled" ? "Sync protected hosts" : "Sync firewall policies"}"]`);
 const endpoint = () => wrapper.get('input[aria-label="Sando API endpoint"]');
 const forceButton = (target: sando.SandoSyncTarget) => wrapper.findAll("button").find(button =>
-  button.text() === (target === "hosts" ? "Force host sync" : "Force policy sync"))!;
+  button.text() === (target === "hosts" ? "SYNC PROTECTED HOSTS" : "SYNC FIREWALL POLICIES"))!;
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -46,7 +46,15 @@ describe("server-side Sando sync settings", () => {
     const store = useControllerStore(), apply = vi.spyOn(store, "apply");
     const inventory = vi.spyOn(sando, "getSandoDevices");
     wrapper = mount(SandoView, { global: { stubs } }); await flushPromises();
-    expect(wrapper.findAll("button").map(button => button.text())).toEqual(["Save endpoint", "Force host sync", "Force policy sync"]);
+    expect(wrapper.findAll("button").map(button => button.text())).toEqual(["Save endpoint", "SYNC PROTECTED HOSTS", "SYNC FIREWALL POLICIES"]);
+    for (const target of ["hosts", "policies"] as const) {
+      const button = forceButton(target);
+      expect(button.attributes()).toMatchObject({ color: "primary", variant: "flat" });
+      for (const key of ["sync_enabled", "policy_sync_enabled"]) {
+        expect(toggle(key).element.compareDocumentPosition(button.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+    }
+    expect(wrapper.text()).not.toMatch(/force/i);
     expect(wrapper.text()).not.toMatch(/Last import|New host default|Test sync/);
     expect(sando.getSandoStatus).toHaveBeenCalledWith(expect.any(AbortSignal), null);
     expect(inventory).not.toHaveBeenCalled();
@@ -82,7 +90,7 @@ describe("server-side Sando sync settings", () => {
     const refresh = vi.spyOn(useControllerStore(), "refresh");
     wrapper = mount(SandoView, { global: { stubs } }); await flushPromises();
     await forceButton("policies").trigger("click"); await flushPromises();
-    expect(wrapper.get('[role="alert"]').text()).toContain("Unable to force policy sync: HTTP 503: upstream unavailable");
+    expect(wrapper.get('[role="alert"]').text()).toContain("Unable to sync firewall policies: HTTP 503: upstream unavailable");
     expect(wrapper.text()).not.toContain("sync completed");
     expect(refresh).not.toHaveBeenCalled(); expect(useControllerStore().draft).toBeNull();
   });

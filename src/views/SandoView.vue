@@ -24,9 +24,9 @@ const { data: status, loading, error: statusError, stale, read: readStatus, canc
   () => Boolean(store.state.data?.desired.sando),
 );
 const syncBlocked = computed(() => settingsBlocked.value || store.operationBlockedReason ||
-  (!store.state.data?.desired.sando?.api_url ? "Save a Sando API endpoint before forcing sync." : "") ||
-  (store.editorDirty || store.diff.length || store.draftStale ? "Save or discard local changes before forcing sync." : "") ||
-  (store.state.stale || store.state.error ? "Refresh the saved configuration before forcing sync." : "") ||
+  (!store.state.data?.desired.sando?.api_url ? "Save a Sando API endpoint before syncing." : "") ||
+  (store.editorDirty || store.diff.length || store.draftStale ? "Save or discard local changes before syncing." : "") ||
+  (store.state.stale || store.state.error ? "Refresh the saved configuration before syncing." : "") ||
   (loading.value || !status.value || stale.value || statusError.value ? "Current server-side sync status is required." : "") ||
   (status.value?.state === "syncing" || status.value?.policies.state === "syncing" ? "Server-side Sando sync is running." : ""));
 async function forceSync(target: SandoSyncTarget): Promise<void> {
@@ -42,7 +42,7 @@ async function forceSync(target: SandoSyncTarget): Promise<void> {
     notice.value = `${target === "hosts" ? "Host" : "Policy"} sync completed.`;
     await store.refresh();
   } catch (cause) {
-    if (current()) error.value = `Unable to force ${target === "hosts" ? "host" : "policy"} sync: ${cause instanceof Error ? cause.message : "request failed"}`;
+    if (current()) error.value = `Unable to sync ${target === "hosts" ? "protected hosts" : "firewall policies"}: ${cause instanceof Error ? cause.message : "request failed"}`;
   } finally {
     if (syncRequest === controller) {
       syncRequest = undefined; syncing.value = null;
@@ -154,20 +154,13 @@ onBeforeUnmount(() => { syncRequest?.abort(); store.editorDirty = false; });
       <v-switch
         :key="String(config?.sando?.sync_enabled ?? false) + syncToggleVersion"
         :model-value="config?.sando?.sync_enabled ?? false"
-        label="Automatic host and threat-score sync"
+        label="Sync protected hosts"
         :disabled="Boolean(settingsBlocked)"
         color="primary"
         hide-details
         class="flex-grow-0"
         @update:model-value="setSync('sync_enabled', $event)"
       />
-      <v-btn
-        :disabled="Boolean(syncBlocked)"
-        :loading="syncing === 'hosts'"
-        @click="forceSync('hosts')"
-      >
-        Force host sync
-      </v-btn>
       <v-chip
         v-if="status"
         size="small"
@@ -189,20 +182,13 @@ onBeforeUnmount(() => { syncRequest?.abort(); store.editorDirty = false; });
       <v-switch
         :key="'policies-' + String(config?.sando?.policy_sync_enabled ?? false) + syncToggleVersion"
         :model-value="config?.sando?.policy_sync_enabled ?? false"
-        label="Automatically sync policies"
+        label="Sync firewall policies"
         :disabled="Boolean(settingsBlocked)"
         color="primary"
         hide-details
         class="flex-grow-0"
         @update:model-value="setSync('policy_sync_enabled', $event)"
       />
-      <v-btn
-        :disabled="Boolean(syncBlocked)"
-        :loading="syncing === 'policies'"
-        @click="forceSync('policies')"
-      >
-        Force policy sync
-      </v-btn>
       <v-chip
         v-if="status"
         size="small"
@@ -220,6 +206,26 @@ onBeforeUnmount(() => { syncRequest?.abort(); store.editorDirty = false; });
     >
       Policy sync failed: {{ status.policies.error }}
     </v-alert>
+    <div class="d-flex flex-wrap ga-3 mb-4">
+      <v-btn
+        color="primary"
+        variant="flat"
+        :disabled="Boolean(syncBlocked)"
+        :loading="syncing === 'hosts'"
+        @click="forceSync('hosts')"
+      >
+        SYNC PROTECTED HOSTS
+      </v-btn>
+      <v-btn
+        color="primary"
+        variant="flat"
+        :disabled="Boolean(syncBlocked)"
+        :loading="syncing === 'policies'"
+        @click="forceSync('policies')"
+      >
+        SYNC FIREWALL POLICIES
+      </v-btn>
+    </div>
     <div
       v-if="!syncing && store.state.data && !store.connecting && !loading && (store.editorDirty || store.diff.length || store.draftStale || !store.state.data.desired.sando?.api_url)"
       class="text-body-2"
