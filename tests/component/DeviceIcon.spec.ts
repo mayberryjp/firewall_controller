@@ -6,7 +6,7 @@ import defaultIcon from "@/assets/deviceicons/DEFAULT.svg";
 const icons = import.meta.glob<string>("../../src/assets/deviceicons/*.svg", { eager: true, query: "?url", import: "default" });
 
 describe("Sando device artwork", () => {
-  it.each(["WIFI_ACCESS_POINT", "SERVER", "DESKTOP_COMPUTER", "MOBILE_PHONE", "ESP32_DEVICE"])("uses the original %s SVG", name => {
+  it.each(["WIFI_ACCESS_POINT", "SERVER", "DESKTOP_COMPUTER", "MOBILE_PHONE", "ESP32_DEVICE", "DOCKER_CONTAINER"])("uses the original %s SVG", name => {
     const wrapper = mount(DeviceIcon, { props: { name } });
     expect(wrapper.attributes("data-device-icon")).toBe(name);
     expect(wrapper.attributes("style")).toContain(icons[`../../src/assets/deviceicons/${name}.svg`]!);
