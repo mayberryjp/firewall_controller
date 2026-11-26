@@ -1,11 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { cloneConfig, normalize } from "@/services/configuration";
-import { configSchema, inputFirewallSchema } from "@/types/domain";
+import { cloneConfig, importConfig, normalize } from "@/services/configuration";
+import { configSchema, inputFirewallSchema, stateSchema, transactionSchema } from "@/types/domain";
 import { counterConfigurationMatches, firewallCountersSchema } from "@/services/firewallTelemetry";
 import { ruleOwnershipEntries, ruleOwnershipLabel, ruleOwnershipPreserved, ruleOwnershipSchema } from "@/services/ruleOwnership";
-import { config, hostPolicyConfig, state } from "../fixtures";
+import { config, hostPolicyConfig, state, transaction } from "../fixtures";
 import { dnatRule } from "../bgpFixtures";
 import { firewallCounters } from "../firewallTelemetryFixtures";
+
+describe("host ownership contract", () => {
+  it("preserves imported host provenance through state reads, unrelated edits, imports and transactions", () => {
+    const settings = hostPolicyConfig();
+    Object.assign(settings.firewall.policies!.hosts[0]!, {
+      origin: "import", sando_source: "https://inventory.example.test/api",
+    });
+    expect(stateSchema.parse({ ...state(), desired: settings }).desired).toEqual(settings);
+    const draft = cloneConfig(settings);
+    draft.firewall.policy = "drop";
+    for (const candidate of [configSchema.parse(draft), normalize(draft), importConfig(JSON.stringify(draft))]) {
+      expect(candidate.firewall.policies!.hosts.find(host => host.id === "desk")).toEqual(settings.firewall.policies!.hosts[0]);
+    }
+    const pending = transactionSchema.parse({ ...transaction(), candidate: draft, previous: settings });
+    expect(pending.candidate).toEqual(draft);
+    expect(pending.previous).toEqual(settings);
+  });
+  it.each([{}, { origin: "manual" }, { origin: "manual", sando_source: null }])(
+    "accepts manual or unmarked hosts without inventing ownership (%j)", ownership => {
+      const settings = hostPolicyConfig();
+      Object.assign(settings.firewall.policies!.hosts[0]!, ownership);
+      expect(configSchema.parse(settings)).toEqual(settings);
+      expect(cloneConfig(settings)).toEqual(settings);
+    },
+  );
+  it.each([
+    { origin: null }, { origin: "system" }, { origin: "inherited" },
+    { origin: "import" }, { origin: "import", sando_source: null },
+    { origin: "manual", sando_source: "https://inventory.example.test" },
+    { sando_source: "https://inventory.example.test" },
+    ...["sando", "", "https://user:password@example.test", "https://example.test?query=1",
+      "https://example.test#fragment", "https://example.test:0", `https://example.test/${"x".repeat(2048)}`]
+      .map(sando_source => ({ origin: "import", sando_source })),
+  ])("rejects invalid host origin/source combinations (%j)", ownership => {
+    const settings = hostPolicyConfig();
+    Object.assign(settings.firewall.policies!.hosts[0]!, ownership);
+    expect(configSchema.safeParse(settings).success).toBe(false);
+    expect(() => importConfig(JSON.stringify(settings))).toThrow();
+  });
+});
 
 describe("rule ownership contract", () => {
   function allScopes() {

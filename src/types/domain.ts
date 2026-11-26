@@ -2,7 +2,7 @@ import { z } from "zod";
 import { numericCounterSchema, uint64Schema } from "@/services/counters";
 import { linkDiagnosticsSchema } from "@/services/linkDiagnostics";
 import { dateVersionSchema } from "@/services/versions";
-import { sandoSchema } from "@/services/sandoState";
+import { sandoSchema, sandoSourceUrlSchema } from "@/services/sandoState";
 import { ruleOwnershipShape, validateRuleOwnership } from "@/services/ruleOwnership";
 import { firewallProtocolSchema } from "@/services/firewallProtocols";
 import { offloadsSchema, rfsConfigSchema, type TuningSettings } from "@/services/tuning";
@@ -186,8 +186,17 @@ export const firewallPoliciesSchema = z.object({
   hosts: list(z.object({
     ...annotation,
     id: z.string(), name: z.string(), addresses: list(z.string()), policy: z.enum(["accept", "drop"]),
+    origin: z.enum(["manual", "import"]).optional(),
+    sando_source: sandoSourceUrlSchema.nullable().optional(),
     rules: list(hostPolicyRuleSchema),
-  }).strict()),
+  }).strict().superRefine((host, context) => {
+    if ((host.origin === "import") !== (host.sando_source != null)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom, path: ["sando_source"],
+        message: "Imported hosts require a Sando source URL; manual hosts must not have a Sando source.",
+      });
+    }
+  })),
   interfaces: list(z.object({ ...annotation, interface: z.string(), rules: list(hostPolicyRuleSchema) }).strict()),
 }).strict();
 const defaultInteger = (fallback: number) => integer.default(fallback).transform(value => value === 0 ? fallback : value);

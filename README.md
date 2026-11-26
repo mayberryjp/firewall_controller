@@ -1543,6 +1543,13 @@ icons and threat scores. They never fetch Sando inventory from the browser.
 Those metadata reads continue to follow the committed sync flag and source.
 Older backends without saved Sando support show an inline upgrade requirement.
 
+Configured hosts preserve the November 26 backend's `origin` (`manual` or
+`import`) and nullable/optional `sando_source` across configuration reads, edits,
+imports, exports and transactions. Imported hosts require a valid Sando HTTP(S)
+source URL; manual hosts cannot have one. Unmarked hosts remain unmarked, with
+the backend's manual default; the client never infers ownership from IDs or
+import reports. These schema fields do not add Sando controls or status displays.
+
 Rule origins (`manual`, `import`, `system`, `inherited`) and nullable
 `import_source` are preserved across forwarding, host/interface/input and NAT
 rules, unrelated edits, exports, revisions and transactions. Imported rules require
